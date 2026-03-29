@@ -1,0 +1,181 @@
+const std = @import("std");
+
+const CookError = @import("cook_command.zig").CookError;
+const PackError = @import("pack_command.zig").PackError;
+const InspectError = @import("inspect_command.zig").InspectError;
+const logError = @import("../logger.zig").logError;
+
+const CookCommand = @import("cook_command.zig").CookCommand;
+const PackCommand = @import("pack_command.zig").PackCommand;
+const InspectCommand = @import("inspect_command.zig").InspectCommand;
+
+pub const CommandError = error{
+    UnknownCommand,
+};
+
+pub const Command = union(enum) {
+    Cook: CookCommand,
+    Pack: PackCommand,
+    Inspect: InspectCommand,
+
+    pub fn parse(io: std.Io, args: []const [:0]const u8) (CommandError || CookError || PackError || InspectError)!Command {
+        if (std.mem.eql(u8, args[1], "cook")) {
+            const cmd = CookCommand.parseFromArgs(io, args) catch |err| {
+                logError("command: failed to parse 'cook' subcommand: {s}", .{@errorName(err)});
+                return err;
+            };
+            return .{ .Cook = cmd };
+        }
+
+        if (std.mem.eql(u8, args[1], "pack")) {
+            const cmd = PackCommand.parseFromArgs(io, args) catch |err| {
+                logError("command: failed to parse 'pack' subcommand: {s}", .{@errorName(err)});
+                return err;
+            };
+            return .{ .Pack = cmd };
+        }
+
+        if (std.mem.eql(u8, args[1], "inspect")) {
+            const cmd = InspectCommand.parseFromArgs(io, args) catch |err| {
+                logError("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
+                return err;
+            };
+            return .{ .Inspect = cmd };
+        }
+
+        logError("command: unknown command '{s}'. Available commands are: 'cook', 'pack', 'inspect'", .{args[1]});
+        return CommandError.UnknownCommand;
+    }
+
+    pub fn run(self: Command) !void {
+        return switch (self) {
+            .Cook => |cmd| cmd.run(),
+            .Pack => |cmd| cmd.run(),
+            .Inspect => |cmd| cmd.run(),
+        };
+    }
+
+    pub fn toString(self: Command) []const u8 {
+        return switch (self) {
+            .Cook => "cook",
+            .Pack => "pack",
+            .Inspect => "inspect",
+        };
+    }
+
+    pub fn deinit(self: Command) void {
+        return switch (self) {
+            .Cook => |cmd| cmd.deinit(),
+            .Pack => |cmd| cmd.deinit(),
+            .Inspect => |cmd| cmd.deinit(),
+        };
+    }
+};
+
+const testing = std.testing;
+
+test {
+    _ = @import("cook_command.zig");
+    _ = @import("pack_command.zig");
+    _ = @import("inspect_command.zig");
+}
+
+test "Command.parse errors with UnknownCommand for unrecognized command" {
+    const args: []const [:0]const u8 = &.{ "zimp", "unknown" };
+    const result = Command.parse(testing.io, args);
+    try testing.expectError(CommandError.UnknownCommand, result);
+}
+
+test "Command.parse errors with UnknownCommand for empty command string" {
+    const args: []const [:0]const u8 = &.{ "zimp", "" };
+    const result = Command.parse(testing.io, args);
+    try testing.expectError(CommandError.UnknownCommand, result);
+}
+
+test "Command.parse routes to Cook variant" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
+    const cmd = try Command.parse(testing.io, args);
+    defer cmd.deinit();
+
+    try testing.expect(std.meta.activeTag(cmd) == .Cook);
+    try testing.expectEqualStrings("cook", cmd.toString());
+}
+
+test "Command.parse routes to Pack variant" {
+    const args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
+    const cmd = try Command.parse(testing.io, args);
+    defer cmd.deinit();
+
+    try testing.expect(std.meta.activeTag(cmd) == .Pack);
+    try testing.expectEqualStrings("pack", cmd.toString());
+}
+
+test "Command.parse routes to Inspect variant" {
+    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
+    const cmd = try Command.parse(testing.io, args);
+    defer cmd.deinit();
+
+    try testing.expect(std.meta.activeTag(cmd) == .Inspect);
+    try testing.expectEqualStrings("inspect", cmd.toString());
+}
+
+test "Command.parse propagates CookError.NotEnoughArguments" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook" };
+    const result = Command.parse(testing.io, args);
+    try testing.expectError(CookError.NotEnoughArguments, result);
+}
+
+test "Command.parse propagates PackError.NotEnoughArguments" {
+    const args: []const [:0]const u8 = &.{ "zimp", "pack" };
+    const result = Command.parse(testing.io, args);
+    try testing.expectError(PackError.NotEnoughArguments, result);
+}
+
+test "Command.parse propagates InspectError.NotEnoughArguments" {
+    const args: []const [:0]const u8 = &.{ "zimp", "inspect" };
+    const result = Command.parse(testing.io, args);
+    try testing.expectError(InspectError.NotEnoughArguments, result);
+}
+
+test "Command.parse propagates CookError.SourceDirNotFound" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", "nonexistent_dir_abc123", "--output", "." };
+    const result = Command.parse(testing.io, args);
+    try testing.expectError(CookError.SourceDirNotFound, result);
+}
+
+test "Command.parse propagates InspectError.FileNotFound" {
+    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "nonexistent_file_abc123.txt" };
+    const result = Command.parse(testing.io, args);
+    try testing.expectError(InspectError.FileNotFound, result);
+}
+
+test "Command.run dispatches to correct subcommand" {
+    const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
+    const cook = try Command.parse(testing.io, cook_args);
+    defer cook.deinit();
+    try cook.run();
+
+    const pack_args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
+    const pack = try Command.parse(testing.io, pack_args);
+    defer pack.deinit();
+    try pack.run();
+
+    const inspect_args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
+    const inspect = try Command.parse(testing.io, inspect_args);
+    defer inspect.deinit();
+    try inspect.run();
+}
+
+test "Command.deinit cleans up all variants" {
+    const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
+    const cook = try Command.parse(testing.io, cook_args);
+    cook.deinit();
+
+    const pack_args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
+    const pack = try Command.parse(testing.io, pack_args);
+    pack.deinit();
+
+    const inspect_args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
+    const inspect = try Command.parse(testing.io, inspect_args);
+    inspect.deinit();
+}
