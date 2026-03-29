@@ -58,6 +58,7 @@ pub const CookCommand = struct {
         var command: CookCommand = .{
             .source = cwd,
             .output = cwd,
+            .io = io,
         };
 
         if (args.len < 6) {
@@ -107,6 +108,7 @@ pub const PackCommand = struct {
         var command: PackCommand = .{
             .source = cwd,
             .output = cwd,
+            .io = io,
         };
 
         if (args.len < 6) {
