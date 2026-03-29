@@ -5,15 +5,6 @@ const logError = log.logError;
 
 const Command = @import("commands/command.zig").Command;
 
-test {
-    _ = @import("commands/command.zig");
-}
-
-const Config = struct {
-    source: std.Io.Dir,
-    output: std.Io.Dir,
-};
-
 pub fn main(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
