@@ -22,7 +22,7 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
 ```
   ┌─────────────────────────────────────────────────────────────────────┐
   │                          Source Assets                              │
-  │   .glb  .gltf  .obj  .png  .jpg  .hdr  .glsl  .wav  .ogg  .ttf   │
+  │   .glb  .gltf  .obj  .png  .jpg  .hdr  .glsl  .wav  .ogg  .ttf      │
   └──────────────────────────────┬──────────────────────────────────────┘
                                  │
                                  ▼
