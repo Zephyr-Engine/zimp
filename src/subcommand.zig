@@ -41,8 +41,8 @@ pub const SubCommand = union(enum) {
 
     pub fn deinit(self: SubCommand) void {
         return switch (self) {
-            .Cook => return,
-            .Pack => return,
+            .Cook => |cmd| cmd.deinit(),
+            .Pack => |cmd| cmd.deinit(),
             .Inspect => |cmd| cmd.deinit(),
         };
     }
@@ -51,6 +51,7 @@ pub const SubCommand = union(enum) {
 pub const CookCommand = struct {
     source: std.Io.Dir,
     output: std.Io.Dir,
+    io: std.Io,
 
     pub fn parseFromArgs(io: std.Io, args: []const [:0]const u8) ?CookCommand {
         const cwd = std.Io.Dir.cwd();
@@ -89,11 +90,17 @@ pub const CookCommand = struct {
     pub fn run(_: CookCommand) !void {
         std.log.info("Running cook command", .{});
     }
+
+    pub fn deinit(self: CookCommand) void {
+        self.source.close(self.io);
+        self.output.close(self.io);
+    }
 };
 
 pub const PackCommand = struct {
     source: std.Io.Dir,
     output: std.Io.Dir,
+    io: std.Io,
 
     pub fn parseFromArgs(io: std.Io, args: []const [:0]const u8) ?PackCommand {
         const cwd = std.Io.Dir.cwd();
@@ -132,6 +139,11 @@ pub const PackCommand = struct {
     pub fn run(_: PackCommand) !void {
         std.log.info("Running pack command", .{});
     }
+
+    pub fn deinit(self: PackCommand) void {
+        self.source.close(self.io);
+        self.output.close(self.io);
+    }
 };
 
 pub const InspectCommand = struct {
@@ -165,3 +177,184 @@ pub const InspectCommand = struct {
         self.file.close(self.io);
     }
 };
+
+const testing = std.testing;
+
+test "SubCommand.parse returns null for unknown command" {
+    const args: []const [:0]const u8 = &.{ "zimport", "unknown" };
+    const result = SubCommand.parse(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "SubCommand.parse returns null for empty-like args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "" };
+    const result = SubCommand.parse(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "SubCommand.parse recognizes cook command" {
+    const args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", ".", "--output", "." };
+    const result = SubCommand.parse(testing.io, args);
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("cook", result.?.toString());
+    result.?.deinit();
+}
+
+test "SubCommand.parse recognizes pack command" {
+    const args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", ".", "--output", "." };
+    const result = SubCommand.parse(testing.io, args);
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("pack", result.?.toString());
+    result.?.deinit();
+}
+
+test "SubCommand.parse recognizes inspect command" {
+    const args: []const [:0]const u8 = &.{ "zimport", "inspect", "build.zig" };
+    const result = SubCommand.parse(testing.io, args);
+    try testing.expect(result != null);
+    try testing.expectEqualStrings("inspect", result.?.toString());
+    result.?.deinit();
+}
+
+test "SubCommand.toString returns correct strings" {
+    const cook_args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", ".", "--output", "." };
+    const cook = SubCommand.parse(testing.io, cook_args).?;
+    defer cook.deinit();
+    try testing.expectEqualStrings("cook", cook.toString());
+
+    const pack_args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", ".", "--output", "." };
+    const pack = SubCommand.parse(testing.io, pack_args).?;
+    defer pack.deinit();
+    try testing.expectEqualStrings("pack", pack.toString());
+
+    const inspect_args: []const [:0]const u8 = &.{ "zimport", "inspect", "build.zig" };
+    const inspect = SubCommand.parse(testing.io, inspect_args).?;
+    defer inspect.deinit();
+    try testing.expectEqualStrings("inspect", inspect.toString());
+}
+
+test "SubCommand.run executes without error" {
+    const cook_args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", ".", "--output", "." };
+    const cook = SubCommand.parse(testing.io, cook_args).?;
+    defer cook.deinit();
+    try cook.run();
+
+    const pack_args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", ".", "--output", "." };
+    const pack = SubCommand.parse(testing.io, pack_args).?;
+    defer pack.deinit();
+    try pack.run();
+
+    const inspect_args: []const [:0]const u8 = &.{ "zimport", "inspect", "build.zig" };
+    const inspect = SubCommand.parse(testing.io, inspect_args).?;
+    defer inspect.deinit();
+    try inspect.run();
+}
+
+test "CookCommand.parseFromArgs returns null with too few args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "cook" };
+    const result = CookCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "CookCommand.parseFromArgs returns null with partial args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", "." };
+    const result = CookCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "CookCommand.parseFromArgs succeeds with valid args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", ".", "--output", "." };
+    const result = CookCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result != null);
+    result.?.deinit();
+}
+
+test "CookCommand.parseFromArgs returns null for nonexistent source dir" {
+    const args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", "nonexistent_dir_abc123", "--output", "." };
+    const result = CookCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "CookCommand.parseFromArgs returns null for nonexistent output dir" {
+    const args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", ".", "--output", "nonexistent_dir_abc123" };
+    const result = CookCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "CookCommand.parseFromArgs accepts flags in any order" {
+    const args: []const [:0]const u8 = &.{ "zimport", "cook", "--output", ".", "--source", "." };
+    const result = CookCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result != null);
+    result.?.deinit();
+}
+
+test "PackCommand.parseFromArgs returns null with too few args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "pack" };
+    const result = PackCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "PackCommand.parseFromArgs returns null with partial args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", "." };
+    const result = PackCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "PackCommand.parseFromArgs succeeds with valid args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", ".", "--output", "." };
+    const result = PackCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result != null);
+    result.?.deinit();
+}
+
+test "PackCommand.parseFromArgs returns null for nonexistent source dir" {
+    const args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", "nonexistent_dir_abc123", "--output", "." };
+    const result = PackCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "PackCommand.parseFromArgs returns null for nonexistent output dir" {
+    const args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", ".", "--output", "nonexistent_dir_abc123" };
+    const result = PackCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "PackCommand.parseFromArgs accepts flags in any order" {
+    const args: []const [:0]const u8 = &.{ "zimport", "pack", "--output", ".", "--source", "." };
+    const result = PackCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result != null);
+    result.?.deinit();
+}
+
+test "InspectCommand.parseFromArgs returns null with too few args" {
+    const args: []const [:0]const u8 = &.{ "zimport", "inspect" };
+    const result = InspectCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "InspectCommand.parseFromArgs succeeds with valid file" {
+    const args: []const [:0]const u8 = &.{ "zimport", "inspect", "build.zig" };
+    const result = InspectCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result != null);
+    result.?.deinit();
+}
+
+test "InspectCommand.parseFromArgs returns null for nonexistent file" {
+    const args: []const [:0]const u8 = &.{ "zimport", "inspect", "nonexistent_file_abc123.txt" };
+    const result = InspectCommand.parseFromArgs(testing.io, args);
+    try testing.expect(result == null);
+}
+
+test "SubCommand.deinit does not error" {
+    const cook_args: []const [:0]const u8 = &.{ "zimport", "cook", "--source", ".", "--output", "." };
+    const cook = SubCommand.parse(testing.io, cook_args).?;
+    cook.deinit();
+
+    const pack_args: []const [:0]const u8 = &.{ "zimport", "pack", "--source", ".", "--output", "." };
+    const pack = SubCommand.parse(testing.io, pack_args).?;
+    pack.deinit();
+
+    const inspect_args: []const [:0]const u8 = &.{ "zimport", "inspect", "build.zig" };
+    const inspect = SubCommand.parse(testing.io, inspect_args).?;
+    inspect.deinit();
+}
