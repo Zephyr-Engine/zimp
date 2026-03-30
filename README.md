@@ -27,14 +27,12 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
                                  │
                                  ▼
                           ┌────────────┐
-                          │  Discover  │  scan dir, hash files,
-                          │            │  build dependency graph
+                          │  Discover  │  scan dir, hash files, build dependency graph
                           └──────┬─────┘
                                  │
                                  ▼
                           ┌────────────┐
-                          │    Cook    │  convert to .za* binary formats
-                          │            │  (parallel, incremental)
+                          │    Cook    │  convert to .za* binary formats (parallel, incremental)
                           └──────┬─────┘
                                  │
             ┌──────────┬─────────┼─────────┬──────────┐
@@ -45,8 +43,7 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
                                  │
                                  ▼
                           ┌────────────┐
-                          │    Pack    │  combine into .zpak archive
-                          │            │  with TOC + optional LZ4
+                          │    Pack    │  combine into .zpak archive with TOC + optional LZ4
                           └──────┬─────┘
                                  │
                                  ▼
