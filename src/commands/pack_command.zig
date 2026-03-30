@@ -31,13 +31,13 @@ pub const PackCommand = struct {
         var i: usize = 2;
         while (i < args.len) {
             if (std.mem.eql(u8, "--source", args[i])) {
-                command.source = std.Io.Dir.openDir(cwd, io, args[i + 1], .{}) catch |err| {
+                command.source = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
                     logError("pack: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return PackError.SourceDirNotFound;
                 };
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
-                command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{}) catch |err| {
+                command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
                     logError("pack: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return PackError.OutputDirNotFound;
                 };

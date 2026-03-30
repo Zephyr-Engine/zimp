@@ -13,7 +13,7 @@ pub fn main(init: std.process.Init) !void {
         return;
     }
 
-    const command = Command.parse(init.io, args) catch |err| {
+    const command = Command.parse(init.gpa, init.io, args) catch |err| {
         logError("Failed to parse command: {s}", .{@errorName(err)});
         return;
     };
