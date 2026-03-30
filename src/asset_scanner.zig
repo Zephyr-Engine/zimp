@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const logger = @import("logger.zig").logger;
 const asset = @import("asset.zig");
 
 pub const SourceFile = struct {
@@ -52,7 +53,7 @@ pub const AssetScanner = struct {
                     .path = path,
                     .assetType = ext.assetType(),
                 });
-                std.log.info("Found {s} file: {s}", .{ ext.string(), path });
+                logger.info("Found {s} file: {s}", .{ ext.string(), path });
             } else if (entry.kind == .directory) {
                 const subdir = try std.Io.Dir.openDir(dir, self.io, entry.name, .{ .iterate = true });
                 const subprefix = if (prefix.len > 0)
@@ -72,10 +73,18 @@ pub const AssetScanner = struct {
             counts.getPtr(file.assetType).* += 1;
         }
 
-        std.log.info("Found {d} assets ({d} meshes)", .{
-            files.items.len,
-            counts.get(.mesh),
-        });
+        logger.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
+        logger.info("\x1b[32m|                 SUMMARY                   |\x1b[0m", .{});
+        logger.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
+        logger.info("Found {d} assets", .{files.items.len});
+
+        for (std.enums.values(asset.AssetType)) |asset_type| {
+            if (asset_type == .unknown) continue;
+            const count = counts.get(asset_type);
+            if (count > 0) {
+                logger.info("  {s}: {d}", .{ @tagName(asset_type), count });
+            }
+        }
     }
 
     pub fn deinit(self: AssetScanner, list: *SourceFileList) void {
@@ -85,3 +94,100 @@ pub const AssetScanner = struct {
         list.deinit(self.allocator);
     }
 };
+
+const testing = std.testing;
+
+fn testScanner(root_name: []const u8) AssetScanner {
+    const cwd = std.Io.Dir.cwd();
+    const dir = std.Io.Dir.openDir(cwd, testing.io, "examples/assets", .{ .iterate = true }) catch unreachable;
+    return AssetScanner.init(testing.allocator, testing.io, dir, root_name);
+}
+
+fn containsPath(files: SourceFileList, path: []const u8) bool {
+    for (files.items) |file| {
+        if (std.mem.eql(u8, file.path, path)) return true;
+    }
+    return false;
+}
+
+test "AssetScanner.scan finds gltf files" {
+    const scanner = testScanner("assets");
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    try testing.expect(containsPath(list, "assets/scene.gltf"));
+}
+
+test "AssetScanner.scan assigns correct extension" {
+    const scanner = testScanner("assets");
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    for (list.items) |file| {
+        if (std.mem.eql(u8, file.path, "assets/scene.gltf")) {
+            try testing.expectEqual(.gltf, file.extension);
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "AssetScanner.scan assigns correct asset type" {
+    const scanner = testScanner("assets");
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    for (list.items) |file| {
+        if (std.mem.eql(u8, file.path, "assets/scene.gltf")) {
+            try testing.expectEqual(.mesh, file.assetType);
+            return;
+        }
+    }
+    return error.TestUnexpectedResult;
+}
+
+test "AssetScanner.scan skips non-matching extensions" {
+    const scanner = testScanner("assets");
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    for (list.items) |file| {
+        try testing.expect(file.extension != .other);
+    }
+}
+
+test "AssetScanner.scan uses root_name as path prefix" {
+    const scanner = testScanner("my_root");
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    for (list.items) |file| {
+        try testing.expect(std.mem.startsWith(u8, file.path, "my_root/"));
+    }
+}
+
+test "AssetScanner.scan with empty root_name produces bare filenames" {
+    const scanner = testScanner("");
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    try testing.expect(containsPath(list, "scene.gltf"));
+}
+
+test "AssetScanner.deinit frees all memory" {
+    const scanner = testScanner("assets");
+    var list = try scanner.scan();
+    scanner.deinit(&list);
+}
+
+test "AssetScanner.scan returns empty list for directory with no matching files" {
+    const cwd = std.Io.Dir.cwd();
+    const dir = std.Io.Dir.openDir(cwd, testing.io, "examples/assets/nested", .{ .iterate = true }) catch unreachable;
+    const scanner = AssetScanner.init(testing.allocator, testing.io, dir, "nested");
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    for (list.items) |file| {
+        try testing.expect(file.extension != .other);
+    }
+}

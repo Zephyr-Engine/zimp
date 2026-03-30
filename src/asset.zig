@@ -29,7 +29,6 @@ pub const Extension = enum {
         return asset_map.get(self);
     }
 
-    // find extension from file
     pub fn processEntry(entry: std.Io.Dir.Entry) Extension {
         var iter = std.mem.splitScalar(u8, entry.name, '.');
         // ignore filename itself
@@ -43,3 +42,41 @@ pub const Extension = enum {
         return .other;
     }
 };
+
+const testing = std.testing;
+
+test "Extension.string returns correct string for gltf" {
+    try testing.expectEqualStrings("gltf", Extension.gltf.string());
+}
+
+test "Extension.string returns correct string for other" {
+    try testing.expectEqualStrings("other", Extension.other.string());
+}
+
+test "Extension.assetType maps gltf to mesh" {
+    try testing.expectEqual(.mesh, Extension.gltf.assetType());
+}
+
+test "Extension.assetType maps other to unknown" {
+    try testing.expectEqual(.unknown, Extension.other.assetType());
+}
+
+test "Extension.processEntry returns gltf for .gltf file" {
+    const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = "model.gltf", .kind = .file };
+    try testing.expectEqual(.gltf, Extension.processEntry(entry));
+}
+
+test "Extension.processEntry returns other for unknown extension" {
+    const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = "image.png", .kind = .file };
+    try testing.expectEqual(.other, Extension.processEntry(entry));
+}
+
+test "Extension.processEntry returns other for file with no extension" {
+    const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = "README", .kind = .file };
+    try testing.expectEqual(.other, Extension.processEntry(entry));
+}
+
+test "Extension.processEntry returns other for dotfile" {
+    const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = ".gitignore", .kind = .file };
+    try testing.expectEqual(.other, Extension.processEntry(entry));
+}
