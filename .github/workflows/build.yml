@@ -2,9 +2,9 @@ name: Build
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   build:
@@ -12,11 +12,11 @@ jobs:
     container: jackpar/zig:0.16.0-dev.2694
 
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v5
+      - name: Checkout code
+        uses: actions/checkout@v5
 
-    - name: Build project for release
-      run: zig build test -Doptimize=ReleaseFast
+      - name: Build project for release
+        run: zig build -Doptimize=ReleaseFast
 
-    - name: Build project
-      run: zig build test --summary all
+      - name: Build project
+        run: zig build test --summary all
