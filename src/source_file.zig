@@ -12,7 +12,7 @@ pub const SourceFile = struct {
         const file = try cwd.openFile(io, self.path, .{});
         defer file.close(io);
 
-        var buf: [4096]u8 = undefined;
+        var buf: [64 * 1024]u8 = undefined;
         var fr = file.reader(io, &buf);
         var reader = &fr.interface;
 
