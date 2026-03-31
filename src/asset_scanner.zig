@@ -115,7 +115,7 @@ test "AssetScanner.scan finds gltf files" {
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
-    try testing.expect(containsPath(list, "assets/scene.gltf"));
+    try testing.expect(containsPath(list, "assets/meshes/triangle.glb"));
 }
 
 test "AssetScanner.scan assigns correct extension" {
@@ -124,8 +124,8 @@ test "AssetScanner.scan assigns correct extension" {
     defer scanner.deinit(&list);
 
     for (list.items) |file| {
-        if (std.mem.eql(u8, file.path, "assets/scene.gltf")) {
-            try testing.expectEqual(.gltf, file.extension);
+        if (std.mem.eql(u8, file.path, "assets/meshes/triangle.glb")) {
+            try testing.expectEqual(.glb, file.extension);
             return;
         }
     }
@@ -138,7 +138,7 @@ test "AssetScanner.scan assigns correct asset type" {
     defer scanner.deinit(&list);
 
     for (list.items) |file| {
-        if (std.mem.eql(u8, file.path, "assets/scene.gltf")) {
+        if (std.mem.eql(u8, file.path, "assets/meshes/triangle.glb")) {
             try testing.expectEqual(.mesh, file.assetType);
             return;
         }
@@ -171,7 +171,7 @@ test "AssetScanner.scan with empty root_name produces bare filenames" {
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
-    try testing.expect(containsPath(list, "scene.gltf"));
+    try testing.expect(containsPath(list, "meshes/triangle.glb"));
 }
 
 test "AssetScanner.deinit frees all memory" {
@@ -182,7 +182,7 @@ test "AssetScanner.deinit frees all memory" {
 
 test "AssetScanner.scan returns empty list for directory with no matching files" {
     const cwd = std.Io.Dir.cwd();
-    const dir = std.Io.Dir.openDir(cwd, testing.io, "examples/assets/nested", .{ .iterate = true }) catch unreachable;
+    const dir = std.Io.Dir.openDir(cwd, testing.io, "examples/output", .{ .iterate = true }) catch unreachable;
     const scanner = AssetScanner.init(testing.allocator, testing.io, dir, "nested");
     var list = try scanner.scan();
     defer scanner.deinit(&list);
