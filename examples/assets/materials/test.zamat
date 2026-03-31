@@ -1,0 +1,11 @@
+[material]
+shader = "shaders/basic"
+
+[textures]
+albedo = "textures/test_albedo.png"
+normal = "textures/test_normal.png"
+
+[params]
+u_roughness = 0.5
+u_light_dir = [0.5, 1.0, 0.3]
+u_light_color = [1.0, 0.95, 0.9]
