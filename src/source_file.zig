@@ -5,7 +5,7 @@ const asset = @import("asset.zig");
 const FNV_PRIME: u64 = 0x00000100000001B3;
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 
-pub fn fnv1aPath(path: []const u8) u64 {
+pub fn fnv1a(path: []const u8) u64 {
     var hash = FNV_OFFSET_BASIS;
     for (path) |byte| {
         const b: u8 = if (byte == '\\') '/' else byte;
