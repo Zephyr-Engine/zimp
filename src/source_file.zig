@@ -2,12 +2,24 @@ const std = @import("std");
 
 const asset = @import("asset.zig");
 
+const FNV_PRIME: u64 = 0x00000100000001B3;
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+
+fn fnv1a(data: []const u8) u64 {
+    var hash = FNV_OFFSET_BASIS;
+    for (data) |byte| {
+        hash ^= byte;
+        hash *%= FNV_PRIME;
+    }
+    return hash;
+}
+
 pub const SourceFile = struct {
     path: []const u8,
     extension: asset.Extension,
     assetType: asset.AssetType,
 
-    pub fn hash(self: SourceFile, io: std.Io) !u64 {
+    pub fn hash(self: *const SourceFile, io: std.Io) !u64 {
         const cwd = std.Io.Dir.cwd();
         const file = try cwd.openFile(io, self.path, .{});
         defer file.close(io);
@@ -20,6 +32,10 @@ pub const SourceFile = struct {
         _ = try hr.reader.discardRemaining();
 
         return hr.hasher.final();
+    }
+
+    pub fn hashPath(self: *const SourceFile) u64 {
+        return fnv1a(self.path);
     }
 };
 
@@ -65,4 +81,31 @@ test "SourceFile.hash is independent of extension field" {
     const h1 = try sf_glb.hash(testing.io);
     const h2 = try sf_other.hash(testing.io);
     try testing.expectEqual(h1, h2);
+}
+
+test "SourceFile.hashPath returns non-zero for non-empty path" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    try testing.expect(sf.hashPath() != 0);
+}
+
+test "SourceFile.hashPath is deterministic" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    try testing.expectEqual(sf.hashPath(), sf.hashPath());
+}
+
+test "SourceFile.hashPath differs for different paths" {
+    const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
+    try testing.expect(sf1.hashPath() != sf2.hashPath());
+}
+
+test "SourceFile.hashPath is independent of extension field" {
+    const sf_glb = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf_other = testFile("examples/assets/meshes/triangle.glb", .other);
+    try testing.expectEqual(sf_glb.hashPath(), sf_other.hashPath());
+}
+
+test "SourceFile.hashPath returns zero for empty path" {
+    const sf = testFile("", .glb);
+    try testing.expectEqual(FNV_OFFSET_BASIS, sf.hashPath());
 }
