@@ -1,13 +1,8 @@
 const std = @import("std");
 
+const SourceFile = @import("source_file.zig").SourceFile;
 const logger = @import("logger.zig").logger;
 const asset = @import("asset.zig");
-
-pub const SourceFile = struct {
-    path: []const u8,
-    extension: asset.Extension,
-    assetType: asset.AssetType,
-};
 
 pub const SourceFileList = std.ArrayList(SourceFile);
 
