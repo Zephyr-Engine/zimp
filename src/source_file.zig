@@ -5,10 +5,11 @@ const asset = @import("asset.zig");
 const FNV_PRIME: u64 = 0x00000100000001B3;
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 
-fn fnv1a(data: []const u8) u64 {
+pub fn fnv1aPath(path: []const u8) u64 {
     var hash = FNV_OFFSET_BASIS;
-    for (data) |byte| {
-        hash ^= byte;
+    for (path) |byte| {
+        const b: u8 = if (byte == '\\') '/' else byte;
+        hash ^= b;
         hash *%= FNV_PRIME;
     }
     return hash;
