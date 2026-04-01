@@ -106,6 +106,12 @@ test "SourceFile.hashPath is independent of extension field" {
     try testing.expectEqual(sf_glb.hashPath(), sf_other.hashPath());
 }
 
+test "SourceFile.hashPath treats backslashes and forward slashes as equal" {
+    const sf_forward = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf_backward = testFile("examples\\assets\\meshes\\triangle.glb", .glb);
+    try testing.expectEqual(sf_forward.hashPath(), sf_backward.hashPath());
+}
+
 test "SourceFile.hashPath returns zero for empty path" {
     const sf = testFile("", .glb);
     try testing.expectEqual(FNV_OFFSET_BASIS, sf.hashPath());
