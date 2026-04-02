@@ -61,7 +61,14 @@ pub const GLBFile = struct {
             return GLBResultError.InvalidMagic;
         }
 
+        const json_bytes = file_bytes[@sizeOf(GLBHeader) + @sizeOf(GLBChunkHeader) ..][0..jsonHeader.length];
+
         const file = try allocator.create(GLBFile);
+        file.* = GLBFile{
+            .json = json_bytes,
+            .bin = &[_]u8{},
+        };
+
         return file;
     }
 };
