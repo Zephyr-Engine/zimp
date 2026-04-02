@@ -20,6 +20,15 @@ pub const SourceFile = struct {
     extension: asset.Extension,
     assetType: asset.AssetType,
 
+    pub fn fileSize(self: *const SourceFile, io: std.Io) !u64 {
+        const cwd = std.Io.Dir.cwd();
+        const file = try cwd.openFile(io, self.path, .{});
+        defer file.close(io);
+
+        const stat = try file.stat(io);
+        return stat.size;
+    }
+
     pub fn hash(self: *const SourceFile, io: std.Io) !u64 {
         const cwd = std.Io.Dir.cwd();
         const file = try cwd.openFile(io, self.path, .{});
@@ -115,4 +124,30 @@ test "SourceFile.hashPath treats backslashes and forward slashes as equal" {
 test "SourceFile.hashPath returns zero for empty path" {
     const sf = testFile("", .glb);
     try testing.expectEqual(FNV_OFFSET_BASIS, sf.hashPath());
+}
+
+test "SourceFile.fileSize returns non-zero for existing file" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const size = try sf.fileSize(testing.io);
+    try testing.expect(size != 0);
+}
+
+test "SourceFile.fileSize is deterministic" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const s1 = try sf.fileSize(testing.io);
+    const s2 = try sf.fileSize(testing.io);
+    try testing.expectEqual(s1, s2);
+}
+
+test "SourceFile.fileSize differs for different files" {
+    const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
+    const s1 = try sf1.fileSize(testing.io);
+    const s2 = try sf2.fileSize(testing.io);
+    try testing.expect(s1 != s2);
+}
+
+test "SourceFile.fileSize returns error for nonexistent file" {
+    const sf = testFile("nonexistent_file_abc123.glb", .glb);
+    try testing.expectError(error.FileNotFound, sf.fileSize(testing.io));
 }
