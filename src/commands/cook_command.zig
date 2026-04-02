@@ -1,9 +1,11 @@
 const std = @import("std");
 
 const AssetScanner = @import("../asset_scanner.zig").AssetScanner;
+const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
 const log = @import("../logger.zig");
-const logger = log.logger;
+
 const logError = log.logError;
+const logger = log.logger;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -63,6 +65,14 @@ pub const CookCommand = struct {
         var list = try source_scanner.scan();
 
         defer source_scanner.deinit(&list);
+
+        for (list.items) |entry| {
+            if (entry.extension == .glb) {
+                const glb_cooker = try GLBCooker.init(self.allocator, self.io, entry.path);
+                defer glb_cooker.deinit();
+                glb_cooker.cook();
+            }
+        }
     }
 
     pub fn deinit(self: CookCommand) void {
