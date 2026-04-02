@@ -20,13 +20,21 @@ pub const SourceFile = struct {
     extension: asset.Extension,
     assetType: asset.AssetType,
 
-    pub fn fileSize(self: *const SourceFile, io: std.Io) !u64 {
+    pub const FileInfo = struct {
+        size: u64,
+        modified_ns: i96,
+    };
+
+    pub fn getFileInfo(self: *const SourceFile, io: std.Io) !FileInfo {
         const cwd = std.Io.Dir.cwd();
         const file = try cwd.openFile(io, self.path, .{});
         defer file.close(io);
 
         const stat = try file.stat(io);
-        return stat.size;
+        return .{
+            .size = stat.size,
+            .modified_ns = stat.mtime.nanoseconds,
+        };
     }
 
     pub fn hash(self: *const SourceFile, io: std.Io) !u64 {
@@ -126,28 +134,35 @@ test "SourceFile.hashPath returns zero for empty path" {
     try testing.expectEqual(FNV_OFFSET_BASIS, sf.hashPath());
 }
 
-test "SourceFile.fileSize returns non-zero for existing file" {
+test "SourceFile.getFileInfo returns non-zero size for existing file" {
     const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const size = try sf.fileSize(testing.io);
-    try testing.expect(size != 0);
+    const info = try sf.getFileInfo(testing.io);
+    try testing.expect(info.size != 0);
 }
 
-test "SourceFile.fileSize is deterministic" {
+test "SourceFile.getFileInfo returns non-zero modified_ns for existing file" {
     const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const s1 = try sf.fileSize(testing.io);
-    const s2 = try sf.fileSize(testing.io);
-    try testing.expectEqual(s1, s2);
+    const info = try sf.getFileInfo(testing.io);
+    try testing.expect(info.modified_ns != 0);
 }
 
-test "SourceFile.fileSize differs for different files" {
+test "SourceFile.getFileInfo is deterministic" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const in1 = try sf.getFileInfo(testing.io);
+    const in2 = try sf.getFileInfo(testing.io);
+    try testing.expectEqual(in1.size, in2.size);
+    try testing.expectEqual(in1.modified_ns, in2.modified_ns);
+}
+
+test "SourceFile.getFileInfo differs for different files" {
     const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
     const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
-    const s1 = try sf1.fileSize(testing.io);
-    const s2 = try sf2.fileSize(testing.io);
-    try testing.expect(s1 != s2);
+    const in1 = try sf1.getFileInfo(testing.io);
+    const in2 = try sf2.getFileInfo(testing.io);
+    try testing.expect(in1.size != in2.size);
 }
 
-test "SourceFile.fileSize returns error for nonexistent file" {
+test "SourceFile.getFileInfo returns error for nonexistent file" {
     const sf = testFile("nonexistent_file_abc123.glb", .glb);
-    try testing.expectError(error.FileNotFound, sf.fileSize(testing.io));
+    try testing.expectError(error.FileNotFound, sf.getFileInfo(testing.io));
 }
