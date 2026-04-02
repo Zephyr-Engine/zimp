@@ -17,12 +17,22 @@ const GLBChunk = struct {
     data: []const u8,
 };
 
+const GLBChunkHeader = struct {
+    length: u32,
+    type: u32,
+};
+
 pub const GLBResultError = error{
     FileToSmall,
     InvalidMagic,
     InvalidVersion,
+    LengthMismatch,
     OutOfMemory,
 };
+
+inline fn processHeader(comptime T: type, file_bytes: []const u8, start: usize) T {
+    return @as(*const T, @ptrCast(@alignCast(file_bytes[start..@sizeOf(T)])));
+}
 
 pub const GLBFile = struct {
     json: []const u8,
@@ -33,13 +43,22 @@ pub const GLBFile = struct {
             return GLBResultError.FileToSmall;
         }
 
-        const header = @as(*const GLBHeader, @ptrCast(@alignCast(file_bytes[0..@sizeOf(GLBHeader)])));
+        const header = processHeader(GLBHeader, file_bytes, 0);
         if (header.magic != GLB_MAGIC) {
             return GLBResultError.InvalidMagic;
         }
 
         if (header.version != GLB_VERSION) {
             return GLBResultError.InvalidVersion;
+        }
+
+        if (header.length != file_bytes.len) {
+            return GLBResultError.LengthMismatch;
+        }
+
+        const jsonHeader = processHeader(GLBChunkHeader, file_bytes, @sizeOf(GLBHeader));
+        if (jsonHeader.type != JSON_CHUNK) {
+            return GLBResultError.InvalidMagic;
         }
 
         const file = try allocator.create(GLBFile);
