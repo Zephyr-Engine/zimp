@@ -30,8 +30,8 @@ pub const GLBResultError = error{
     OutOfMemory,
 };
 
-inline fn processHeader(comptime T: type, file_bytes: []const u8, start: usize) T {
-    return @as(*const T, @ptrCast(@alignCast(file_bytes[start..@sizeOf(T)])));
+inline fn processStruct(comptime T: type, file_bytes: []const u8, start: usize) T {
+    return std.mem.bytesAsValue(T, file_bytes[start..][0..@sizeOf(T)]).*;
 }
 
 pub const GLBFile = struct {
@@ -43,7 +43,7 @@ pub const GLBFile = struct {
             return GLBResultError.FileToSmall;
         }
 
-        const header = processHeader(GLBHeader, file_bytes, 0);
+        const header = processStruct(GLBHeader, file_bytes, 0);
         if (header.magic != GLB_MAGIC) {
             return GLBResultError.InvalidMagic;
         }
@@ -56,7 +56,7 @@ pub const GLBFile = struct {
             return GLBResultError.LengthMismatch;
         }
 
-        const jsonHeader = processHeader(GLBChunkHeader, file_bytes, @sizeOf(GLBHeader));
+        const jsonHeader = processStruct(GLBChunkHeader, file_bytes, @sizeOf(GLBHeader));
         if (jsonHeader.type != JSON_CHUNK) {
             return GLBResultError.InvalidMagic;
         }
