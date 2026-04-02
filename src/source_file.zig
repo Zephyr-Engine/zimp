@@ -2,12 +2,42 @@ const std = @import("std");
 
 const asset = @import("asset.zig");
 
+const FNV_PRIME: u64 = 0x00000100000001B3;
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+
+pub fn fnv1a(path: []const u8) u64 {
+    var hash = FNV_OFFSET_BASIS;
+    for (path) |byte| {
+        const b: u8 = if (byte == '\\') '/' else byte;
+        hash ^= b;
+        hash *%= FNV_PRIME;
+    }
+    return hash;
+}
+
 pub const SourceFile = struct {
     path: []const u8,
     extension: asset.Extension,
     assetType: asset.AssetType,
 
-    pub fn hash(self: SourceFile, io: std.Io) !u64 {
+    pub const FileInfo = struct {
+        size: u64,
+        modified_ns: i96,
+    };
+
+    pub fn getFileInfo(self: *const SourceFile, io: std.Io) !FileInfo {
+        const cwd = std.Io.Dir.cwd();
+        const file = try cwd.openFile(io, self.path, .{});
+        defer file.close(io);
+
+        const stat = try file.stat(io);
+        return .{
+            .size = stat.size,
+            .modified_ns = stat.mtime.nanoseconds,
+        };
+    }
+
+    pub fn hash(self: *const SourceFile, io: std.Io) !u64 {
         const cwd = std.Io.Dir.cwd();
         const file = try cwd.openFile(io, self.path, .{});
         defer file.close(io);
@@ -20,6 +50,10 @@ pub const SourceFile = struct {
         _ = try hr.reader.discardRemaining();
 
         return hr.hasher.final();
+    }
+
+    pub fn hashPath(self: *const SourceFile) u64 {
+        return fnv1a(self.path);
     }
 };
 
@@ -65,4 +99,70 @@ test "SourceFile.hash is independent of extension field" {
     const h1 = try sf_glb.hash(testing.io);
     const h2 = try sf_other.hash(testing.io);
     try testing.expectEqual(h1, h2);
+}
+
+test "SourceFile.hashPath returns non-zero for non-empty path" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    try testing.expect(sf.hashPath() != 0);
+}
+
+test "SourceFile.hashPath is deterministic" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    try testing.expectEqual(sf.hashPath(), sf.hashPath());
+}
+
+test "SourceFile.hashPath differs for different paths" {
+    const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
+    try testing.expect(sf1.hashPath() != sf2.hashPath());
+}
+
+test "SourceFile.hashPath is independent of extension field" {
+    const sf_glb = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf_other = testFile("examples/assets/meshes/triangle.glb", .other);
+    try testing.expectEqual(sf_glb.hashPath(), sf_other.hashPath());
+}
+
+test "SourceFile.hashPath treats backslashes and forward slashes as equal" {
+    const sf_forward = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf_backward = testFile("examples\\assets\\meshes\\triangle.glb", .glb);
+    try testing.expectEqual(sf_forward.hashPath(), sf_backward.hashPath());
+}
+
+test "SourceFile.hashPath returns zero for empty path" {
+    const sf = testFile("", .glb);
+    try testing.expectEqual(FNV_OFFSET_BASIS, sf.hashPath());
+}
+
+test "SourceFile.getFileInfo returns non-zero size for existing file" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const info = try sf.getFileInfo(testing.io);
+    try testing.expect(info.size != 0);
+}
+
+test "SourceFile.getFileInfo returns non-zero modified_ns for existing file" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const info = try sf.getFileInfo(testing.io);
+    try testing.expect(info.modified_ns != 0);
+}
+
+test "SourceFile.getFileInfo is deterministic" {
+    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const in1 = try sf.getFileInfo(testing.io);
+    const in2 = try sf.getFileInfo(testing.io);
+    try testing.expectEqual(in1.size, in2.size);
+    try testing.expectEqual(in1.modified_ns, in2.modified_ns);
+}
+
+test "SourceFile.getFileInfo differs for different files" {
+    const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
+    const in1 = try sf1.getFileInfo(testing.io);
+    const in2 = try sf2.getFileInfo(testing.io);
+    try testing.expect(in1.size != in2.size);
+}
+
+test "SourceFile.getFileInfo returns error for nonexistent file" {
+    const sf = testFile("nonexistent_file_abc123.glb", .glb);
+    try testing.expectError(error.FileNotFound, sf.getFileInfo(testing.io));
 }
