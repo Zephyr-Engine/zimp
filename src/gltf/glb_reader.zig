@@ -56,17 +56,25 @@ pub const GLBFile = struct {
             return GLBResultError.LengthMismatch;
         }
 
-        const jsonHeader = processStruct(GLBChunkHeader, file_bytes, @sizeOf(GLBHeader));
-        if (jsonHeader.type != JSON_CHUNK) {
+        const json_header = processStruct(GLBChunkHeader, file_bytes, @sizeOf(GLBHeader));
+        if (json_header.type != JSON_CHUNK) {
             return GLBResultError.InvalidMagic;
         }
 
-        const json_bytes = file_bytes[@sizeOf(GLBHeader) + @sizeOf(GLBChunkHeader) ..][0..jsonHeader.length];
+        const json_bytes = file_bytes[@sizeOf(GLBHeader) + @sizeOf(GLBChunkHeader) ..][0..json_header.length];
+
+        const bin_start = @sizeOf(GLBHeader) + @sizeOf(GLBChunkHeader) + json_header.length;
+        const bin_header = processStruct(GLBChunkHeader, file_bytes, bin_start);
+        if (bin_header.type != BIN_CHUNK) {
+            return GLBResultError.InvalidMagic;
+        }
+
+        const bin_bytes = file_bytes[bin_start + @sizeOf(GLBChunkHeader) ..][0..bin_header.length];
 
         const file = try allocator.create(GLBFile);
         file.* = GLBFile{
             .json = json_bytes,
-            .bin = &[_]u8{},
+            .bin = bin_bytes,
         };
 
         return file;
