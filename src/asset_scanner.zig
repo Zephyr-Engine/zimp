@@ -10,20 +10,18 @@ pub const AssetScanner = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     dir: std.Io.Dir,
-    root_name: []const u8,
 
-    pub fn init(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, root_name: []const u8) AssetScanner {
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) AssetScanner {
         return .{
             .io = io,
             .dir = dir,
             .allocator = allocator,
-            .root_name = root_name,
         };
     }
 
     pub fn scan(self: AssetScanner) !SourceFileList {
         var files: std.ArrayList(SourceFile) = .empty;
-        try self.scanDir(self.dir, self.root_name, &files);
+        try self.scanDir(self.dir, "", &files);
         logResults(files);
 
         return files;
@@ -54,9 +52,8 @@ pub const AssetScanner = struct {
                 const subprefix = if (prefix.len > 0)
                     try std.fs.path.join(self.allocator, &.{ prefix, entry.name })
                 else
-                    entry.name;
-
-                defer if (prefix.len > 0) self.allocator.free(subprefix);
+                    try self.allocator.dupe(u8, entry.name);
+                defer self.allocator.free(subprefix);
                 try self.scanDir(subdir, subprefix, files);
             }
         }
@@ -92,10 +89,10 @@ pub const AssetScanner = struct {
 
 const testing = std.testing;
 
-fn testScanner(root_name: []const u8) AssetScanner {
+fn testScanner() AssetScanner {
     const cwd = std.Io.Dir.cwd();
     const dir = std.Io.Dir.openDir(cwd, testing.io, "examples/assets", .{ .iterate = true }) catch unreachable;
-    return AssetScanner.init(testing.allocator, testing.io, dir, root_name);
+    return AssetScanner.init(testing.allocator, testing.io, dir);
 }
 
 fn containsPath(files: SourceFileList, path: []const u8) bool {
@@ -106,20 +103,20 @@ fn containsPath(files: SourceFileList, path: []const u8) bool {
 }
 
 test "AssetScanner.scan finds gltf files" {
-    const scanner = testScanner("assets");
+    const scanner = testScanner();
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
-    try testing.expect(containsPath(list, "assets/meshes/triangle.glb"));
+    try testing.expect(containsPath(list, "meshes/triangle.glb"));
 }
 
 test "AssetScanner.scan assigns correct extension" {
-    const scanner = testScanner("assets");
+    const scanner = testScanner();
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
     for (list.items) |file| {
-        if (std.mem.eql(u8, file.path, "assets/meshes/triangle.glb")) {
+        if (std.mem.eql(u8, file.path, "meshes/triangle.glb")) {
             try testing.expectEqual(.glb, file.extension);
             return;
         }
@@ -128,12 +125,12 @@ test "AssetScanner.scan assigns correct extension" {
 }
 
 test "AssetScanner.scan assigns correct asset type" {
-    const scanner = testScanner("assets");
+    const scanner = testScanner();
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
     for (list.items) |file| {
-        if (std.mem.eql(u8, file.path, "assets/meshes/triangle.glb")) {
+        if (std.mem.eql(u8, file.path, "meshes/triangle.glb")) {
             try testing.expectEqual(.mesh, file.assetType);
             return;
         }
@@ -142,7 +139,7 @@ test "AssetScanner.scan assigns correct asset type" {
 }
 
 test "AssetScanner.scan skips non-matching extensions" {
-    const scanner = testScanner("assets");
+    const scanner = testScanner();
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
@@ -151,26 +148,18 @@ test "AssetScanner.scan skips non-matching extensions" {
     }
 }
 
-test "AssetScanner.scan uses root_name as path prefix" {
-    const scanner = testScanner("my_root");
+test "AssetScanner.scan produces paths relative to source dir" {
+    const scanner = testScanner();
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
     for (list.items) |file| {
-        try testing.expect(std.mem.startsWith(u8, file.path, "my_root/"));
+        try testing.expect(std.mem.startsWith(u8, file.path, "meshes/"));
     }
 }
 
-test "AssetScanner.scan with empty root_name produces bare filenames" {
-    const scanner = testScanner("");
-    var list = try scanner.scan();
-    defer scanner.deinit(&list);
-
-    try testing.expect(containsPath(list, "meshes/triangle.glb"));
-}
-
 test "AssetScanner.deinit frees all memory" {
-    const scanner = testScanner("assets");
+    const scanner = testScanner();
     var list = try scanner.scan();
     scanner.deinit(&list);
 }
@@ -178,7 +167,7 @@ test "AssetScanner.deinit frees all memory" {
 test "AssetScanner.scan returns empty list for directory with no matching files" {
     const cwd = std.Io.Dir.cwd();
     const dir = std.Io.Dir.openDir(cwd, testing.io, "examples/output", .{ .iterate = true }) catch unreachable;
-    const scanner = AssetScanner.init(testing.allocator, testing.io, dir, "nested");
+    const scanner = AssetScanner.init(testing.allocator, testing.io, dir);
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
