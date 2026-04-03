@@ -63,11 +63,12 @@ pub const CookCommand = struct {
 
         defer source_scanner.deinit(&list);
 
+        // TODO: parallelize this with zob
         for (list.items) |entry| {
             if (entry.extension == .glb) {
                 const glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
-                defer glb_cooker.deinit();
                 glb_cooker.cook();
+                glb_cooker.deinit();
             }
         }
     }
