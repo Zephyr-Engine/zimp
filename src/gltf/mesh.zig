@@ -8,6 +8,8 @@ const GltfPrimitive = gltf_parser.GltfPrimitive;
 
 pub const BuildMeshError = error{
     MissingPositionAttribute,
+    UnsupportedPrimitiveMode,
+    InvalidIndexCount,
     OutOfBounds,
     OutOfMemory,
 };
@@ -23,10 +25,19 @@ pub const GltfMesh = struct {
         var vertex_count: u32 = 0;
         var index_count: u32 = 0;
         for (primitives) |prim| {
+            if (prim.mode != 4) {
+                return BuildMeshError.UnsupportedPrimitiveMode;
+            }
+
             const pos_index = prim.attributes.POSITION orelse return BuildMeshError.MissingPositionAttribute;
             vertex_count += gltf.accessors[pos_index].count;
             if (prim.indices) |idx| {
-                index_count += gltf.accessors[idx].count;
+                const count = gltf.accessors[idx].count;
+                if (count % 3 != 0) {
+                    return BuildMeshError.InvalidIndexCount;
+                }
+
+                index_count += count;
             }
         }
 
