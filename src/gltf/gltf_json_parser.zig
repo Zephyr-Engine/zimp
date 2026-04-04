@@ -1,140 +1,138 @@
 const std = @import("std");
 
 pub const Gltf = struct {
-    scenes: []GltfScene = &.{},
-    nodes: []GltfNode = &.{},
-    meshes: []GltfMesh = &.{},
-    accessors: []GltfAccessor = &.{},
-    buffer_views: []GltfBufferView = &.{},
-    buffers: []GltfBuffer = &.{},
-    materials: []GltfMaterial = &.{},
-    textures: []GltfTexture = &.{},
-    images: []GltfImage = &.{},
-
-    arena: ?std.heap.ArenaAllocator.State = null,
-    allocator: ?std.mem.Allocator = null,
+    value: GltfJson,
+    arena: *std.heap.ArenaAllocator,
 
     pub fn parse(json_bytes: []const u8, allocator: std.mem.Allocator) !Gltf {
-        const parsed = try std.json.parseFromSlice(Gltf, allocator, json_bytes, .{});
+        const parsed = try std.json.parseFromSlice(GltfJson, allocator, json_bytes, .{
+            .ignore_unknown_fields = true,
+        });
 
-        var gltf = parsed.value;
-        gltf.arena = parsed.arena_allocator.state;
-        gltf.allocator = allocator;
-
-        return gltf;
+        return .{
+            .value = parsed.value,
+            .arena = parsed.arena,
+        };
     }
 
     pub fn deinit(self: *Gltf) void {
-        if (self.arena) |state| {
-            var arena = state.promote(self.allocator.?);
-            arena.deinit();
-        }
+        const allocator = self.arena.child_allocator;
+        self.arena.deinit();
+        allocator.destroy(self.arena);
         self.* = undefined;
     }
 };
 
-const GltfScene = struct {
-    nodes: []u32,
+const GltfJson = struct {
+    scenes: []GltfScene = &.{},
+    nodes: []GltfNode = &.{},
+    meshes: []GltfMesh = &.{},
+    accessors: []GltfAccessor = &.{},
+    bufferViews: []GltfBufferView = &.{},
+    buffers: []GltfBuffer = &.{},
+    materials: []GltfMaterial = &.{},
+    textures: []GltfTexture = &.{},
+    images: []GltfImage = &.{},
 };
 
-const GltfNode = struct {
-    name: ?[]const u8,
-    mesh: ?u32,
-    skin: ?u32,
+pub const GltfScene = struct {
+    nodes: []u32 = &.{},
+};
+
+pub const GltfNode = struct {
+    name: ?[]const u8 = null,
+    mesh: ?u32 = null,
+    skin: ?u32 = null,
     children: []u32 = &.{},
     translation: [3]f32 = .{ 0, 0, 0 },
     rotation: [4]f32 = .{ 0, 0, 0, 1 },
     scale: [3]f32 = .{ 1, 1, 1 },
-    matrix: ?[16]f32,
+    matrix: ?[16]f32 = null,
 };
 
-const GltfMesh = struct {
-    name: ?[]const u8,
-    primitives: []GltfPrimitive,
+pub const GltfMesh = struct {
+    name: ?[]const u8 = null,
+    primitives: []GltfPrimitive = &.{},
 };
 
-const GltfPrimitive = struct {
-    attributes: GltfAttributes,
-    indices: ?u32,
-    material: ?u32,
+pub const GltfPrimitive = struct {
+    attributes: GltfAttributes = .{},
+    indices: ?u32 = null,
+    material: ?u32 = null,
     mode: u32 = 4,
 };
 
-const GltfAttributes = struct {
-    position: ?u32,
-    normal: ?u32,
-    tangent: ?u32,
-    texcoord_0: ?u32,
-    texcoord_1: ?u32,
-    joints_0: ?u32,
-    weights_0: ?u32,
+pub const GltfAttributes = struct {
+    POSITION: ?u32 = null,
+    NORMAL: ?u32 = null,
+    TANGENT: ?u32 = null,
+    TEXCOORD_0: ?u32 = null,
+    TEXCOORD_1: ?u32 = null,
+    JOINTS_0: ?u32 = null,
+    WEIGHTS_0: ?u32 = null,
 };
 
-const AccessorType = enum {
+pub const AccessorType = enum {
     SCALAR,
     VEC2,
     VEC3,
     VEC4,
     MAT4,
-
-    fn parse(str: []const u8) ?AccessorType {
-        return std.meta.stringToEnum(AccessorType, str);
-    }
 };
 
-const GltfAccessor = struct {
-    buffer_view: ?u32,
-    byte_offset: u32 = 0,
-    component_type: u32,
+pub const GltfAccessor = struct {
+    bufferView: ?u32 = null,
+    byteOffset: u32 = 0,
+    componentType: u32,
     count: u32,
     type: AccessorType,
-    min: ?[]f64,
-    max: ?[]f64,
+    min: ?[]f64 = null,
+    max: ?[]f64 = null,
 };
 
-const GltfBufferView = struct {
+pub const GltfBufferView = struct {
     buffer: u32,
-    byte_offset: u32 = 0,
-    byte_length: u32,
-    byte_stride: ?u32,
-    target: ?u32,
+    byteOffset: u32 = 0,
+    byteLength: u32,
+    byteStride: ?u32 = null,
+    target: ?u32 = null,
 };
 
-const GltfBuffer = struct {
-    byte_length: u32,
-    uri: ?[]const u8,
+pub const GltfBuffer = struct {
+    byteLength: u32,
+    uri: ?[]const u8 = null,
 };
 
-const GltfMaterial = struct {
-    name: ?[]const u8,
-    pbr: ?GltfPbr,
-    normal_texture: ?GltfTextureInfo,
-    emissive_factor: ?[3]f32,
-    alpha_mode: ?[]const u8,
+pub const GltfMaterial = struct {
+    name: ?[]const u8 = null,
+    pbrMetallicRoughness: ?GltfPbr = null,
+    normalTexture: ?GltfTextureInfo = null,
+    emissiveFactor: ?[3]f32 = null,
+    alphaMode: ?[]const u8 = null,
 };
 
-const GltfPbr = struct {
-    base_color_factor: [4]f32 = .{ 1, 1, 1, 1 },
-    metallic_factor: f32 = 1.0,
-    roughness_factor: f32 = 1.0,
-    base_color_texture: ?GltfTextureInfo,
-    metallic_roughness_texture: ?GltfTextureInfo,
+pub const GltfPbr = struct {
+    baseColorFactor: [4]f32 = .{ 1, 1, 1, 1 },
+    metallicFactor: f32 = 1.0,
+    roughnessFactor: f32 = 1.0,
+    baseColorTexture: ?GltfTextureInfo = null,
+    metallicRoughnessTexture: ?GltfTextureInfo = null,
 };
 
-const GltfTextureInfo = struct {
+pub const GltfTextureInfo = struct {
     index: u32,
-    tex_coord: u32 = 0,
-    scale: ?f32,
+    texCoord: u32 = 0,
+    scale: ?f32 = null,
 };
 
-const GltfTexture = struct {
-    source: ?u32,
-    sampler: ?u32,
+pub const GltfTexture = struct {
+    source: ?u32 = null,
+    sampler: ?u32 = null,
 };
 
-const GltfImage = struct {
-    buffer_view: ?u32,
-    mime_type: ?[]const u8,
-    name: ?[]const u8,
-    uri: ?[]const u8,
+pub const GltfImage = struct {
+    bufferView: ?u32 = null,
+    mimeType: ?[]const u8 = null,
+    name: ?[]const u8 = null,
+    uri: ?[]const u8 = null,
 };

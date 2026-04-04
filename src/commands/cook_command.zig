@@ -66,7 +66,7 @@ pub const CookCommand = struct {
         // TODO: parallelize this with zob
         for (list.items) |entry| {
             if (entry.extension == .glb) {
-                const glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
+                var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
                 glb_cooker.cook();
                 glb_cooker.deinit();
             }
