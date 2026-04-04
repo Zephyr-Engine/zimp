@@ -23,7 +23,7 @@ pub const Gltf = struct {
     }
 };
 
-const GltfJson = struct {
+pub const GltfJson = struct {
     scenes: []GltfScene = &.{},
     nodes: []GltfNode = &.{},
     meshes: []GltfMesh = &.{},
@@ -78,16 +78,82 @@ pub const AccessorType = enum {
     VEC3,
     VEC4,
     MAT4,
+
+    pub fn componentCount(self: AccessorType) usize {
+        return switch (self) {
+            .SCALAR => 1,
+            .VEC2 => 2,
+            .VEC3 => 3,
+            .VEC4 => 4,
+            .MAT4 => 16,
+        };
+    }
+};
+
+pub const GltfAccessorError = error{
+    OutOfBounds,
+    OutOfMemory,
 };
 
 pub const GltfAccessor = struct {
     bufferView: ?u32 = null,
     byteOffset: u32 = 0,
-    componentType: u32,
+    componentType: AccessorComponentType,
     count: u32,
     type: AccessorType,
     min: ?[]f64 = null,
     max: ?[]f64 = null,
+
+    pub fn readAccessor(self: *const GltfAccessor, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, bin: []const u8) GltfAccessorError![]const u8 {
+        const buffer_view_value = self.bufferView orelse return &.{};
+        const buffer_view = buffer_views[buffer_view_value];
+
+        const start = self.byteOffset + buffer_view.byteOffset;
+        const component_size = self.componentType.size();
+        const num_components = self.type.componentCount();
+        const element_size = component_size * num_components;
+        const stride = buffer_view.byteStride orelse element_size;
+
+        // Tightly packed — return a direct slice, no copy needed
+        if (stride == element_size) {
+            const end = start + element_size * self.count;
+            if (end > bin.len) {
+                return GltfAccessorError.OutOfBounds;
+            }
+            return bin[start..end];
+        }
+
+        // Interleaved — copy each element's data into a contiguous buffer
+        const total = element_size * self.count;
+        if (start + stride * (self.count - 1) + element_size > bin.len) {
+            return GltfAccessorError.OutOfBounds;
+        }
+
+        const out = try allocator.alloc(u8, total);
+        for (0..self.count) |i| {
+            const src_offset = start + stride * i;
+            @memcpy(out[element_size * i ..][0..element_size], bin[src_offset..][0..element_size]);
+        }
+
+        return out;
+    }
+};
+
+pub const AccessorComponentType = enum(u32) {
+    BYTE = 5120,
+    UNSIGNED_BYTE = 5121,
+    SHORT = 5122,
+    UNSIGNED_SHORT = 5123,
+    UNSIGNED_INT = 5125,
+    FLOAT = 5126,
+
+    pub fn size(self: AccessorComponentType) usize {
+        return switch (self) {
+            .BYTE, .UNSIGNED_BYTE => 1,
+            .SHORT, .UNSIGNED_SHORT => 2,
+            .FLOAT, .UNSIGNED_INT => 4,
+        };
+    }
 };
 
 pub const GltfBufferView = struct {
