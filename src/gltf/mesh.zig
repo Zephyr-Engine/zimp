@@ -33,45 +33,22 @@ pub const GltfMesh = struct {
             const pos_accessor = &gltf.accessors[pos_index];
             const positions = try pos_accessor.readAccessorTy([3]f32, allocator, gltf.bufferViews, bin);
 
-            const normals = if (prim.attributes.NORMAL) |idx|
-                try gltf.accessors[idx].readAccessorTy([3]f32, allocator, gltf.bufferViews, bin)
-            else
-                null;
-
-            const tangents = if (prim.attributes.TANGENT) |idx|
-                try gltf.accessors[idx].readAccessorTy([4]f32, allocator, gltf.bufferViews, bin)
-            else
-                null;
-
-            const uv0s = if (prim.attributes.TEXCOORD_0) |idx|
-                try gltf.accessors[idx].readAccessorTy([2]f32, allocator, gltf.bufferViews, bin)
-            else
-                null;
-
-            const uv1s = if (prim.attributes.TEXCOORD_1) |idx|
-                try gltf.accessors[idx].readAccessorTy([2]f32, allocator, gltf.bufferViews, bin)
-            else
-                null;
-
-            const joints = if (prim.attributes.JOINTS_0) |idx|
-                try gltf.accessors[idx].readAccessorTy([4]u16, allocator, gltf.bufferViews, bin)
-            else
-                null;
-
-            const weights = if (prim.attributes.WEIGHTS_0) |idx|
-                try gltf.accessors[idx].readAccessorTy([4]f32, allocator, gltf.bufferViews, bin)
-            else
-                null;
+            const normals = try readAttr([3]f32, prim.attributes.NORMAL, allocator, gltf, bin);
+            const tangents = try readAttr([4]f32, prim.attributes.TANGENT, allocator, gltf, bin);
+            const uv0s = try readAttr([2]f32, prim.attributes.TEXCOORD_0, allocator, gltf, bin);
+            const uv1s = try readAttr([2]f32, prim.attributes.TEXCOORD_1, allocator, gltf, bin);
+            const joints = try readAttr([4]u16, prim.attributes.JOINTS_0, allocator, gltf, bin);
+            const weights = try readAttr([4]f32, prim.attributes.WEIGHTS_0, allocator, gltf, bin);
 
             for (0..pos_accessor.count) |i| {
                 vertices[vertex_offset + i] = .{
                     .position = positions[i],
-                    .normal = if (normals) |n| n[i] else null,
-                    .tangest = if (tangents) |t| t[i] else null,
-                    .uv0 = if (uv0s) |u| u[i] else null,
-                    .uv1 = if (uv1s) |u| u[i] else null,
-                    .joint_indices = if (joints) |j| j[i] else null,
-                    .joint_weights = if (weights) |w| w[i] else null,
+                    .normal = optionalIndex(normals, i),
+                    .tangest = optionalIndex(tangents, i),
+                    .uv0 = optionalIndex(uv0s, i),
+                    .uv1 = optionalIndex(uv1s, i),
+                    .joint_indices = optionalIndex(joints, i),
+                    .joint_weights = optionalIndex(weights, i),
                 };
             }
 
@@ -100,3 +77,12 @@ pub const GltfMesh = struct {
         self.* = undefined;
     }
 };
+
+fn readAttr(comptime T: type, attr_index: ?u32, allocator: std.mem.Allocator, gltf: *const GltfJson, bin: []const u8) BuildMeshError!?[]align(1) const T {
+    const idx = attr_index orelse return null;
+    return try gltf.accessors[idx].readAccessorTy(T, allocator, gltf.bufferViews, bin);
+}
+
+fn optionalIndex(slice: anytype, i: usize) ?std.meta.Elem(@TypeOf(slice.?)) {
+    return if (slice) |s| s[i] else null;
+}
