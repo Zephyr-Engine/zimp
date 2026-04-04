@@ -104,7 +104,7 @@ pub const GltfAccessor = struct {
     min: ?[]f64 = null,
     max: ?[]f64 = null,
 
-    pub fn readAccessorTy(self: *const GltfAccessor, comptime T: type, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, bin: []const u8) GltfAccessorError![]align(1) const T {
+    pub fn readAccessorSlice(self: *const GltfAccessor, comptime T: type, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, bin: []const u8) GltfAccessorError![]align(1) const T {
         const bytes = try self.readAccessor(allocator, buffer_views, bin);
         return std.mem.bytesAsSlice(T, bytes);
     }
