@@ -62,8 +62,12 @@ pub const GltfMesh = struct {
 
     pub fn deinit(self: *GltfMesh) void {
         self.allocator.free(self.raw.vertices);
-        if (self.raw.indices.len > 0) self.allocator.free(self.raw.indices);
-        if (self.raw.submeshes.len > 0) self.allocator.free(self.raw.submeshes);
+        if (self.raw.indices.len > 0) {
+            self.allocator.free(self.raw.indices);
+        }
+        if (self.raw.submeshes.len > 0) {
+            self.allocator.free(self.raw.submeshes);
+        }
         self.* = undefined;
     }
 };

@@ -336,7 +336,7 @@ test "parse accessors" {
     const a0 = gltf.value.accessors[0];
     try testing.expectEqual(0, a0.bufferView.?);
     try testing.expectEqual(0, a0.byteOffset);
-    try testing.expectEqual(5123, a0.componentType);
+    try testing.expectEqual(.UNSIGNED_SHORT, a0.componentType);
     try testing.expectEqual(36, a0.count);
     try testing.expectEqual(.SCALAR, a0.type);
     try testing.expectEqual(1, a0.max.?.len);
