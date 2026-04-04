@@ -31,18 +31,47 @@ pub const GltfMesh = struct {
         for (json_mesh.primitives) |prim| {
             const pos_index = prim.attributes.POSITION.?;
             const pos_accessor = &gltf.accessors[pos_index];
-            const pos_bytes = try pos_accessor.readAccessor(allocator, gltf.bufferViews, bin);
-            const positions = std.mem.bytesAsSlice([3]f32, pos_bytes);
+            const positions = try pos_accessor.readAccessorTy([3]f32, allocator, gltf.bufferViews, bin);
+
+            const normals = if (prim.attributes.NORMAL) |idx|
+                try gltf.accessors[idx].readAccessorTy([3]f32, allocator, gltf.bufferViews, bin)
+            else
+                null;
+
+            const tangents = if (prim.attributes.TANGENT) |idx|
+                try gltf.accessors[idx].readAccessorTy([4]f32, allocator, gltf.bufferViews, bin)
+            else
+                null;
+
+            const uv0s = if (prim.attributes.TEXCOORD_0) |idx|
+                try gltf.accessors[idx].readAccessorTy([2]f32, allocator, gltf.bufferViews, bin)
+            else
+                null;
+
+            const uv1s = if (prim.attributes.TEXCOORD_1) |idx|
+                try gltf.accessors[idx].readAccessorTy([2]f32, allocator, gltf.bufferViews, bin)
+            else
+                null;
+
+            const joints = if (prim.attributes.JOINTS_0) |idx|
+                try gltf.accessors[idx].readAccessorTy([4]u16, allocator, gltf.bufferViews, bin)
+            else
+                null;
+
+            const weights = if (prim.attributes.WEIGHTS_0) |idx|
+                try gltf.accessors[idx].readAccessorTy([4]f32, allocator, gltf.bufferViews, bin)
+            else
+                null;
 
             for (0..pos_accessor.count) |i| {
                 vertices[vertex_offset + i] = .{
                     .position = positions[i],
-                    .normal = null,
-                    .tangest = null,
-                    .uv0 = null,
-                    .uv1 = null,
-                    .joint_indices = null,
-                    .joint_weights = null,
+                    .normal = if (normals) |n| n[i] else null,
+                    .tangest = if (tangents) |t| t[i] else null,
+                    .uv0 = if (uv0s) |u| u[i] else null,
+                    .uv1 = if (uv1s) |u| u[i] else null,
+                    .joint_indices = if (joints) |j| j[i] else null,
+                    .joint_weights = if (weights) |w| w[i] else null,
                 };
             }
 
