@@ -47,14 +47,23 @@ pub const GltfMesh = struct {
         const indices = if (index_count > 0) try allocator.alloc(u32, index_count) else @as([]u32, &.{});
         errdefer if (index_count > 0) allocator.free(indices);
 
+        const submeshes = try allocator.alloc(mesh.RawSubmesh, primitives.len);
+        errdefer allocator.free(submeshes);
+
         var vertex_offset: u32 = 0;
         var index_offset: u32 = 0;
-        for (primitives) |prim| {
+        for (primitives, 0..) |prim, prim_idx| {
             const count = try processVertices(allocator, gltf, bin, prim, vertices, vertex_offset);
             try processIndices(allocator, gltf, bin, prim, indices, index_offset, vertex_offset);
-            if (prim.indices) |idx| {
-                index_offset += gltf.accessors[idx].count;
-            }
+
+            const prim_index_count: u32 = if (prim.indices) |idx| gltf.accessors[idx].count else 0;
+            submeshes[prim_idx] = .{
+                .index_offset = index_offset,
+                .index_count = prim_index_count,
+                .material_index = @intCast(prim.material orelse 0),
+            };
+
+            index_offset += prim_index_count;
             vertex_offset += count;
         }
 
@@ -63,7 +72,7 @@ pub const GltfMesh = struct {
             .raw = .{
                 .vertices = vertices,
                 .indices = indices,
-                .submeshes = &.{},
+                .submeshes = submeshes,
                 .name = json_mesh.name,
             },
         };
