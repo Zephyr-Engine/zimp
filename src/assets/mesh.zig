@@ -6,7 +6,7 @@ const ReMap = std.AutoHashMap(u32, u32);
 pub const RawVertex = struct {
     position: [3]f32,
     normal: ?[3]f32,
-    tangest: ?[4]f32,
+    tangent: ?[4]f32,
     uv0: ?[2]f32,
     uv1: ?[2]f32,
     joint_indices: ?[4]u16,
@@ -14,6 +14,60 @@ pub const RawVertex = struct {
 
     pub fn hash(self: *const RawVertex) u64 {
         return std.hash.XxHash64.hash(0, std.mem.asBytes(self));
+    }
+
+    pub fn quantizeUV0(self: *const RawVertex) ?[2]u16 {
+        if (self.uv0) |uv| {
+            return quantizeUV(uv);
+        }
+        return null;
+    }
+
+    pub fn quantizeUV1(self: *const RawVertex) ?[2]u16 {
+        if (self.uv1) |uv| {
+            return quantizeUV(uv);
+        }
+        return null;
+    }
+
+    pub fn quantizeTangent(self: *const RawVertex) ?[4]f16 {
+        if (self.tangent) |tangent| {
+            var result: [4]f16 = undefined;
+            for (0..4) |i| {
+                result[i] = @floatCast(tangent[i]);
+            }
+
+            return result;
+        }
+
+        return null;
+    }
+
+    pub fn quantizeJointWeights(self: *const RawVertex) ?[4]f16 {
+        if (self.joint_weights) |weights| {
+            var result: [4]f16 = undefined;
+            for (0..4) |i| {
+                result[i] = @floatCast(weights[i]);
+            }
+
+            return result;
+        }
+
+        return null;
+    }
+
+    fn quantizeUV(uv: [2]f32) [2]u16 {
+        var result: [2]u16 = undefined;
+        for (0..2) |i| {
+            if (uv[i] < 0.0 or uv[i] > 1.0) {
+                logger.warn("Found UV outside 0-1 range: {d}", .{uv[i]});
+            }
+
+            const clamped = std.math.clamp(uv[i], 0.0, 1.0);
+            result[i] = @intFromFloat(clamped * 65525.0);
+        }
+
+        return result;
     }
 };
 
@@ -29,7 +83,18 @@ pub const RawMesh = struct {
     submeshes: []RawSubmesh,
     name: ?[]const u8,
 
-    pub fn deduplicateVertices(self: *RawMesh, allocator: std.mem.Allocator) !void {
+    pub fn cook(self: *RawMesh, allocator: std.mem.Allocator) !void {
+        try self.deduplicateVertices(allocator);
+        try self.optimizeVertexCache();
+    }
+
+    // Forsyth Algorithm
+    fn optimizeVertexCache(self: *RawMesh) !void {
+        // TODO: implement
+        _ = self;
+    }
+
+    fn deduplicateVertices(self: *RawMesh, allocator: std.mem.Allocator) !void {
         logger.debug("[Optimizing Mesh] Step 1: Deduplicating Vertices", .{});
 
         var deduped: std.ArrayList(RawVertex) = try .initCapacity(allocator, self.vertices.len);
@@ -84,13 +149,13 @@ pub const RawMesh = struct {
     }
 };
 
-// ── Tests ──────────────────────────────────────────────────────────────
+// Tests
 
 fn makeVertex(x: f32, y: f32, z: f32) RawVertex {
     return .{
         .position = .{ x, y, z },
         .normal = null,
-        .tangest = null,
+        .tangent = null,
         .uv0 = null,
         .uv1 = null,
         .joint_indices = null,
@@ -289,4 +354,121 @@ test "vertices differing only in optional fields are not deduplicated" {
     defer allocator.free(mesh.indices);
 
     try std.testing.expectEqual(@as(usize, 2), mesh.vertices.len);
+}
+
+test "quantizeUV maps 0.0 to 0 and 1.0 to 65525" {
+    const result = RawVertex.quantizeUV(.{ 0.0, 1.0 });
+    try std.testing.expectEqual(@as(u16, 0), result[0]);
+    try std.testing.expectEqual(@as(u16, 65525), result[1]);
+}
+
+test "quantizeUV maps 0.5 to midpoint" {
+    const result = RawVertex.quantizeUV(.{ 0.5, 0.5 });
+    // 0.5 * 65525 = 32762.5 → truncated to 32762
+    try std.testing.expectEqual(@as(u16, 32762), result[0]);
+    try std.testing.expectEqual(@as(u16, 32762), result[1]);
+}
+
+test "quantizeUV clamps values below 0" {
+    const result = RawVertex.quantizeUV(.{ -0.5, -1.0 });
+    try std.testing.expectEqual(@as(u16, 0), result[0]);
+    try std.testing.expectEqual(@as(u16, 0), result[1]);
+}
+
+test "quantizeUV clamps values above 1" {
+    const result = RawVertex.quantizeUV(.{ 1.5, 2.0 });
+    try std.testing.expectEqual(@as(u16, 65525), result[0]);
+    try std.testing.expectEqual(@as(u16, 65525), result[1]);
+}
+
+test "quantizeUV handles independent channels" {
+    const result = RawVertex.quantizeUV(.{ 0.25, 0.75 });
+    // 0.25 * 65525 = 16381.25 → 16381
+    // 0.75 * 65525 = 49143.75 → 49143
+    try std.testing.expectEqual(@as(u16, 16381), result[0]);
+    try std.testing.expectEqual(@as(u16, 49143), result[1]);
+}
+
+test "quantizeUV0 returns quantized value when present" {
+    var v = makeVertex(0, 0, 0);
+    v.uv0 = .{ 0.0, 1.0 };
+    const result = v.quantizeUV0().?;
+    try std.testing.expectEqual(@as(u16, 0), result[0]);
+    try std.testing.expectEqual(@as(u16, 65525), result[1]);
+}
+
+test "quantizeUV0 returns null when absent" {
+    const v = makeVertex(0, 0, 0);
+    try std.testing.expectEqual(@as(?[2]u16, null), v.quantizeUV0());
+}
+
+test "quantizeUV1 returns quantized value when present" {
+    var v = makeVertex(0, 0, 0);
+    v.uv1 = .{ 0.5, 0.25 };
+    const result = v.quantizeUV1().?;
+    try std.testing.expectEqual(@as(u16, 32762), result[0]);
+    try std.testing.expectEqual(@as(u16, 16381), result[1]);
+}
+
+test "quantizeUV1 returns null when absent" {
+    const v = makeVertex(0, 0, 0);
+    try std.testing.expectEqual(@as(?[2]u16, null), v.quantizeUV1());
+}
+
+test "quantizeTangent converts f32 to f16" {
+    var v = makeVertex(0, 0, 0);
+    v.tangent = .{ 1.0, 0.0, 0.0, 1.0 };
+    const result = v.quantizeTangent().?;
+    try std.testing.expectEqual(@as(f16, 1.0), result[0]);
+    try std.testing.expectEqual(@as(f16, 0.0), result[1]);
+    try std.testing.expectEqual(@as(f16, 0.0), result[2]);
+    try std.testing.expectEqual(@as(f16, 1.0), result[3]);
+}
+
+test "quantizeTangent returns null when absent" {
+    const v = makeVertex(0, 0, 0);
+    try std.testing.expectEqual(@as(?[4]f16, null), v.quantizeTangent());
+}
+
+test "quantizeTangent preserves negative values" {
+    var v = makeVertex(0, 0, 0);
+    v.tangent = .{ -1.0, 0.5, -0.5, -1.0 };
+    const result = v.quantizeTangent().?;
+    try std.testing.expectEqual(@as(f16, -1.0), result[0]);
+    try std.testing.expectEqual(@as(f16, 0.5), result[1]);
+    try std.testing.expectEqual(@as(f16, -0.5), result[2]);
+    try std.testing.expectEqual(@as(f16, -1.0), result[3]);
+}
+
+test "quantizeJointWeights converts f32 to f16" {
+    var v = makeVertex(0, 0, 0);
+    v.joint_weights = .{ 1.0, 0.0, 0.0, 0.0 };
+    const result = v.quantizeJointWeights().?;
+    try std.testing.expectEqual(@as(f16, 1.0), result[0]);
+    try std.testing.expectEqual(@as(f16, 0.0), result[1]);
+    try std.testing.expectEqual(@as(f16, 0.0), result[2]);
+    try std.testing.expectEqual(@as(f16, 0.0), result[3]);
+}
+
+test "quantizeJointWeights returns null when absent" {
+    const v = makeVertex(0, 0, 0);
+    try std.testing.expectEqual(@as(?[4]f16, null), v.quantizeJointWeights());
+}
+
+test "quantizeJointWeights handles fractional weights" {
+    var v = makeVertex(0, 0, 0);
+    v.joint_weights = .{ 0.5, 0.25, 0.125, 0.125 };
+    const result = v.quantizeJointWeights().?;
+    try std.testing.expectEqual(@as(f16, 0.5), result[0]);
+    try std.testing.expectEqual(@as(f16, 0.25), result[1]);
+    try std.testing.expectEqual(@as(f16, 0.125), result[2]);
+    try std.testing.expectEqual(@as(f16, 0.125), result[3]);
+}
+
+test "quantizeJointWeights still sum to 1 after quantization" {
+    var v = makeVertex(0, 0, 0);
+    v.joint_weights = .{ 0.6, 0.2, 0.15, 0.05 };
+    const result = v.quantizeJointWeights().?;
+    const sum: f16 = result[0] + result[1] + result[2] + result[3];
+    try std.testing.expectApproxEqAbs(@as(f16, 1.0), sum, 0.01);
 }

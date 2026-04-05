@@ -1,8 +1,6 @@
 const std = @import("std");
 
-const log = @import("../logger.zig");
-const logger = log.logger;
-const logError = log.logError;
+const logger = @import("../logger.zig").logger;
 
 pub const InspectError = error{
     NotEnoughArguments,
@@ -17,12 +15,12 @@ pub const InspectCommand = struct {
         const cwd = std.Io.Dir.cwd();
 
         if (args.len < 3) {
-            logError("inspect: not enough arguments (got {d}, need at least 3). Usage: zimp inspect <file_path>", .{args.len});
+            logger.err("inspect: not enough arguments (got {d}, need at least 3). Usage: zimp inspect <file_path>", .{args.len});
             return InspectError.NotEnoughArguments;
         }
 
         const file = cwd.openFile(io, args[2], .{}) catch |err| {
-            logError("inspect: failed to open file '{s}': {s}. Ensure the file exists and has the correct permissions", .{ args[2], @errorName(err) });
+            logger.err("inspect: failed to open file '{s}': {s}. Ensure the file exists and has the correct permissions", .{ args[2], @errorName(err) });
             return InspectError.FileNotFound;
         };
 

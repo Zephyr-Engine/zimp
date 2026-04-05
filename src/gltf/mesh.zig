@@ -105,7 +105,7 @@ fn processVertices(allocator: std.mem.Allocator, gltf: *const GltfJson, bin: []c
         vertices[offset + i] = .{
             .position = positions[i],
             .normal = optionalIndex(normals, i),
-            .tangest = optionalIndex(tangents, i),
+            .tangent = optionalIndex(tangents, i),
             .uv0 = optionalIndex(uv0s, i),
             .uv1 = optionalIndex(uv1s, i),
             .joint_indices = optionalIndex(joints, i),
@@ -186,17 +186,17 @@ const triangle_bin = toBytes([3]f32, &triangle_positions) ++
     toBytes([2]f32, &triangle_uvs);
 
 const triangle_buffer_views = [_]GltfBufferView{
-    .{ .buffer = 0, .byteOffset = 0, .byteLength = 36 },  // positions: 3 * 12
-    .{ .buffer = 0, .byteOffset = 36, .byteLength = 6 },   // indices: 3 * 2
-    .{ .buffer = 0, .byteOffset = 42, .byteLength = 36 },  // normals: 3 * 12
-    .{ .buffer = 0, .byteOffset = 78, .byteLength = 24 },  // uvs: 3 * 8
+    .{ .buffer = 0, .byteOffset = 0, .byteLength = 36 }, // positions: 3 * 12
+    .{ .buffer = 0, .byteOffset = 36, .byteLength = 6 }, // indices: 3 * 2
+    .{ .buffer = 0, .byteOffset = 42, .byteLength = 36 }, // normals: 3 * 12
+    .{ .buffer = 0, .byteOffset = 78, .byteLength = 24 }, // uvs: 3 * 8
 };
 
 const triangle_accessors = [_]GltfAccessor{
-    .{ .bufferView = 0, .componentType = .FLOAT, .count = 3, .type = .VEC3 },      // 0: positions
+    .{ .bufferView = 0, .componentType = .FLOAT, .count = 3, .type = .VEC3 }, // 0: positions
     .{ .bufferView = 1, .componentType = .UNSIGNED_SHORT, .count = 3, .type = .SCALAR }, // 1: indices
-    .{ .bufferView = 2, .componentType = .FLOAT, .count = 3, .type = .VEC3 },      // 2: normals
-    .{ .bufferView = 3, .componentType = .FLOAT, .count = 3, .type = .VEC2 },      // 3: uvs
+    .{ .bufferView = 2, .componentType = .FLOAT, .count = 3, .type = .VEC3 }, // 2: normals
+    .{ .bufferView = 3, .componentType = .FLOAT, .count = 3, .type = .VEC2 }, // 3: uvs
 };
 
 test "build triangle with positions only" {
@@ -255,7 +255,7 @@ test "build triangle with normals and uvs" {
     try testing.expectEqual([2]f32{ 0.0, 0.0 }, result.raw.vertices[0].uv0.?);
     try testing.expectEqual([2]f32{ 0.5, 1.0 }, result.raw.vertices[2].uv0.?);
     try testing.expectEqual(null, result.raw.vertices[0].uv1);
-    try testing.expectEqual(null, result.raw.vertices[0].tangest);
+    try testing.expectEqual(null, result.raw.vertices[0].tangent);
 }
 
 test "build mesh without indices" {
