@@ -1,5 +1,5 @@
 const std = @import("std");
-const mesh = @import("../assets/mesh.zig");
+const mesh = @import("../assets/raw_mesh.zig");
 const gltf_parser = @import("gltf_json_parser.zig");
 const GltfJson = gltf_parser.GltfJson;
 const GltfBufferView = gltf_parser.GltfBufferView;

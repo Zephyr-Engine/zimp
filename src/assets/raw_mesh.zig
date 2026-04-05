@@ -56,6 +56,38 @@ pub const RawVertex = struct {
         return null;
     }
 
+    pub fn encodeNormalOctahedral(self: *const RawVertex) ?[2]i16 {
+        if (self.normal) |normal| {
+            const abs_sum = @abs(normal[0]) + @abs(normal[1]) + @abs(normal[2]);
+
+            // Project onto octahedron
+            var oct: [2]f32 = .{
+                normal[0] / abs_sum,
+                normal[1] / abs_sum,
+            };
+
+            // Fold for negative z hemisphere
+            if (normal[2] < 0.0) {
+                const ox = oct[0];
+                const oy = oct[1];
+                oct[0] = (1.0 - @abs(oy)) * signNonZero(ox);
+                oct[1] = (1.0 - @abs(ox)) * signNonZero(oy);
+            }
+
+            return .{
+                @intFromFloat(oct[0] * 32767.0),
+                @intFromFloat(oct[1] * 32767.0),
+            };
+        }
+
+        return null;
+    }
+
+    /// Like std.math.sign but returns 1.0 for zero (needed for octahedral fold).
+    fn signNonZero(x: f32) f32 {
+        return if (x >= 0.0) 1.0 else -1.0;
+    }
+
     fn quantizeUV(uv: [2]f32) [2]u16 {
         var result: [2]u16 = undefined;
         for (0..2) |i| {
@@ -83,20 +115,19 @@ pub const RawMesh = struct {
     submeshes: []RawSubmesh,
     name: ?[]const u8,
 
-    pub fn cook(self: *RawMesh, allocator: std.mem.Allocator) !void {
+    pub fn optimize(self: *RawMesh, allocator: std.mem.Allocator) !void {
         try self.deduplicateVertices(allocator);
-        try self.optimizeVertexCache();
+        try self.optimizeVertexCache(allocator);
     }
 
     // Forsyth Algorithm
-    fn optimizeVertexCache(self: *RawMesh) !void {
+    fn optimizeVertexCache(self: *RawMesh, allocator: std.mem.Allocator) !void {
         // TODO: implement
+        _ = allocator;
         _ = self;
     }
 
     fn deduplicateVertices(self: *RawMesh, allocator: std.mem.Allocator) !void {
-        log.debug("[Optimizing Mesh] Step 1: Deduplicating Vertices", .{});
-
         var deduped: std.ArrayList(RawVertex) = try .initCapacity(allocator, self.vertices.len);
         defer deduped.deinit(allocator);
 
@@ -117,7 +148,7 @@ pub const RawMesh = struct {
                     try remap.put(@intCast(i), existing_idx);
                     continue;
                 }
-                log.warn("[Mesh Optimize] Hash collision detected at vertex {d}", .{i});
+                log.warn("Hash collision detected at vertex {d}", .{i});
             }
 
             const new_idx: u32 = @intCast(deduped.items.len);
@@ -471,4 +502,100 @@ test "quantizeJointWeights still sum to 1 after quantization" {
     const result = v.quantizeJointWeights().?;
     const sum: f16 = result[0] + result[1] + result[2] + result[3];
     try std.testing.expectApproxEqAbs(@as(f16, 1.0), sum, 0.01);
+}
+
+/// Decode octahedral-encoded normal back to a unit vector (test helper).
+fn decodeOctahedral(encoded: [2]i16) [3]f32 {
+    var oct: [2]f32 = .{
+        @as(f32, @floatFromInt(encoded[0])) / 32767.0,
+        @as(f32, @floatFromInt(encoded[1])) / 32767.0,
+    };
+
+    const z = 1.0 - @abs(oct[0]) - @abs(oct[1]);
+
+    if (z < 0.0) {
+        const ox = oct[0];
+        const oy = oct[1];
+        oct[0] = (1.0 - @abs(oy)) * RawVertex.signNonZero(ox);
+        oct[1] = (1.0 - @abs(ox)) * RawVertex.signNonZero(oy);
+    }
+
+    // Normalize
+    const len = @sqrt(oct[0] * oct[0] + oct[1] * oct[1] + z * z);
+    return .{ oct[0] / len, oct[1] / len, z / len };
+}
+
+fn expectNormalApproxEq(expected: [3]f32, actual: [3]f32, tolerance: f32) !void {
+    for (0..3) |i| {
+        try std.testing.expectApproxEqAbs(expected[i], actual[i], tolerance);
+    }
+}
+
+test "octahedral encode/decode [0, 0, 1] (up)" {
+    var v = makeVertex(0, 0, 0);
+    v.normal = .{ 0, 0, 1 };
+    const encoded = v.encodeNormalOctahedral().?;
+    const decoded = decodeOctahedral(encoded);
+    try expectNormalApproxEq(.{ 0, 0, 1 }, decoded, 0.001);
+}
+
+test "octahedral encode/decode [1, 0, 0] (right)" {
+    var v = makeVertex(0, 0, 0);
+    v.normal = .{ 1, 0, 0 };
+    const encoded = v.encodeNormalOctahedral().?;
+    const decoded = decodeOctahedral(encoded);
+    try expectNormalApproxEq(.{ 1, 0, 0 }, decoded, 0.001);
+}
+
+test "octahedral encode/decode [0.577, 0.577, 0.577] (diagonal)" {
+    var v = makeVertex(0, 0, 0);
+    const s = 1.0 / @sqrt(3.0);
+    v.normal = .{ s, s, s };
+    const encoded = v.encodeNormalOctahedral().?;
+    const decoded = decodeOctahedral(encoded);
+    try expectNormalApproxEq(.{ s, s, s }, decoded, 0.001);
+}
+
+test "octahedral encode/decode [0, 0, -1] (down, exercises fold)" {
+    var v = makeVertex(0, 0, 0);
+    v.normal = .{ 0, 0, -1 };
+    const encoded = v.encodeNormalOctahedral().?;
+    const decoded = decodeOctahedral(encoded);
+    try expectNormalApproxEq(.{ 0, 0, -1 }, decoded, 0.001);
+}
+
+test "encodeNormalOctahedral returns null when normal is absent" {
+    const v = makeVertex(0, 0, 0);
+    try std.testing.expectEqual(@as(?[2]i16, null), v.encodeNormalOctahedral());
+}
+
+test "octahedral encode/decode 1000 random normals within 1 degree" {
+    // 1 degree in radians
+    const max_angle = 1.0 * std.math.pi / 180.0;
+
+    var prng = std.Random.DefaultPrng.init(42);
+    const rand = prng.random();
+
+    for (0..1000) |_| {
+        // Generate random unit normal via spherical coordinates
+        const theta = rand.float(f32) * 2.0 * std.math.pi;
+        const cos_phi = rand.float(f32) * 2.0 - 1.0;
+        const sin_phi = @sqrt(1.0 - cos_phi * cos_phi);
+
+        const normal: [3]f32 = .{
+            sin_phi * @cos(theta),
+            sin_phi * @sin(theta),
+            cos_phi,
+        };
+
+        var v = makeVertex(0, 0, 0);
+        v.normal = normal;
+        const encoded = v.encodeNormalOctahedral().?;
+        const decoded = decodeOctahedral(encoded);
+
+        // Angular error: acos(dot(normal, decoded))
+        const dot = normal[0] * decoded[0] + normal[1] * decoded[1] + normal[2] * decoded[2];
+        const angle = std.math.acos(std.math.clamp(dot, -1.0, 1.0));
+        try std.testing.expect(angle < max_angle);
+    }
 }
