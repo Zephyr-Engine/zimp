@@ -1,9 +1,11 @@
 const std = @import("std");
 
 const AssetScanner = @import("../asset_scanner.zig").AssetScanner;
+const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
 const log = @import("../logger.zig");
-const logger = log.logger;
+
 const logError = log.logError;
+const logger = log.logger;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -13,7 +15,6 @@ pub const CookError = error{
 
 pub const CookCommand = struct {
     source: std.Io.Dir,
-    source_name: []const u8,
     output: std.Io.Dir,
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -22,7 +23,6 @@ pub const CookCommand = struct {
         const cwd = std.Io.Dir.cwd();
         var command: CookCommand = .{
             .source = cwd,
-            .source_name = "",
             .output = cwd,
             .io = io,
             .allocator = allocator,
@@ -40,7 +40,6 @@ pub const CookCommand = struct {
                     logError("cook: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.SourceDirNotFound;
                 };
-                command.source_name = std.fs.path.basename(args[i + 1]);
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
                 command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
@@ -59,10 +58,19 @@ pub const CookCommand = struct {
     pub fn run(self: CookCommand) !void {
         logger.info("Running cook command", .{});
 
-        const source_scanner = AssetScanner.init(self.allocator, self.io, self.source, self.source_name);
+        const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
         defer source_scanner.deinit(&list);
+
+        // TODO: parallelize this with zob
+        for (list.items) |entry| {
+            if (entry.extension == .glb) {
+                var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
+                glb_cooker.cook();
+                glb_cooker.deinit();
+            }
+        }
     }
 
     pub fn deinit(self: CookCommand) void {

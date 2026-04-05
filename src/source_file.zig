@@ -25,9 +25,8 @@ pub const SourceFile = struct {
         modified_ns: i96,
     };
 
-    pub fn getFileInfo(self: *const SourceFile, io: std.Io) !FileInfo {
-        const cwd = std.Io.Dir.cwd();
-        const file = try cwd.openFile(io, self.path, .{});
+    pub fn getFileInfo(self: *const SourceFile, dir: std.Io.Dir, io: std.Io) !FileInfo {
+        const file = try dir.openFile(io, self.path, .{});
         defer file.close(io);
 
         const stat = try file.stat(io);
@@ -37,9 +36,8 @@ pub const SourceFile = struct {
         };
     }
 
-    pub fn hash(self: *const SourceFile, io: std.Io) !u64 {
-        const cwd = std.Io.Dir.cwd();
-        const file = try cwd.openFile(io, self.path, .{});
+    pub fn hash(self: *const SourceFile, dir: std.Io.Dir, io: std.Io) !u64 {
+        const file = try dir.openFile(io, self.path, .{});
         defer file.close(io);
 
         var buf: [64 * 1024]u8 = undefined;
@@ -59,6 +57,11 @@ pub const SourceFile = struct {
 
 const testing = std.testing;
 
+fn testDir() std.Io.Dir {
+    const cwd = std.Io.Dir.cwd();
+    return std.Io.Dir.openDir(cwd, testing.io, "examples/assets", .{ .iterate = true }) catch unreachable;
+}
+
 fn testFile(path: []const u8, extension: asset.Extension) SourceFile {
     return .{
         .path = path,
@@ -68,64 +71,67 @@ fn testFile(path: []const u8, extension: asset.Extension) SourceFile {
 }
 
 test "SourceFile.hash returns non-zero for existing file" {
-    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const result = try sf.hash(testing.io);
+    const sf = testFile("meshes/triangle.glb", .glb);
+    const result = try sf.hash(testDir(), testing.io);
     try testing.expect(result != 0);
 }
 
 test "SourceFile.hash is deterministic" {
-    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const h1 = try sf.hash(testing.io);
-    const h2 = try sf.hash(testing.io);
+    const sf = testFile("meshes/triangle.glb", .glb);
+    const dir = testDir();
+    const h1 = try sf.hash(dir, testing.io);
+    const h2 = try sf.hash(dir, testing.io);
     try testing.expectEqual(h1, h2);
 }
 
 test "SourceFile.hash differs for different files" {
-    const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
-    const h1 = try sf1.hash(testing.io);
-    const h2 = try sf2.hash(testing.io);
+    const sf1 = testFile("meshes/triangle.glb", .glb);
+    const sf2 = testFile("meshes/cube_textured.glb", .glb);
+    const dir = testDir();
+    const h1 = try sf1.hash(dir, testing.io);
+    const h2 = try sf2.hash(dir, testing.io);
     try testing.expect(h1 != h2);
 }
 
 test "SourceFile.hash returns error for nonexistent file" {
     const sf = testFile("nonexistent_file_abc123.glb", .glb);
-    try testing.expectError(error.FileNotFound, sf.hash(testing.io));
+    try testing.expectError(error.FileNotFound, sf.hash(testDir(), testing.io));
 }
 
 test "SourceFile.hash is independent of extension field" {
-    const sf_glb = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const sf_other = testFile("examples/assets/meshes/triangle.glb", .other);
-    const h1 = try sf_glb.hash(testing.io);
-    const h2 = try sf_other.hash(testing.io);
+    const sf_glb = testFile("meshes/triangle.glb", .glb);
+    const sf_other = testFile("meshes/triangle.glb", .other);
+    const dir = testDir();
+    const h1 = try sf_glb.hash(dir, testing.io);
+    const h2 = try sf_other.hash(dir, testing.io);
     try testing.expectEqual(h1, h2);
 }
 
 test "SourceFile.hashPath returns non-zero for non-empty path" {
-    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf = testFile("meshes/triangle.glb", .glb);
     try testing.expect(sf.hashPath() != 0);
 }
 
 test "SourceFile.hashPath is deterministic" {
-    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
+    const sf = testFile("meshes/triangle.glb", .glb);
     try testing.expectEqual(sf.hashPath(), sf.hashPath());
 }
 
 test "SourceFile.hashPath differs for different paths" {
-    const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
+    const sf1 = testFile("meshes/triangle.glb", .glb);
+    const sf2 = testFile("meshes/cube_textured.glb", .glb);
     try testing.expect(sf1.hashPath() != sf2.hashPath());
 }
 
 test "SourceFile.hashPath is independent of extension field" {
-    const sf_glb = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const sf_other = testFile("examples/assets/meshes/triangle.glb", .other);
+    const sf_glb = testFile("meshes/triangle.glb", .glb);
+    const sf_other = testFile("meshes/triangle.glb", .other);
     try testing.expectEqual(sf_glb.hashPath(), sf_other.hashPath());
 }
 
 test "SourceFile.hashPath treats backslashes and forward slashes as equal" {
-    const sf_forward = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const sf_backward = testFile("examples\\assets\\meshes\\triangle.glb", .glb);
+    const sf_forward = testFile("meshes/triangle.glb", .glb);
+    const sf_backward = testFile("meshes\\triangle.glb", .glb);
     try testing.expectEqual(sf_forward.hashPath(), sf_backward.hashPath());
 }
 
@@ -135,34 +141,36 @@ test "SourceFile.hashPath returns zero for empty path" {
 }
 
 test "SourceFile.getFileInfo returns non-zero size for existing file" {
-    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const info = try sf.getFileInfo(testing.io);
+    const sf = testFile("meshes/triangle.glb", .glb);
+    const info = try sf.getFileInfo(testDir(), testing.io);
     try testing.expect(info.size != 0);
 }
 
 test "SourceFile.getFileInfo returns non-zero modified_ns for existing file" {
-    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const info = try sf.getFileInfo(testing.io);
+    const sf = testFile("meshes/triangle.glb", .glb);
+    const info = try sf.getFileInfo(testDir(), testing.io);
     try testing.expect(info.modified_ns != 0);
 }
 
 test "SourceFile.getFileInfo is deterministic" {
-    const sf = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const in1 = try sf.getFileInfo(testing.io);
-    const in2 = try sf.getFileInfo(testing.io);
+    const sf = testFile("meshes/triangle.glb", .glb);
+    const dir = testDir();
+    const in1 = try sf.getFileInfo(dir, testing.io);
+    const in2 = try sf.getFileInfo(dir, testing.io);
     try testing.expectEqual(in1.size, in2.size);
     try testing.expectEqual(in1.modified_ns, in2.modified_ns);
 }
 
 test "SourceFile.getFileInfo differs for different files" {
-    const sf1 = testFile("examples/assets/meshes/triangle.glb", .glb);
-    const sf2 = testFile("examples/assets/meshes/cube_textured.glb", .glb);
-    const in1 = try sf1.getFileInfo(testing.io);
-    const in2 = try sf2.getFileInfo(testing.io);
+    const sf1 = testFile("meshes/triangle.glb", .glb);
+    const sf2 = testFile("meshes/cube_textured.glb", .glb);
+    const dir = testDir();
+    const in1 = try sf1.getFileInfo(dir, testing.io);
+    const in2 = try sf2.getFileInfo(dir, testing.io);
     try testing.expect(in1.size != in2.size);
 }
 
 test "SourceFile.getFileInfo returns error for nonexistent file" {
     const sf = testFile("nonexistent_file_abc123.glb", .glb);
-    try testing.expectError(error.FileNotFound, sf.getFileInfo(testing.io));
+    try testing.expectError(error.FileNotFound, sf.getFileInfo(testDir(), testing.io));
 }
