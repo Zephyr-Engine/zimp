@@ -21,7 +21,7 @@ pub const Command = union(enum) {
     pub fn parse(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) (CommandError || CookError || PackError || InspectError)!Command {
         if (std.mem.eql(u8, args[1], "cook")) {
             const cmd = CookCommand.parseFromArgs(allocator, io, args) catch |err| {
-                logger.err("command: failed to parse 'cook' subcommand: {s}", .{@errorName(err)});
+                logger.warn("command: failed to parse 'cook' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
             return .{ .Cook = cmd };
@@ -29,7 +29,7 @@ pub const Command = union(enum) {
 
         if (std.mem.eql(u8, args[1], "pack")) {
             const cmd = PackCommand.parseFromArgs(io, args) catch |err| {
-                logger.err("command: failed to parse 'pack' subcommand: {s}", .{@errorName(err)});
+                logger.warn("command: failed to parse 'pack' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
             return .{ .Pack = cmd };
@@ -37,13 +37,13 @@ pub const Command = union(enum) {
 
         if (std.mem.eql(u8, args[1], "inspect")) {
             const cmd = InspectCommand.parseFromArgs(io, args) catch |err| {
-                logger.err("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
+                logger.warn("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
             return .{ .Inspect = cmd };
         }
 
-        logger.err("command: unknown command '{s}'. Available commands are: 'cook', 'pack', 'inspect'", .{args[1]});
+        logger.warn("command: unknown command '{s}'. Available commands are: 'cook', 'pack', 'inspect'", .{args[1]});
         return CommandError.UnknownCommand;
     }
 

@@ -26,7 +26,7 @@ pub const CookCommand = struct {
         };
 
         if (args.len < 6) {
-            logger.err("cook: not enough arguments (got {d}, need at least 6). Usage: zimp cook --source <source_dir> --output <output_dir>", .{args.len});
+            logger.warn("cook: not enough arguments (got {d}, need at least 6). Usage: zimp cook --source <source_dir> --output <output_dir>", .{args.len});
             return CookError.NotEnoughArguments;
         }
 
@@ -34,13 +34,13 @@ pub const CookCommand = struct {
         while (i < args.len) {
             if (std.mem.eql(u8, "--source", args[i])) {
                 command.source = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    logger.err("cook: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
+                    logger.warn("cook: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.SourceDirNotFound;
                 };
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
                 command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    logger.err("cook: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
+                    logger.warn("cook: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.OutputDirNotFound;
                 };
                 i += 1;

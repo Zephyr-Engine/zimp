@@ -15,12 +15,12 @@ pub const InspectCommand = struct {
         const cwd = std.Io.Dir.cwd();
 
         if (args.len < 3) {
-            logger.err("inspect: not enough arguments (got {d}, need at least 3). Usage: zimp inspect <file_path>", .{args.len});
+            logger.warn("inspect: not enough arguments (got {d}, need at least 3). Usage: zimp inspect <file_path>", .{args.len});
             return InspectError.NotEnoughArguments;
         }
 
         const file = cwd.openFile(io, args[2], .{}) catch |err| {
-            logger.err("inspect: failed to open file '{s}': {s}. Ensure the file exists and has the correct permissions", .{ args[2], @errorName(err) });
+            logger.warn("inspect: failed to open file '{s}': {s}. Ensure the file exists and has the correct permissions", .{ args[2], @errorName(err) });
             return InspectError.FileNotFound;
         };
 
