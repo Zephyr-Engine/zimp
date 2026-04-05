@@ -18,6 +18,8 @@ pub const GLBCooker = struct {
 
         for (0..gltf.value.meshes.len) |i| {
             var gltf_mesh = try GltfMesh.buildMesh(allocator, &gltf.value, i, glb_file.bin);
+            try gltf_mesh.raw.deduplicateVertices(allocator);
+
             defer gltf_mesh.deinit();
         }
 
