@@ -46,7 +46,7 @@ pub const AssetScanner = struct {
                     .path = path,
                     .assetType = ext.assetType(),
                 });
-                logger.info("Found {s} file: {s}", .{ ext.string(), path });
+                logger.debug("Found {s} file: {s}", .{ ext.string(), path });
             } else if (entry.kind == .directory) {
                 const subdir = try std.Io.Dir.openDir(dir, self.io, entry.name, .{ .iterate = true });
                 const subprefix = if (prefix.len > 0)
@@ -71,7 +71,10 @@ pub const AssetScanner = struct {
         logger.info("Found {d} assets", .{files.items.len});
 
         for (std.enums.values(asset.AssetType)) |asset_type| {
-            if (asset_type == .unknown) continue;
+            if (asset_type == .unknown) {
+                continue;
+            }
+
             const count = counts.get(asset_type);
             if (count > 0) {
                 logger.info("  {s}: {d}", .{ @tagName(asset_type), count });

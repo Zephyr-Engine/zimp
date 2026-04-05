@@ -5,6 +5,10 @@ const logError = log.logError;
 
 const Command = @import("commands/command.zig").Command;
 
+pub const std_options: std.Options = .{
+    .log_level = .debug,
+};
+
 pub fn main(init: std.process.Init) !void {
     const arena: std.mem.Allocator = init.arena.allocator();
     const args = try init.minimal.args.toSlice(arena);
