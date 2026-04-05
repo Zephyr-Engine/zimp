@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const SourceFile = @import("source_file.zig").SourceFile;
-const logger = @import("logger.zig").logger;
+const log = @import("logger.zig");
 const asset = @import("asset.zig");
 
 pub const SourceFileList = std.ArrayList(SourceFile);
@@ -46,7 +46,7 @@ pub const AssetScanner = struct {
                     .path = path,
                     .assetType = ext.assetType(),
                 });
-                logger.debug("Found {s} file: {s}", .{ ext.string(), path });
+                log.debug("Found {s} file: {s}", .{ ext.string(), path });
             } else if (entry.kind == .directory) {
                 const subdir = try std.Io.Dir.openDir(dir, self.io, entry.name, .{ .iterate = true });
                 const subprefix = if (prefix.len > 0)
@@ -65,10 +65,10 @@ pub const AssetScanner = struct {
             counts.getPtr(file.assetType).* += 1;
         }
 
-        logger.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
-        logger.info("\x1b[32m|                 SUMMARY                   |\x1b[0m", .{});
-        logger.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
-        logger.info("Found {d} assets", .{files.items.len});
+        log.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
+        log.info("\x1b[32m|                 SUMMARY                   |\x1b[0m", .{});
+        log.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
+        log.info("Found {d} assets", .{files.items.len});
 
         for (std.enums.values(asset.AssetType)) |asset_type| {
             if (asset_type == .unknown) {
@@ -77,7 +77,7 @@ pub const AssetScanner = struct {
 
             const count = counts.get(asset_type);
             if (count > 0) {
-                logger.info("  {s}: {d}", .{ @tagName(asset_type), count });
+                log.info("  {s}: {d}", .{ @tagName(asset_type), count });
             }
         }
     }

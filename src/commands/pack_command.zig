@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const logger = @import("../logger.zig").logger;
+const log = @import("../logger.zig");
 
 pub const PackError = error{
     NotEnoughArguments,
@@ -22,7 +22,7 @@ pub const PackCommand = struct {
         };
 
         if (args.len < 6) {
-            logger.warn("pack: not enough arguments (got {d}, need at least 6). Usage: zimp pack --source <source_dir> --output <output_dir>", .{args.len});
+            log.err("pack: not enough arguments (got {d}, need at least 6). Usage: zimp pack --source <source_dir> --output <output_dir>", .{args.len});
             return PackError.NotEnoughArguments;
         }
 
@@ -30,13 +30,13 @@ pub const PackCommand = struct {
         while (i < args.len) {
             if (std.mem.eql(u8, "--source", args[i])) {
                 command.source = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    logger.warn("pack: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
+                    log.err("pack: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return PackError.SourceDirNotFound;
                 };
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
                 command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    logger.warn("pack: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
+                    log.err("pack: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return PackError.OutputDirNotFound;
                 };
                 i += 1;
@@ -49,7 +49,7 @@ pub const PackCommand = struct {
     }
 
     pub fn run(_: PackCommand) !void {
-        logger.info("Running pack command", .{});
+        log.info("Running pack command", .{});
     }
 
     pub fn deinit(self: PackCommand) void {

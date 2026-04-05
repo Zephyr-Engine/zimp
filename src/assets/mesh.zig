@@ -1,5 +1,5 @@
 const std = @import("std");
-const logger = @import("../logger.zig").logger;
+const log = @import("../logger.zig");
 const Map = std.AutoHashMap(u64, u32);
 const ReMap = std.AutoHashMap(u32, u32);
 
@@ -60,7 +60,7 @@ pub const RawVertex = struct {
         var result: [2]u16 = undefined;
         for (0..2) |i| {
             if (uv[i] < 0.0 or uv[i] > 1.0) {
-                logger.warn("Found UV outside 0-1 range: {d}", .{uv[i]});
+                log.warn("Found UV outside 0-1 range: {d}", .{uv[i]});
             }
 
             const clamped = std.math.clamp(uv[i], 0.0, 1.0);
@@ -95,7 +95,7 @@ pub const RawMesh = struct {
     }
 
     fn deduplicateVertices(self: *RawMesh, allocator: std.mem.Allocator) !void {
-        logger.debug("[Optimizing Mesh] Step 1: Deduplicating Vertices", .{});
+        log.debug("[Optimizing Mesh] Step 1: Deduplicating Vertices", .{});
 
         var deduped: std.ArrayList(RawVertex) = try .initCapacity(allocator, self.vertices.len);
         defer deduped.deinit(allocator);
@@ -117,7 +117,7 @@ pub const RawMesh = struct {
                     try remap.put(@intCast(i), existing_idx);
                     continue;
                 }
-                logger.warn("[Mesh Optimize] Hash collision detected at vertex {d}", .{i});
+                log.warn("[Mesh Optimize] Hash collision detected at vertex {d}", .{i});
             }
 
             const new_idx: u32 = @intCast(deduped.items.len);
@@ -145,7 +145,7 @@ pub const RawMesh = struct {
         allocator.free(self.vertices);
         self.vertices = try allocator.dupe(RawVertex, deduped.items);
 
-        logger.debug("[Optimizing Mesh] Deduplicated {d} -> {d} vertices", .{ original_len, self.vertices.len });
+        log.debug("[Optimizing Mesh] Deduplicated {d} -> {d} vertices", .{ original_len, self.vertices.len });
     }
 };
 
