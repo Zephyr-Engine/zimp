@@ -5,16 +5,16 @@ pub const MAGIC = "ZMESH";
 pub const ZMESH_VERSION: u32 = 1;
 
 pub const HEADER_SIZE: u32 = MAGIC.len // magic
-    + @sizeOf(u32) // version
-    + @sizeOf(u32) // vertex_count
-    + @sizeOf(u32) // index_count
-    + @sizeOf(u8) // index_format
-    + @sizeOf(u8) // format_flags
-    + @sizeOf([3]f32) * 2 // aabb min + max
-    + @sizeOf(u16) // submesh_count
-    + @sizeOf(u32) // submesh_table_offset
-    + @sizeOf(u16) // lod_count
-    + @sizeOf(u32); // lod_table_offset
++ @sizeOf(u32) // version
++ @sizeOf(u32) // vertex_count
++ @sizeOf(u32) // index_count
++ @sizeOf(u8) // index_format
++ @sizeOf(u8) // format_flags
++ @sizeOf([3]f32) * 2 // aabb min + max
++ @sizeOf(u16) // submesh_count
++ @sizeOf(u32) // submesh_table_offset
++ @sizeOf(u16) // lod_count
++ @sizeOf(u32); // lod_table_offset
 
 pub const ZMeshHeader = struct {
     magic: [5]u8 = MAGIC.*,
@@ -199,13 +199,9 @@ fn readF32(buf: []const u8, offset: usize) f32 {
     return @bitCast(readU32(buf, offset));
 }
 
-// ── HEADER_SIZE ──
-
 test "HEADER_SIZE equals 55" {
     try testing.expectEqual(@as(u32, 55), HEADER_SIZE);
 }
-
-// ── ZMeshHeader.init ──
 
 test "ZMeshHeader.init sets magic and version" {
     const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
@@ -274,8 +270,6 @@ test "ZMeshHeader.init sets submesh count" {
     try testing.expectEqual(@as(u16, 2), header.submesh_count);
 }
 
-// ── submesh_table_offset ──
-
 test "submesh_table_offset with positions only and u16 indices" {
     // 3 verts × 12 bytes = 36, 3 u16 indices = 6 bytes, padding = 2
     const verts = [_]mesh.CookedVertex{ makeVertex(0, 0, 0), makeVertex(1, 0, 0), makeVertex(0, 1, 0) };
@@ -302,8 +296,6 @@ test "submesh_table_offset accounts for normals and uvs" {
 
     try testing.expectEqual(HEADER_SIZE + 20 + 4, header.submesh_table_offset);
 }
-
-// ── ZMeshHeader.write ──
 
 test "ZMeshHeader.write writes magic at offset 0" {
     const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};

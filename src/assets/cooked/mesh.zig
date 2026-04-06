@@ -94,10 +94,8 @@ pub const CookedMesh = struct {
     }
 
     pub fn cook(allocator: std.mem.Allocator, mesh: *RawMesh) !CookedMesh {
-        // Run optimizations on raw mesh
         try mesh.optimize(allocator);
 
-        // Determine format flags from first vertex
         const flags: FormatFlags = if (mesh.vertices.len > 0) .{
             .has_normals = mesh.vertices[0].normal != null,
             .has_tangents = mesh.vertices[0].tangent != null,
@@ -107,7 +105,6 @@ pub const CookedMesh = struct {
             .has_weights = mesh.vertices[0].joint_weights != null,
         } else .{};
 
-        // Cook vertices and compute AABB
         const cooked_verts = try allocator.alloc(CookedVertex, mesh.vertices.len);
         errdefer allocator.free(cooked_verts);
 
