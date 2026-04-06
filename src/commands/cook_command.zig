@@ -145,9 +145,15 @@ test "CookCommand.parseFromArgs accepts flags in any order" {
 }
 
 test "CookCommand.run executes without error" {
-    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
-    const cmd = try CookCommand.parseFromArgs(testing.allocator, testing.io, args);
-    defer cmd.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cmd: CookCommand = .{
+        .source = std.Io.Dir.openDir(std.Io.Dir.cwd(), testing.io, "examples/assets", .{ .iterate = true }) catch unreachable,
+        .output = tmp.dir,
+        .io = testing.io,
+        .allocator = testing.allocator,
+    };
     try cmd.run();
 }
 

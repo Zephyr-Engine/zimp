@@ -150,7 +150,7 @@ test "Command.parse propagates InspectError.FileNotFound" {
 }
 
 test "Command.run dispatches to correct subcommand" {
-    const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
+    const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", "examples/output", "--output", "examples/output" };
     const cook = try Command.parse(testing.allocator, testing.io, cook_args);
     defer cook.deinit();
     try cook.run();
