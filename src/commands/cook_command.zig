@@ -76,6 +76,8 @@ pub const CookCommand = struct {
                 defer glb_cooker.deinit();
                 try glb_cooker.cook(self.allocator, &file_writer.interface);
             }
+
+            try file_writer.flush();
         }
     }
 
