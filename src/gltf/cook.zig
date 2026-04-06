@@ -12,6 +12,8 @@ pub const GLBCooker = struct {
     file_bytes: []const u8,
     gltf: Gltf,
     allocator: std.mem.Allocator,
+    source_path: []const u8,
+    io: std.Io,
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file_path: []const u8) !GLBCooker {
         const file_bytes = try dir.readFileAlloc(io, file_path, allocator, .unlimited);
@@ -24,6 +26,8 @@ pub const GLBCooker = struct {
             .file_bytes = file_bytes,
             .gltf = gltf,
             .allocator = allocator,
+            .source_path = file_path,
+            .io = io,
         };
     }
 
@@ -35,7 +39,7 @@ pub const GLBCooker = struct {
             defer cooked_mesh.deinit(allocator);
             defer gltf_mesh.deinit();
 
-            ZMesh.write(self.allocator, output_dir, "test.zmesh", cooked_mesh) catch |err| {
+            ZMesh.write(allocator, self.io, output_dir, self.source_path, cooked_mesh) catch |err| {
                 std.debug.print("Failed to write cooked mesh: {s}\n", .{@errorName(err)});
                 return err;
             };
