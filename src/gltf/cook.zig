@@ -1,5 +1,6 @@
 const std = @import("std");
 
+const ZMesh = @import("../formats/zmesh.zig").ZMesh;
 const GLBFile = @import("glb_reader.zig").GLBFile;
 const Gltf = @import("gltf_json_parser.zig").Gltf;
 const GltfMesh = @import("mesh.zig").GltfMesh;
@@ -26,13 +27,18 @@ pub const GLBCooker = struct {
         };
     }
 
-    pub fn cook(self: *const GLBCooker, allocator: std.mem.Allocator) !void {
+    pub fn cook(self: *const GLBCooker, allocator: std.mem.Allocator, output_dir: std.Io.Dir) !void {
         for (0..self.gltf.value.meshes.len) |i| {
             var gltf_mesh = try GltfMesh.buildMesh(allocator, &self.gltf.value, i, self.file.bin);
             var cooked_mesh = try gltf_mesh.cook(allocator);
 
             defer cooked_mesh.deinit(allocator);
             defer gltf_mesh.deinit();
+
+            ZMesh.write(self.allocator, output_dir, "test.zmesh", cooked_mesh) catch |err| {
+                std.debug.print("Failed to write cooked mesh: {s}\n", .{@errorName(err)});
+                return err;
+            };
         }
     }
 

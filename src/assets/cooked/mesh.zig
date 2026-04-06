@@ -57,6 +57,12 @@ pub const IndexBuffer = struct {
         return .u32;
     }
 
+    pub fn len(self: *const IndexBuffer) usize {
+        if (self.u16) |idx| return idx.len;
+        if (self.u32) |idx| return idx.len;
+        return 0;
+    }
+
     pub fn compute(allocator: std.mem.Allocator, raw_indices: []const u32, vertex_count: usize) !IndexBuffer {
         if (vertex_count <= std.math.maxInt(u16)) {
             const idx = try allocator.alloc(u16, raw_indices.len);

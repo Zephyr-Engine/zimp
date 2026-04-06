@@ -64,7 +64,7 @@ pub const CookCommand = struct {
         for (list.items) |entry| {
             if (entry.extension == .glb) {
                 var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
-                try glb_cooker.cook(self.allocator);
+                try glb_cooker.cook(self.allocator, self.output);
                 glb_cooker.deinit();
             }
         }
