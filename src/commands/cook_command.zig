@@ -1,9 +1,8 @@
 const std = @import("std");
 
 const AssetScanner = @import("../asset_scanner.zig").AssetScanner;
+const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
 const log = @import("../logger.zig");
-const logger = log.logger;
-const logError = log.logError;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -13,7 +12,6 @@ pub const CookError = error{
 
 pub const CookCommand = struct {
     source: std.Io.Dir,
-    source_name: []const u8,
     output: std.Io.Dir,
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -22,14 +20,13 @@ pub const CookCommand = struct {
         const cwd = std.Io.Dir.cwd();
         var command: CookCommand = .{
             .source = cwd,
-            .source_name = "",
             .output = cwd,
             .io = io,
             .allocator = allocator,
         };
 
         if (args.len < 6) {
-            logError("cook: not enough arguments (got {d}, need at least 6). Usage: zimp cook --source <source_dir> --output <output_dir>", .{args.len});
+            log.err("cook: not enough arguments (got {d}, need at least 6). Usage: zimp cook --source <source_dir> --output <output_dir>", .{args.len});
             return CookError.NotEnoughArguments;
         }
 
@@ -37,14 +34,13 @@ pub const CookCommand = struct {
         while (i < args.len) {
             if (std.mem.eql(u8, "--source", args[i])) {
                 command.source = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    logError("cook: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
+                    log.err("cook: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.SourceDirNotFound;
                 };
-                command.source_name = std.fs.path.basename(args[i + 1]);
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
                 command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    logError("cook: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
+                    log.err("cook: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.OutputDirNotFound;
                 };
                 i += 1;
@@ -57,12 +53,39 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: CookCommand) !void {
-        logger.info("Running cook command", .{});
+        log.info("Running cook command", .{});
 
-        const source_scanner = AssetScanner.init(self.allocator, self.io, self.source, self.source_name);
+        const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
         defer source_scanner.deinit(&list);
+
+        // TODO: parallelize this with zob
+        for (list.items) |entry| {
+            const start = std.Io.Clock.Timestamp.now(self.io, .awake);
+
+            const file = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
+                log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
+                return err;
+            };
+            defer file.close(self.io);
+
+            var buf: [8192]u8 = undefined;
+            var file_writer = file.writer(self.io, &buf);
+
+            if (entry.extension == .glb) {
+                var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
+                defer glb_cooker.deinit();
+                try glb_cooker.cook(self.allocator, &file_writer.interface);
+            }
+
+            try file_writer.flush();
+
+            const end = std.Io.Clock.Timestamp.now(self.io, .awake);
+            const elapsed_ns = start.durationTo(end).raw.nanoseconds;
+            const elapsed_ms: i64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_ms));
+            log.info("Cooked '{s}' in {d}ms", .{ entry.path, elapsed_ms });
+        }
     }
 
     pub fn deinit(self: CookCommand) void {
@@ -122,9 +145,15 @@ test "CookCommand.parseFromArgs accepts flags in any order" {
 }
 
 test "CookCommand.run executes without error" {
-    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
-    const cmd = try CookCommand.parseFromArgs(testing.allocator, testing.io, args);
-    defer cmd.deinit();
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const cmd: CookCommand = .{
+        .source = std.Io.Dir.openDir(std.Io.Dir.cwd(), testing.io, "examples/assets", .{ .iterate = true }) catch unreachable,
+        .output = tmp.dir,
+        .io = testing.io,
+        .allocator = testing.allocator,
+    };
     try cmd.run();
 }
 

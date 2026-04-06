@@ -3,7 +3,7 @@ const std = @import("std");
 const CookError = @import("cook_command.zig").CookError;
 const PackError = @import("pack_command.zig").PackError;
 const InspectError = @import("inspect_command.zig").InspectError;
-const logError = @import("../logger.zig").logError;
+const log = @import("../logger.zig");
 
 const CookCommand = @import("cook_command.zig").CookCommand;
 const PackCommand = @import("pack_command.zig").PackCommand;
@@ -21,7 +21,7 @@ pub const Command = union(enum) {
     pub fn parse(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) (CommandError || CookError || PackError || InspectError)!Command {
         if (std.mem.eql(u8, args[1], "cook")) {
             const cmd = CookCommand.parseFromArgs(allocator, io, args) catch |err| {
-                logError("command: failed to parse 'cook' subcommand: {s}", .{@errorName(err)});
+                log.err("command: failed to parse 'cook' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
             return .{ .Cook = cmd };
@@ -29,7 +29,7 @@ pub const Command = union(enum) {
 
         if (std.mem.eql(u8, args[1], "pack")) {
             const cmd = PackCommand.parseFromArgs(io, args) catch |err| {
-                logError("command: failed to parse 'pack' subcommand: {s}", .{@errorName(err)});
+                log.err("command: failed to parse 'pack' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
             return .{ .Pack = cmd };
@@ -37,13 +37,13 @@ pub const Command = union(enum) {
 
         if (std.mem.eql(u8, args[1], "inspect")) {
             const cmd = InspectCommand.parseFromArgs(io, args) catch |err| {
-                logError("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
+                log.err("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
             return .{ .Inspect = cmd };
         }
 
-        logError("command: unknown command '{s}'. Available commands are: 'cook', 'pack', 'inspect'", .{args[1]});
+        log.err("command: unknown command '{s}'. Available commands are: 'cook', 'pack', 'inspect'", .{args[1]});
         return CommandError.UnknownCommand;
     }
 
@@ -150,7 +150,7 @@ test "Command.parse propagates InspectError.FileNotFound" {
 }
 
 test "Command.run dispatches to correct subcommand" {
-    const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", "." };
+    const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", "examples/output", "--output", "examples/output" };
     const cook = try Command.parse(testing.allocator, testing.io, cook_args);
     defer cook.deinit();
     try cook.run();

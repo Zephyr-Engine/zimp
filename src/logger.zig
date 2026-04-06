@@ -1,10 +1,22 @@
 const std = @import("std");
 const builtin = @import("builtin");
 
-pub const logger = std.log.scoped(.zimp);
+const logger = std.log.scoped(.zimp);
 
-pub fn logError(comptime fmt: []const u8, args: anytype) void {
-    if (comptime !builtin.is_test) {
-        logger.err(fmt, args);
-    }
+pub fn err(comptime format: []const u8, args: anytype) void {
+    if (comptime builtin.is_test) return;
+    logger.err(format, args);
+}
+
+pub fn warn(comptime format: []const u8, args: anytype) void {
+    if (comptime builtin.is_test) return;
+    logger.warn(format, args);
+}
+
+pub fn info(comptime format: []const u8, args: anytype) void {
+    logger.info(format, args);
+}
+
+pub fn debug(comptime format: []const u8, args: anytype) void {
+    logger.debug(format, args);
 }
