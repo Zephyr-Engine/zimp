@@ -1,5 +1,5 @@
 const std = @import("std");
-const log = @import("../logger.zig");
+const log = @import("../../logger.zig");
 const Map = std.AutoHashMap(u64, u32);
 const ReMap = std.AutoHashMap(u32, u32);
 

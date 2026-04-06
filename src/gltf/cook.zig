@@ -3,8 +3,8 @@ const std = @import("std");
 const GLBFile = @import("glb_reader.zig").GLBFile;
 const Gltf = @import("gltf_json_parser.zig").Gltf;
 const GltfMesh = @import("mesh.zig").GltfMesh;
-const CookedMesh = @import("../assets/cooked_mesh.zig").CookedMesh;
-const FormatFlags = @import("../assets/cooked_mesh.zig").FormatFlags;
+const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
+const FormatFlags = @import("../assets/cooked/mesh.zig").FormatFlags;
 
 pub const GLBCooker = struct {
     file: *GLBFile,
