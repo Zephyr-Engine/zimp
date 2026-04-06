@@ -3,6 +3,8 @@ const std = @import("std");
 const GLBFile = @import("glb_reader.zig").GLBFile;
 const Gltf = @import("gltf_json_parser.zig").Gltf;
 const GltfMesh = @import("mesh.zig").GltfMesh;
+const CookedMesh = @import("../assets/cooked_mesh.zig").CookedMesh;
+const FormatFlags = @import("../assets/cooked_mesh.zig").FormatFlags;
 
 pub const GLBCooker = struct {
     file: *GLBFile,
@@ -18,8 +20,9 @@ pub const GLBCooker = struct {
 
         for (0..gltf.value.meshes.len) |i| {
             var gltf_mesh = try GltfMesh.buildMesh(allocator, &gltf.value, i, glb_file.bin);
-            try gltf_mesh.raw.optimize(allocator);
+            var cooked_mesh = try gltf_mesh.cook(allocator);
 
+            defer cooked_mesh.deinit(allocator);
             defer gltf_mesh.deinit();
         }
 

@@ -1,6 +1,7 @@
 const std = @import("std");
 const mesh = @import("../assets/raw_mesh.zig");
 const gltf_parser = @import("gltf_json_parser.zig");
+const CookedMesh = @import("../assets/cooked_mesh.zig").CookedMesh;
 const GltfJson = gltf_parser.GltfJson;
 const GltfBufferView = gltf_parser.GltfBufferView;
 const GltfAccessor = gltf_parser.GltfAccessor;
@@ -17,6 +18,10 @@ pub const BuildMeshError = error{
 pub const GltfMesh = struct {
     allocator: std.mem.Allocator,
     raw: mesh.RawMesh,
+
+    pub fn cook(self: *GltfMesh, allocator: std.mem.Allocator) !CookedMesh {
+        return CookedMesh.cook(allocator, &self.raw);
+    }
 
     pub fn buildMesh(allocator: std.mem.Allocator, gltf: *const GltfJson, mesh_index: usize, bin: []const u8) BuildMeshError!GltfMesh {
         const json_mesh = gltf.meshes[mesh_index];
