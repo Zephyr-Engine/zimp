@@ -2,3 +2,4 @@ zig-out/
 zig-pkg/
 .zig-cache/
 *.zmesh
+examples/output/*.zmesh

@@ -62,6 +62,8 @@ pub const CookCommand = struct {
 
         // TODO: parallelize this with zob
         for (list.items) |entry| {
+            const start = std.Io.Clock.Timestamp.now(self.io, .awake);
+
             const file = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
                 log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
                 return err;
@@ -78,6 +80,11 @@ pub const CookCommand = struct {
             }
 
             try file_writer.flush();
+
+            const end = std.Io.Clock.Timestamp.now(self.io, .awake);
+            const elapsed_ns = start.durationTo(end).raw.nanoseconds;
+            const elapsed_ms: i64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_ms));
+            log.info("Cooked '{s}' in {d}ms", .{ entry.path, elapsed_ms });
         }
     }
 
