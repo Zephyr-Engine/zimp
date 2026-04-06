@@ -1,5 +1,4 @@
 const std = @import("std");
-const logger = @import("../logger.zig");
 const mesh = @import("../assets/cooked/mesh.zig");
 
 pub const EXTENSION = ".zmesh";
@@ -35,20 +34,11 @@ pub const ZMeshHeader = struct {
 };
 
 pub const ZMesh = struct {
-    pub fn write(allocator: std.mem.Allocator, io: std.Io, output_dir: std.Io.Dir, source_path: []const u8, cooked_mesh: mesh.CookedMesh) !void {
-        const name = cooked_mesh.name orelse std.fs.path.stem(source_path);
-        const filename = try std.fmt.allocPrint(allocator, "{s}" ++ EXTENSION, .{name});
-        defer allocator.free(filename);
-
-        const file = output_dir.createFile(io, filename, .{}) catch |err| {
-            logger.err("Failed to create file '{s}': {s}", .{ filename, @errorName(err) });
-            return err;
-        };
-        defer file.close(io);
-
+    pub fn write(writer: *std.Io.Writer, cooked_mesh: mesh.CookedMesh) !void {
         const header = ZMeshHeader.init(cooked_mesh);
         _ = header;
+        _ = writer;
 
-        // TODO: write header and mesh data using file.writer(io, &buf)
+        // TODO: serialize header and mesh data to writer
     }
 };

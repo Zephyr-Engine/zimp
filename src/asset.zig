@@ -3,6 +3,13 @@ const std = @import("std");
 pub const AssetType = enum {
     mesh,
     unknown,
+
+    pub fn cookedExtension(self: AssetType) []const u8 {
+        return switch (self) {
+            .mesh => "zmesh",
+            .unknown => "",
+        };
+    }
 };
 
 const asset_map = std.EnumArray(Extension, AssetType).init(.{

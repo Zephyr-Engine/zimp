@@ -62,10 +62,19 @@ pub const CookCommand = struct {
 
         // TODO: parallelize this with zob
         for (list.items) |entry| {
+            const file = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
+                log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
+                return err;
+            };
+            defer file.close(self.io);
+
+            var buf: [8192]u8 = undefined;
+            var file_writer = file.writer(self.io, &buf);
+
             if (entry.extension == .glb) {
                 var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
-                try glb_cooker.cook(self.allocator, self.output);
-                glb_cooker.deinit();
+                defer glb_cooker.deinit();
+                try glb_cooker.cook(self.allocator, &file_writer.interface);
             }
         }
     }
