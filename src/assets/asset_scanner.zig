@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const SourceFile = @import("source_file.zig").SourceFile;
-const log = @import("logger.zig");
+const log = @import("../logger.zig");
 const asset = @import("asset.zig");
 
 pub const SourceFileList = std.ArrayList(SourceFile);

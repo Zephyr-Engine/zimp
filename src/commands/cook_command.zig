@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const AssetScanner = @import("../asset_scanner.zig").AssetScanner;
+const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
 const log = @import("../logger.zig");
 
