@@ -51,7 +51,9 @@ pub const IndexBuffer = struct {
     u32: ?[]u32,
 
     pub fn format(self: *const IndexBuffer) IndexFormat {
-        if (self.u16 != null) return .u16;
+        if (self.u16 != null) {
+            return .u16;
+        }
         return .u32;
     }
 
@@ -62,9 +64,8 @@ pub const IndexBuffer = struct {
                 dst.* = @intCast(src);
             }
             return .{ .u16 = idx, .u32 = null };
-        } else {
-            return .{ .u16 = null, .u32 = try allocator.dupe(u32, raw_indices) };
         }
+        return .{ .u16 = null, .u32 = try allocator.dupe(u32, raw_indices) };
     }
 
     pub fn deinit(self: *IndexBuffer, allocator: std.mem.Allocator) void {
@@ -152,8 +153,6 @@ fn makeRawMesh(allocator: std.mem.Allocator, vertices: []const RawVertex, indice
     };
 }
 
-// ── IndexBuffer tests ──
-
 test "IndexBuffer uses u16 for small vertex counts" {
     const allocator = std.testing.allocator;
     const raw_indices = [_]u32{ 0, 1, 2 };
@@ -201,8 +200,6 @@ test "IndexBuffer uses u32 at u16 max + 1 vertex count" {
     try std.testing.expectEqual(IndexFormat.u32, buf.format());
 }
 
-// ── FormatFlags tests ──
-
 test "FormatFlags defaults to all false" {
     const flags = FormatFlags{};
     try std.testing.expect(!flags.has_normals);
@@ -223,8 +220,6 @@ test "FormatFlags roundtrips through u8" {
     const back: FormatFlags = @bitCast(as_int);
     try std.testing.expectEqual(flags, back);
 }
-
-// ── CookedVertex tests ──
 
 test "CookedVertex.cook preserves position" {
     const raw = makeRawVertex(1.5, -2.0, 3.0);
@@ -260,8 +255,6 @@ test "CookedVertex.cook quantizes all present fields" {
     try std.testing.expectEqual(raw.joint_indices, cooked.joint_indices);
     try std.testing.expect(cooked.joint_weights != null);
 }
-
-// ── CookedMesh.cook tests ──
 
 test "CookedMesh.cook produces correct vertex count" {
     const allocator = std.testing.allocator;
