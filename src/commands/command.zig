@@ -36,7 +36,7 @@ pub const Command = union(enum) {
         }
 
         if (std.mem.eql(u8, args[1], "inspect")) {
-            const cmd = InspectCommand.parseFromArgs(io, args) catch |err| {
+            const cmd = InspectCommand.parseFromArgs(allocator, io, args) catch |err| {
                 log.err("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
                 return err;
             };

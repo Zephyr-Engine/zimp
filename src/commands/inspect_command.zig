@@ -1,17 +1,26 @@
 const std = @import("std");
 
 const log = @import("../logger.zig");
+const zmesh_magic = @import("../formats/zmesh.zig").MAGIC;
+const FormatInspector = @import("../inspectors/inspect.zig").FormatInspector;
+const zamesh_inspector = @import("../inspectors/zmesh.zig").inspector();
+
+const inspector_registry = std.StaticStringMap(FormatInspector).initComptime(.{
+    .{ zmesh_magic, zamesh_inspector },
+});
 
 pub const InspectError = error{
     NotEnoughArguments,
     FileNotFound,
+    UnkownFormat,
 };
 
 pub const InspectCommand = struct {
     file: std.Io.File,
     io: std.Io,
+    allocator: std.mem.Allocator,
 
-    pub fn parseFromArgs(io: std.Io, args: []const [:0]const u8) InspectError!InspectCommand {
+    pub fn parseFromArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) InspectError!InspectCommand {
         const cwd = std.Io.Dir.cwd();
 
         if (args.len < 3) {
@@ -25,13 +34,28 @@ pub const InspectCommand = struct {
         };
 
         return .{
+            .allocator = allocator,
             .file = file,
             .io = io,
         };
     }
 
-    pub fn run(_: InspectCommand) !void {
+    pub fn run(self: InspectCommand) !void {
         log.info("Running inspect command", .{});
+
+        var buf: [8192]u8 = undefined;
+        var file_reader = self.file.reader(self.io, &buf);
+        var reader = &file_reader.interface;
+
+        var magic: [5]u8 = undefined;
+        _ = try reader.readSliceAll(&magic);
+
+        const inspector = inspector_registry.get(&magic) orelse {
+            log.err("No inspector found for file with magic '{s}'", .{magic});
+            return InspectError.UnkownFormat;
+        };
+
+        try inspector.inspect(self.allocator, reader);
     }
 
     pub fn deinit(self: InspectCommand) void {
