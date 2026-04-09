@@ -5,7 +5,10 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    const zimp_dep = b.dependency("zimp", .{});
+    const zimp_dep = b.dependency("zimp", .{
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
     const cook = zimp.addCookStep(b, zimp_dep, .{
         .source_dir = b.path("assets"),
         .output_dir = b.path("output"),

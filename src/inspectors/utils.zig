@@ -23,22 +23,6 @@ pub fn formatHash(buf: []u8, hash: u64) []const u8 {
     return std.fmt.bufPrint(buf, "0x{x:0>16}", .{hash}) catch unreachable;
 }
 
-pub fn formatDuration(buf: []u8, seconds: f32) []const u8 {
-    if (seconds < 1.0) {
-        const ms: u32 = @intFromFloat(seconds * 1000.0);
-        return std.fmt.bufPrint(buf, "{d} ms", .{ms}) catch unreachable;
-    }
-
-    if (seconds < 60.0) {
-        return std.fmt.bufPrint(buf, "{d:.1} s", .{seconds}) catch unreachable;
-    }
-
-    const total_secs: u32 = @intFromFloat(seconds);
-    const mins = total_secs / 60;
-    const secs = total_secs % 60;
-    return std.fmt.bufPrint(buf, "{d}:{d:0>2}", .{ mins, secs }) catch unreachable;
-}
-
 pub fn formatTimestamp(buf: []u8, ns: i64) []const u8 {
     const secs: u64 = @intCast(@divTrunc(ns, std.time.ns_per_s));
 
@@ -113,51 +97,6 @@ test "formatHash: known value" {
 test "formatHash: max u64" {
     var buf: [20]u8 = undefined;
     try testing.expectEqualStrings("0xffffffffffffffff", formatHash(&buf, std.math.maxInt(u64)));
-}
-
-test "formatDuration: 0 seconds" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("0 ms", formatDuration(&buf, 0));
-}
-
-test "formatDuration: 150 ms" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("150 ms", formatDuration(&buf, 0.15));
-}
-
-test "formatDuration: 999 ms" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("999 ms", formatDuration(&buf, 0.999));
-}
-
-test "formatDuration: 1.0 second" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("1.0 s", formatDuration(&buf, 1.0));
-}
-
-test "formatDuration: 3.2 seconds" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("3.2 s", formatDuration(&buf, 3.2));
-}
-
-test "formatDuration: 59.9 seconds" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("59.9 s", formatDuration(&buf, 59.9));
-}
-
-test "formatDuration: exactly 60 seconds shows as 1:00" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("1:00", formatDuration(&buf, 60.0));
-}
-
-test "formatDuration: 2 minutes 5 seconds" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("2:05", formatDuration(&buf, 125.0));
-}
-
-test "formatDuration: 10 minutes" {
-    var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("10:00", formatDuration(&buf, 600.0));
 }
 
 test "formatTimestamp: Unix epoch" {

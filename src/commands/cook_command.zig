@@ -87,17 +87,17 @@ pub const CookCommand = struct {
             try file_writer.flush();
 
             const end = std.Io.Clock.Timestamp.now(self.io, .awake);
-            const elapsed_ns = start.durationTo(end).raw.nanoseconds;
-            const elapsed_ms: i64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_ms));
-            log.debug("Cooked '{s}' in {d}ms", .{ entry.path, elapsed_ms });
+            const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
+            var duration_buf: [32]u8 = undefined;
+            log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
 
             asset_node.end();
         }
 
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
-        const total_elapsed_ns = total_start.durationTo(total_end).raw.nanoseconds;
-        const total_elapsed_ms: i64 = @intCast(@divTrunc(total_elapsed_ns, std.time.ns_per_ms));
-        log.info("Cooked all assets in {d}ms", .{total_elapsed_ms});
+        const total_elapsed_ns: u64 = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
+        var total_duration_buf: [32]u8 = undefined;
+        log.info("Cooked all assets in {s}", .{fmtDuration(total_elapsed_ns, &total_duration_buf)});
     }
 
     pub fn deinit(self: CookCommand) void {
@@ -105,6 +105,16 @@ pub const CookCommand = struct {
         self.output.close(self.io);
     }
 };
+
+fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
+    if (nanoseconds >= std.time.ns_per_ms) {
+        return std.fmt.bufPrint(buf, "{d}ms", .{nanoseconds / std.time.ns_per_ms}) catch unreachable;
+    } else if (nanoseconds >= std.time.ns_per_us) {
+        return std.fmt.bufPrint(buf, "{d}\xc2\xb5s", .{nanoseconds / std.time.ns_per_us}) catch unreachable;
+    } else {
+        return std.fmt.bufPrint(buf, "{d}ns", .{nanoseconds}) catch unreachable;
+    }
+}
 
 const testing = std.testing;
 
