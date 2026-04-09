@@ -8,4 +8,6 @@ test {
     _ = @import("gltf/glb_reader.zig");
     _ = @import("gltf/gltf_json_parser.zig");
     _ = @import("gltf/mesh.zig");
+    _ = @import("inspectors/inspect.zig");
+    _ = @import("inspectors/zmesh.zig");
 }

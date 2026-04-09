@@ -1,13 +1,7 @@
 const std = @import("std");
 
 const log = @import("../logger.zig");
-const zmesh_magic = @import("../formats/zmesh.zig").MAGIC;
-const FormatInspector = @import("../inspectors/inspect.zig").FormatInspector;
-const zamesh_inspector = @import("../inspectors/zmesh.zig").inspector();
-
-const inspector_registry = std.StaticStringMap(FormatInspector).initComptime(.{
-    .{ zmesh_magic, zamesh_inspector },
-});
+const inspector_registry = @import("../inspectors/inspect.zig").inspector_registry;
 
 pub const InspectError = error{
     NotEnoughArguments,
@@ -67,33 +61,62 @@ const testing = std.testing;
 
 test "InspectCommand.parseFromArgs errors with NotEnoughArguments when no file provided" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect" };
-    const result = InspectCommand.parseFromArgs(testing.io, args);
+    const result = InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     try testing.expectError(InspectError.NotEnoughArguments, result);
 }
 
 test "InspectCommand.parseFromArgs errors with FileNotFound for nonexistent file" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect", "nonexistent_file_abc123.txt" };
-    const result = InspectCommand.parseFromArgs(testing.io, args);
+    const result = InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     try testing.expectError(InspectError.FileNotFound, result);
 }
 
 test "InspectCommand.parseFromArgs succeeds with valid file" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
-    const cmd = try InspectCommand.parseFromArgs(testing.io, args);
+    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
     try testing.expect(cmd.file.handle != 0);
 }
 
-test "InspectCommand.run executes without error" {
+test "InspectCommand.parseFromArgs stores allocator" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
-    const cmd = try InspectCommand.parseFromArgs(testing.io, args);
+    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
+    defer cmd.deinit();
+
+    try testing.expectEqual(testing.allocator, cmd.allocator);
+}
+
+test "InspectCommand.run returns UnkownFormat for non-asset file" {
+    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
+    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
+    defer cmd.deinit();
+    try testing.expectError(InspectError.UnkownFormat, cmd.run());
+}
+
+test "InspectCommand.run succeeds for valid zmesh file" {
+    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "examples/output/triangle.zmesh" };
+    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     defer cmd.deinit();
     try cmd.run();
 }
 
+test "InspectCommand.run succeeds for cube_textured zmesh file" {
+    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "examples/output/cube_textured.zmesh" };
+    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
+    defer cmd.deinit();
+    try cmd.run();
+}
+
+test "InspectCommand.parseFromArgs errors with NotEnoughArguments for single arg" {
+    const args: []const [:0]const u8 = &.{"zimp"};
+    const result = InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
+    try testing.expectError(InspectError.NotEnoughArguments, result);
+}
+
 test "InspectCommand.deinit cleans up without error" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
-    const cmd = try InspectCommand.parseFromArgs(testing.io, args);
+    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     cmd.deinit();
 }
+

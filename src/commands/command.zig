@@ -160,7 +160,7 @@ test "Command.run dispatches to correct subcommand" {
     defer pack.deinit();
     try pack.run();
 
-    const inspect_args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
+    const inspect_args: []const [:0]const u8 = &.{ "zimp", "inspect", "examples/output/triangle.zmesh" };
     const inspect = try Command.parse(testing.allocator, testing.io, inspect_args);
     defer inspect.deinit();
     try inspect.run();
