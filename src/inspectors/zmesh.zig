@@ -46,16 +46,19 @@ fn streamEnabled(flags: mesh.FormatFlags, index: usize) bool {
 
 fn readHeader(reader: *std.Io.Reader) !zmesh.ZMeshHeader {
     const version = try reader.takeInt(u32, .little);
-    if (version != zmesh.ZMESH_VERSION)
+    if (version != zmesh.ZMESH_VERSION) {
         return InspectError.UnsupportedVersion;
+    }
 
     const vertex_count = try reader.takeInt(u32, .little);
-    if (vertex_count == 0)
+    if (vertex_count == 0) {
         return InspectError.InvalidVertexCount;
+    }
 
     const index_count = try reader.takeInt(u32, .little);
-    if (index_count == 0 or index_count % 3 != 0)
+    if (index_count == 0 or index_count % 3 != 0) {
         return InspectError.InvalidIndexCount;
+    }
 
     const index_format: mesh.IndexFormat = @enumFromInt(try reader.takeInt(u8, .little));
     const format_flags: mesh.FormatFlags = @bitCast(try reader.takeInt(u8, .little));
@@ -66,8 +69,9 @@ fn readHeader(reader: *std.Io.Reader) !zmesh.ZMeshHeader {
     for (0..3) |i| aabb_max[i] = @bitCast(try reader.takeInt(u32, .little));
 
     const submesh_count = try reader.takeInt(u16, .little);
-    if (submesh_count == 0)
+    if (submesh_count == 0) {
         return InspectError.InvalidSubmeshCount;
+    }
 
     const submesh_table_offset = try reader.takeInt(u32, .little);
     const lod_count = try reader.takeInt(u16, .little);
@@ -193,7 +197,7 @@ fn inspectZmesh(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
         const sub_index_offset = try reader.takeInt(u32, .little);
         const sub_index_count = try reader.takeInt(u32, .little);
         const material_index = try reader.takeInt(u16, .little);
-        _ = try reader.takeInt(u16, .little); // padding
+        _ = try reader.takeInt(u16, .little);
 
         log.info("  {d: >5}  {d: >12}  {d: >12}  {d: >10}  {d: >8}", .{
             i,
@@ -294,7 +298,7 @@ test "readHeader returns InvalidVertexCount for zero vertices" {
 
     try writer.writeAll(zmesh.MAGIC);
     try writer.writeInt(u32, zmesh.ZMESH_VERSION, .little);
-    try writer.writeInt(u32, 0, .little); // vertex_count = 0
+    try writer.writeInt(u32, 0, .little);
     try writer.writeAll(&(.{0} ** 50));
 
     var reader = std.Io.Reader.fixed(file_buf[5..writer.end]);
@@ -307,8 +311,8 @@ test "readHeader returns InvalidIndexCount for zero indices" {
 
     try writer.writeAll(zmesh.MAGIC);
     try writer.writeInt(u32, zmesh.ZMESH_VERSION, .little);
-    try writer.writeInt(u32, 3, .little); // vertex_count
-    try writer.writeInt(u32, 0, .little); // index_count = 0
+    try writer.writeInt(u32, 3, .little);
+    try writer.writeInt(u32, 0, .little);
     try writer.writeAll(&(.{0} ** 50));
 
     var reader = std.Io.Reader.fixed(file_buf[5..writer.end]);
@@ -321,8 +325,8 @@ test "readHeader returns InvalidIndexCount for indices not divisible by 3" {
 
     try writer.writeAll(zmesh.MAGIC);
     try writer.writeInt(u32, zmesh.ZMESH_VERSION, .little);
-    try writer.writeInt(u32, 3, .little); // vertex_count
-    try writer.writeInt(u32, 5, .little); // index_count = 5 (not divisible by 3)
+    try writer.writeInt(u32, 3, .little);
+    try writer.writeInt(u32, 5, .little);
     try writer.writeAll(&(.{0} ** 50));
 
     var reader = std.Io.Reader.fixed(file_buf[5..writer.end]);
@@ -335,12 +339,12 @@ test "readHeader returns InvalidSubmeshCount for zero submeshes" {
 
     try writer.writeAll(zmesh.MAGIC);
     try writer.writeInt(u32, zmesh.ZMESH_VERSION, .little);
-    try writer.writeInt(u32, 3, .little); // vertex_count
-    try writer.writeInt(u32, 3, .little); // index_count
-    try writer.writeInt(u8, 0, .little); // index_format (u16)
-    try writer.writeInt(u8, 0, .little); // format_flags
-    for (0..6) |_| try writer.writeInt(u32, 0, .little); // aabb
-    try writer.writeInt(u16, 0, .little); // submesh_count = 0
+    try writer.writeInt(u32, 3, .little);
+    try writer.writeInt(u32, 3, .little);
+    try writer.writeInt(u8, 0, .little);
+    try writer.writeInt(u8, 0, .little);
+    for (0..6) |_| try writer.writeInt(u32, 0, .little);
+    try writer.writeInt(u16, 0, .little);
     try writer.writeAll(&(.{0} ** 20));
 
     var reader = std.Io.Reader.fixed(file_buf[5..writer.end]);
@@ -431,16 +435,16 @@ fn writeTestZmesh(writer: *std.Io.Writer, opts: TestZmeshOpts) !void {
     for (opts.aabb_max) |v| try writer.writeInt(u32, @bitCast(v), .little);
     try writer.writeInt(u16, opts.submesh_count, .little);
     try writer.writeInt(u32, submesh_table_offset, .little);
-    try writer.writeInt(u16, 0, .little); // lod_count
-    try writer.writeInt(u32, 0, .little); // lod_table_offset
+    try writer.writeInt(u16, 0, .little);
+    try writer.writeInt(u32, 0, .little);
 
     for (0..vertex_data_size) |_| try writer.writeInt(u8, 0, .little);
     for (0..index_data_size) |_| try writer.writeInt(u8, 0, .little);
     for (0..index_padding) |_| try writer.writeInt(u8, 0, .little);
     for (0..opts.submesh_count) |_| {
-        try writer.writeInt(u32, 0, .little); // index_offset
-        try writer.writeInt(u32, opts.index_count, .little); // index_count
-        try writer.writeInt(u16, 0, .little); // material_index
-        try writer.writeInt(u16, 0, .little); // padding
+        try writer.writeInt(u32, 0, .little);
+        try writer.writeInt(u32, opts.index_count, .little);
+        try writer.writeInt(u16, 0, .little);
+        try writer.writeInt(u16, 0, .little);
     }
 }
