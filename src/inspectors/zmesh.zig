@@ -106,7 +106,7 @@ fn inspectZmesh(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Vertex Streams:", .{});
-    log.info("  positions: enabled", .{});
+    log.info("  {s: <12} \xe2\x9c\x85", .{"positions"});
     inline for (.{
         .{ "normals", flags.has_normals },
         .{ "tangents", flags.has_tangents },
@@ -116,9 +116,9 @@ fn inspectZmesh(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
         .{ "weights", flags.has_weights },
     }) |entry| {
         if (entry[1]) {
-            log.info("  {s}: enabled", .{entry[0]});
+            log.info("  {s: <12} \xe2\x9c\x85", .{entry[0]});
         } else {
-            log.info("  {s}: \xe2\x80\x94", .{entry[0]});
+            log.info("  {s: <12} \xe2\x9d\x8c", .{entry[0]});
         }
     }
 
