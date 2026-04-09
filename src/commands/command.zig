@@ -36,7 +36,7 @@ pub const Command = union(enum) {
         }
 
         if (std.mem.eql(u8, args[1], "inspect")) {
-            const cmd = InspectCommand.parseFromArgs(io, args) catch |err| {
+            const cmd = InspectCommand.parseFromArgs(allocator, io, args) catch |err| {
                 log.err("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
@@ -73,6 +73,7 @@ pub const Command = union(enum) {
 };
 
 const testing = std.testing;
+const writeTestZmeshFile = @import("../formats/zmesh.zig").writeTestZmeshFile;
 
 test {
     _ = @import("cook_command.zig");
@@ -160,8 +161,23 @@ test "Command.run dispatches to correct subcommand" {
     defer pack.deinit();
     try pack.run();
 
-    const inspect_args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
-    const inspect = try Command.parse(testing.allocator, testing.io, inspect_args);
+    // Inspect: write a temp zmesh file since examples/output may not exist on CI
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const zmesh_file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
+    var zmesh_buf: [4096]u8 = undefined;
+    var zmesh_writer = zmesh_file.writer(testing.io, &zmesh_buf);
+    try writeTestZmeshFile(&zmesh_writer.interface);
+    try zmesh_writer.flush();
+    zmesh_file.close(testing.io);
+
+    const inspect_file = try tmp.dir.openFile(testing.io, "test.zmesh", .{});
+    const inspect: Command = .{ .Inspect = .{
+        .allocator = testing.allocator,
+        .file = inspect_file,
+        .io = testing.io,
+    } };
     defer inspect.deinit();
     try inspect.run();
 }
