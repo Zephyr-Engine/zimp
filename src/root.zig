@@ -10,4 +10,5 @@ test {
     _ = @import("gltf/mesh.zig");
     _ = @import("inspectors/inspect.zig");
     _ = @import("inspectors/zmesh.zig");
+    _ = @import("inspectors/utils.zig");
 }
