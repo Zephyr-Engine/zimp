@@ -65,10 +65,7 @@ pub const AssetScanner = struct {
             counts.getPtr(file.assetType).* += 1;
         }
 
-        log.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
-        log.info("\x1b[32m|                 SUMMARY                   |\x1b[0m", .{});
-        log.info("\x1b[32m---------------------------------------------\x1b[0m", .{});
-        log.info("Found {d} assets", .{files.items.len});
+        log.debug("Found {d} assets", .{files.items.len});
 
         for (std.enums.values(asset.AssetType)) |asset_type| {
             if (asset_type == .unknown) {
@@ -77,7 +74,7 @@ pub const AssetScanner = struct {
 
             const count = counts.get(asset_type);
             if (count > 0) {
-                log.info("  {s}: {d}", .{ @tagName(asset_type), count });
+                log.debug("  {s}: {d}", .{ @tagName(asset_type), count });
             }
         }
     }
