@@ -3,3 +3,4 @@ zig-pkg/
 .zig-cache/
 *.zmesh
 examples/output/*.zmesh
+.DS_Store
