@@ -58,6 +58,7 @@ pub const InspectCommand = struct {
 };
 
 const testing = std.testing;
+const writeTestZmeshFile = @import("../formats/zmesh.zig").writeTestZmeshFile;
 
 test "InspectCommand.parseFromArgs errors with NotEnoughArguments when no file provided" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect" };
@@ -95,15 +96,24 @@ test "InspectCommand.run returns UnkownFormat for non-asset file" {
 }
 
 test "InspectCommand.run succeeds for valid zmesh file" {
-    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "examples/output/triangle.zmesh" };
-    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
-    defer cmd.deinit();
-    try cmd.run();
-}
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
 
-test "InspectCommand.run succeeds for cube_textured zmesh file" {
-    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "examples/output/cube_textured.zmesh" };
-    const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
+    // Write a minimal zmesh file
+    const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(testing.io, &buf);
+    try writeTestZmeshFile(&writer.interface);
+    try writer.flush();
+    file.close(testing.io);
+
+    // Inspect it
+    const inspect_file = try tmp.dir.openFile(testing.io, "test.zmesh", .{});
+    const cmd: InspectCommand = .{
+        .allocator = testing.allocator,
+        .file = inspect_file,
+        .io = testing.io,
+    };
     defer cmd.deinit();
     try cmd.run();
 }

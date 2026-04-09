@@ -505,6 +505,41 @@ test "ZMesh.write total size matches expected" {
     try testing.expectEqual(expected, result.len);
 }
 
+/// Writes a minimal valid zmesh binary to a writer (for tests).
+pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
+    const flags: mesh.FormatFlags = .{ .has_normals = true, .has_uv0 = true };
+    const vertex_count: u32 = 3;
+    const index_count: u32 = 3;
+
+    // positions(36) + normals(12) + uv0(12) = 60
+    const vertex_data_size: u32 = vertex_count * (@sizeOf([3]f32) + @sizeOf([2]i16) + @sizeOf([2]u16));
+    const index_data_size: u32 = index_count * 2; // u16
+    const index_padding: u32 = (4 - (index_data_size % 4)) % 4;
+    const submesh_table_offset: u32 = HEADER_SIZE + vertex_data_size + index_data_size + index_padding;
+
+    try writer.writeAll(MAGIC);
+    try writer.writeInt(u32, ZMESH_VERSION, .little);
+    try writer.writeInt(u32, vertex_count, .little);
+    try writer.writeInt(u32, index_count, .little);
+    try writer.writeInt(u8, 0, .little); // index_format u16
+    try writer.writeInt(u8, @bitCast(flags), .little);
+    for (0..6) |_| try writer.writeInt(u32, 0, .little); // aabb
+    try writer.writeInt(u16, 1, .little); // submesh_count
+    try writer.writeInt(u32, submesh_table_offset, .little);
+    try writer.writeInt(u16, 0, .little); // lod_count
+    try writer.writeInt(u32, 0, .little); // lod_table_offset
+
+    // vertex data + index data + padding (all zeros)
+    for (0..(vertex_data_size + index_data_size + index_padding)) |_|
+        try writer.writeInt(u8, 0, .little);
+
+    // submesh entry
+    try writer.writeInt(u32, 0, .little); // index_offset
+    try writer.writeInt(u32, index_count, .little); // index_count
+    try writer.writeInt(u16, 0, .little); // material_index
+    try writer.writeInt(u16, 0, .little); // padding
+}
+
 test "ZMesh.write with normals writes normal stream after positions" {
     var v = makeVertex(1, 2, 3);
     v.normal = .{ 100, -200 };
