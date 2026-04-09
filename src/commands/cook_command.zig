@@ -52,16 +52,21 @@ pub const CookCommand = struct {
         return command;
     }
 
-    pub fn run(self: CookCommand) !void {
-        log.info("Running cook command", .{});
-
+    pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
         defer source_scanner.deinit(&list);
 
+        const total_start = std.Io.Clock.Timestamp.now(self.io, .awake);
+
+        const cook_node = progress.start("Cooking assets", list.items.len);
+        defer cook_node.end();
+
         // TODO: parallelize this with zob
         for (list.items) |entry| {
+            const asset_node = cook_node.start(entry.path, 0);
+
             const start = std.Io.Clock.Timestamp.now(self.io, .awake);
 
             const file = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
@@ -82,10 +87,17 @@ pub const CookCommand = struct {
             try file_writer.flush();
 
             const end = std.Io.Clock.Timestamp.now(self.io, .awake);
-            const elapsed_ns = start.durationTo(end).raw.nanoseconds;
-            const elapsed_ms: i64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_ms));
-            log.info("Cooked '{s}' in {d}ms", .{ entry.path, elapsed_ms });
+            const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
+            var duration_buf: [32]u8 = undefined;
+            log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
+
+            asset_node.end();
         }
+
+        const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
+        const total_elapsed_ns: u64 = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
+        var total_duration_buf: [32]u8 = undefined;
+        log.info("Cooked all assets in {s}", .{fmtDuration(total_elapsed_ns, &total_duration_buf)});
     }
 
     pub fn deinit(self: CookCommand) void {
@@ -93,6 +105,16 @@ pub const CookCommand = struct {
         self.output.close(self.io);
     }
 };
+
+fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
+    if (nanoseconds >= std.time.ns_per_ms) {
+        return std.fmt.bufPrint(buf, "{d}ms", .{nanoseconds / std.time.ns_per_ms}) catch unreachable;
+    } else if (nanoseconds >= std.time.ns_per_us) {
+        return std.fmt.bufPrint(buf, "{d}\xc2\xb5s", .{nanoseconds / std.time.ns_per_us}) catch unreachable;
+    } else {
+        return std.fmt.bufPrint(buf, "{d}ns", .{nanoseconds}) catch unreachable;
+    }
+}
 
 const testing = std.testing;
 
@@ -154,7 +176,7 @@ test "CookCommand.run executes without error" {
         .io = testing.io,
         .allocator = testing.allocator,
     };
-    try cmd.run();
+    try cmd.run(.none);
 }
 
 test "CookCommand.deinit cleans up without error" {

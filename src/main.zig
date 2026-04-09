@@ -21,5 +21,8 @@ pub fn main(init: std.process.Init) !void {
         return;
     };
 
-    try command.run();
+    const progress_node = std.Progress.start(init.io, .{});
+    defer progress_node.end();
+
+    try command.run(progress_node);
 }
