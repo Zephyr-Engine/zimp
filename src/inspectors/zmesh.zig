@@ -191,7 +191,7 @@ fn inspectZmesh(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("", .{});
     log.info("Submeshes ({d}):", .{header.submesh_count});
     log.info("  {s: >5}  {s: >12}  {s: >12}  {s: >10}  {s: >8}", .{ "index", "index_offset", "index_count", "triangles", "material" });
-    log.info("  {s}", .{"-" ** 52});
+    log.info("  {s}", .{"-" ** 55});
 
     for (0..header.submesh_count) |i| {
         const sub_index_offset = try reader.takeInt(u32, .little);
