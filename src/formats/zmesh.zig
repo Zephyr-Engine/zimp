@@ -36,12 +36,24 @@ pub const ZMeshHeader = struct {
         const idx_format = cooked_mesh.indices.format();
 
         var vertex_data_size: u32 = vertex_count * @sizeOf([3]f32);
-        if (flags.has_normals) vertex_data_size += vertex_count * @sizeOf([2]i16);
-        if (flags.has_tangents) vertex_data_size += vertex_count * @sizeOf([4]f16);
-        if (flags.has_uv0) vertex_data_size += vertex_count * @sizeOf([2]u16);
-        if (flags.has_uv1) vertex_data_size += vertex_count * @sizeOf([2]u16);
-        if (flags.has_joints) vertex_data_size += vertex_count * @sizeOf([4]u16);
-        if (flags.has_weights) vertex_data_size += vertex_count * @sizeOf([4]f16);
+        if (flags.has_normals) {
+            vertex_data_size += vertex_count * @sizeOf([2]i16);
+        }
+        if (flags.has_tangents) {
+            vertex_data_size += vertex_count * @sizeOf([4]f16);
+        }
+        if (flags.has_uv0) {
+            vertex_data_size += vertex_count * @sizeOf([2]u16);
+        }
+        if (flags.has_uv1) {
+            vertex_data_size += vertex_count * @sizeOf([2]u16);
+        }
+        if (flags.has_joints) {
+            vertex_data_size += vertex_count * @sizeOf([4]u16);
+        }
+        if (flags.has_weights) {
+            vertex_data_size += vertex_count * @sizeOf([4]f16);
+        }
 
         const index_byte_size: u32 = switch (idx_format) {
             .u16 => 2,
@@ -60,6 +72,50 @@ pub const ZMeshHeader = struct {
             .submesh_table_offset = HEADER_SIZE + vertex_data_size + index_data_size + index_padding,
             .lod_count = 0,
             .lod_table_offset = 0,
+        };
+    }
+
+    pub fn read(reader: *std.Io.Reader) !ZMeshHeader {
+        var magic: [5]u8 = undefined;
+        _ = try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, MAGIC)) {
+            return error.InvalidMagic;
+        }
+
+        const version = try reader.takeInt(u32, .little);
+        if (version != ZMESH_VERSION) {
+            return error.UnsupportedVersion;
+        }
+
+        const vertex_count = try reader.takeInt(u32, .little);
+        const index_count = try reader.takeInt(u32, .little);
+        const index_format: mesh.IndexFormat = @enumFromInt(try reader.takeInt(u8, .little));
+        const format_flags: mesh.FormatFlags = @bitCast(try reader.takeInt(u8, .little));
+
+        var aabb_min: [3]f32 = undefined;
+        var aabb_max: [3]f32 = undefined;
+        for (0..3) |i| {
+            aabb_min[i] = @bitCast(try reader.takeInt(u32, .little));
+        }
+        for (0..3) |i| {
+            aabb_max[i] = @bitCast(try reader.takeInt(u32, .little));
+        }
+
+        const submesh_count = try reader.takeInt(u16, .little);
+        const submesh_table_offset = try reader.takeInt(u32, .little);
+        const lod_count = try reader.takeInt(u16, .little);
+        const lod_table_offset = try reader.takeInt(u32, .little);
+
+        return .{
+            .vertex_count = vertex_count,
+            .index_count = index_count,
+            .index_format = index_format,
+            .format_flags = format_flags,
+            .aabb = .{ .min = aabb_min, .max = aabb_max },
+            .submesh_count = submesh_count,
+            .submesh_table_offset = submesh_table_offset,
+            .lod_count = lod_count,
+            .lod_table_offset = lod_table_offset,
         };
     }
 
@@ -84,6 +140,187 @@ pub const ZMeshHeader = struct {
 };
 
 pub const ZMesh = struct {
+    vertex_count: u32,
+    index_count: u32,
+    aabb_min: [3]f32,
+    aabb_max: [3]f32,
+    submeshes: []const Submesh,
+
+    positions: [][3]f32,
+    normals: ?[][2]i16,
+    tangents: ?[][4]f16,
+    uv0: ?[][2]u16,
+    uv1: ?[][2]u16,
+    joint_indices: ?[][4]u16,
+    joint_weights: ?[][4]f16,
+
+    indices_u16: ?[]u16,
+    indices_u32: ?[]u32,
+
+    pub const Submesh = struct {
+        index_offset: u32,
+        index_count: u32,
+        material_index: u16,
+    };
+
+    pub fn read(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !ZMesh {
+        var buf: [8192]u8 = undefined;
+        var file_reader = file.reader(io, &buf);
+        var reader = &file_reader.interface;
+
+        const header = try ZMeshHeader.read(reader);
+        const vertex_count = header.vertex_count;
+        const index_count = header.index_count;
+        const format_flags = header.format_flags;
+
+        const positions = try allocator.alloc([3]f32, vertex_count);
+        errdefer allocator.free(positions);
+        for (positions) |*p| {
+            for (0..3) |i| {
+                p[i] = @bitCast(try reader.takeInt(u32, .little));
+            }
+        }
+
+        const normals: ?[][2]i16 = if (format_flags.has_normals) blk: {
+            const arr = try allocator.alloc([2]i16, vertex_count);
+            errdefer allocator.free(arr);
+            for (arr) |*n| {
+                for (0..2) |i| {
+                    n[i] = @bitCast(try reader.takeInt(u16, .little));
+                }
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (normals) |n| allocator.free(n);
+
+        const tangents: ?[][4]f16 = if (format_flags.has_tangents) blk: {
+            const arr = try allocator.alloc([4]f16, vertex_count);
+            errdefer allocator.free(arr);
+            for (arr) |*t| {
+                for (0..4) |i| {
+                    t[i] = @bitCast(try reader.takeInt(u16, .little));
+                }
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (tangents) |t| allocator.free(t);
+
+        const uv0: ?[][2]u16 = if (format_flags.has_uv0) blk: {
+            const arr = try allocator.alloc([2]u16, vertex_count);
+            errdefer allocator.free(arr);
+            for (arr) |*u| {
+                for (0..2) |i| {
+                    u[i] = try reader.takeInt(u16, .little);
+                }
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (uv0) |u| allocator.free(u);
+
+        const uv1: ?[][2]u16 = if (format_flags.has_uv1) blk: {
+            const arr = try allocator.alloc([2]u16, vertex_count);
+            errdefer allocator.free(arr);
+            for (arr) |*u| {
+                for (0..2) |i| {
+                    u[i] = try reader.takeInt(u16, .little);
+                }
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (uv1) |u| allocator.free(u);
+
+        const joint_indices: ?[][4]u16 = if (format_flags.has_joints) blk: {
+            const arr = try allocator.alloc([4]u16, vertex_count);
+            errdefer allocator.free(arr);
+            for (arr) |*j| {
+                for (0..4) |i| {
+                    j[i] = try reader.takeInt(u16, .little);
+                }
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (joint_indices) |j| allocator.free(j);
+
+        const joint_weights: ?[][4]f16 = if (format_flags.has_weights) blk: {
+            const arr = try allocator.alloc([4]f16, vertex_count);
+            errdefer allocator.free(arr);
+            for (arr) |*w| {
+                for (0..4) |i| {
+                    w[i] = @bitCast(try reader.takeInt(u16, .little));
+                }
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (joint_weights) |w| allocator.free(w);
+
+        const is_u16 = header.index_format == .u16;
+        const indices_u16: ?[]u16 = if (is_u16) blk: {
+            const arr = try allocator.alloc(u16, index_count);
+            errdefer allocator.free(arr);
+            for (arr) |*idx| {
+                idx.* = try reader.takeInt(u16, .little);
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (indices_u16) |idx| allocator.free(idx);
+
+        const indices_u32: ?[]u32 = if (!is_u16) blk: {
+            const arr = try allocator.alloc(u32, index_count);
+            errdefer allocator.free(arr);
+            for (arr) |*idx| {
+                idx.* = try reader.takeInt(u32, .little);
+            }
+            break :blk arr;
+        } else null;
+        errdefer if (indices_u32) |idx| allocator.free(idx);
+
+        const index_byte_size: u32 = if (is_u16) 2 else 4;
+        const index_data_size = index_count * index_byte_size;
+        const index_padding = (4 - (index_data_size % 4)) % 4;
+        if (index_padding > 0) {
+            try reader.discardAll(index_padding);
+        }
+
+        const submeshes = try allocator.alloc(Submesh, header.submesh_count);
+        errdefer allocator.free(submeshes);
+        for (submeshes) |*s| {
+            s.index_offset = try reader.takeInt(u32, .little);
+            s.index_count = try reader.takeInt(u32, .little);
+            s.material_index = try reader.takeInt(u16, .little);
+            _ = try reader.takeInt(u16, .little); // padding
+        }
+
+        return .{
+            .vertex_count = vertex_count,
+            .index_count = index_count,
+            .aabb_min = header.aabb.min,
+            .aabb_max = header.aabb.max,
+            .submeshes = submeshes,
+            .positions = positions,
+            .normals = normals,
+            .tangents = tangents,
+            .uv0 = uv0,
+            .uv1 = uv1,
+            .joint_indices = joint_indices,
+            .joint_weights = joint_weights,
+            .indices_u16 = indices_u16,
+            .indices_u32 = indices_u32,
+        };
+    }
+
+    pub fn deinit(self: *ZMesh, allocator: std.mem.Allocator) void {
+        allocator.free(self.positions);
+        if (self.normals) |n| allocator.free(n);
+        if (self.tangents) |t| allocator.free(t);
+        if (self.uv0) |u| allocator.free(u);
+        if (self.uv1) |u| allocator.free(u);
+        if (self.joint_indices) |j| allocator.free(j);
+        if (self.joint_weights) |w| allocator.free(w);
+        if (self.indices_u16) |idx| allocator.free(idx);
+        if (self.indices_u32) |idx| allocator.free(idx);
+        allocator.free(self.submeshes);
+    }
+
     pub fn write(writer: *std.Io.Writer, cooked_mesh: mesh.CookedMesh) !void {
         const header = ZMeshHeader.init(cooked_mesh);
         try header.write(writer);
@@ -288,7 +525,6 @@ test "submesh_table_offset with positions only and u32 indices (no padding)" {
 }
 
 test "submesh_table_offset accounts for normals and uvs" {
-    // 1 vert: positions 12 + normals 4 + uv0 4 = 20, 1 u32 index = 4
     const flags: mesh.FormatFlags = .{ .has_normals = true, .has_uv0 = true };
     const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
     const cooked = makeCookedMesh(&verts, .{ .u16 = null, .u32 = @constCast(&[_]u32{0}) }, &.{}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
@@ -382,8 +618,6 @@ test "ZMeshHeader.write total output is HEADER_SIZE bytes" {
     try testing.expectEqual(HEADER_SIZE, @as(u32, @intCast(writer.end)));
 }
 
-// ── ZMesh.write full output ──
-
 test "ZMesh.write writes positions after header" {
     const verts = [_]mesh.CookedVertex{ makeVertex(1, 2, 3), makeVertex(4, 5, 6) };
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1 }), .u32 = null }, &.{}, .{}, .{ .min = .{ 1, 2, 3 }, .max = .{ 4, 5, 6 } });
@@ -428,7 +662,6 @@ test "ZMesh.write writes u32 indices after vertex data" {
 }
 
 test "ZMesh.write pads u16 indices to 4-byte alignment" {
-    // 3 u16 indices = 6 bytes, needs 2 bytes padding
     const verts = [_]mesh.CookedVertex{ makeVertex(0, 0, 0), makeVertex(1, 0, 0), makeVertex(0, 1, 0) };
     const indices = [_]u16{ 0, 1, 2 };
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&indices), .u32 = null }, &.{}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
@@ -500,18 +733,15 @@ test "ZMesh.write total size matches expected" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&indices), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
 
     const result = try writeToBuffer(cooked);
-    // header(55) + positions(36) + indices(6) + padding(2) + submesh(12) = 111
     const expected: usize = HEADER_SIZE + 36 + 6 + 2 + 12;
     try testing.expectEqual(expected, result.len);
 }
 
-/// Writes a minimal valid zmesh binary to a writer (for tests).
 pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
     const flags: mesh.FormatFlags = .{ .has_normals = true, .has_uv0 = true };
     const vertex_count: u32 = 3;
     const index_count: u32 = 3;
 
-    // positions(36) + normals(12) + uv0(12) = 60
     const vertex_data_size: u32 = vertex_count * (@sizeOf([3]f32) + @sizeOf([2]i16) + @sizeOf([2]u16));
     const index_data_size: u32 = index_count * 2; // u16
     const index_padding: u32 = (4 - (index_data_size % 4)) % 4;
@@ -523,21 +753,357 @@ pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
     try writer.writeInt(u32, index_count, .little);
     try writer.writeInt(u8, 0, .little); // index_format u16
     try writer.writeInt(u8, @bitCast(flags), .little);
-    for (0..6) |_| try writer.writeInt(u32, 0, .little); // aabb
+    for (0..6) |_| {
+        try writer.writeInt(u32, 0, .little); // aabb
+    }
     try writer.writeInt(u16, 1, .little); // submesh_count
     try writer.writeInt(u32, submesh_table_offset, .little);
     try writer.writeInt(u16, 0, .little); // lod_count
     try writer.writeInt(u32, 0, .little); // lod_table_offset
 
-    // vertex data + index data + padding (all zeros)
-    for (0..(vertex_data_size + index_data_size + index_padding)) |_|
+    for (0..(vertex_data_size + index_data_size + index_padding)) |_| {
         try writer.writeInt(u8, 0, .little);
+    }
 
     // submesh entry
     try writer.writeInt(u32, 0, .little); // index_offset
     try writer.writeInt(u32, index_count, .little); // index_count
     try writer.writeInt(u16, 0, .little); // material_index
     try writer.writeInt(u16, 0, .little); // padding
+}
+
+fn writeCookedToTmpFile(tmp: *testing.TmpDir, cooked: mesh.CookedMesh) !std.Io.File {
+    const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(testing.io, &buf);
+    try ZMesh.write(&writer.interface, cooked);
+    try writer.flush();
+    file.close(testing.io);
+    return try tmp.dir.openFile(testing.io, "test.zmesh", .{});
+}
+
+test "ZMeshHeader.read parses magic and version" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
+    const header = ZMeshHeader.init(cooked);
+    try header.write(&writer);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    const parsed = try ZMeshHeader.read(&reader);
+
+    try testing.expectEqualSlices(u8, MAGIC, &parsed.magic);
+    try testing.expectEqual(ZMESH_VERSION, parsed.version);
+}
+
+test "ZMeshHeader.read parses vertex and index counts" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    const verts = [_]mesh.CookedVertex{ makeVertex(0, 0, 0), makeVertex(1, 0, 0), makeVertex(0, 1, 0) };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1, 2 }), .u32 = null }, &.{}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
+    const header = ZMeshHeader.init(cooked);
+    try header.write(&writer);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    const parsed = try ZMeshHeader.read(&reader);
+
+    try testing.expectEqual(@as(u32, 3), parsed.vertex_count);
+    try testing.expectEqual(@as(u32, 3), parsed.index_count);
+}
+
+test "ZMeshHeader.read parses format flags" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    const flags: mesh.FormatFlags = .{ .has_normals = true, .has_uv0 = true };
+    const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
+    const header = ZMeshHeader.init(cooked);
+    try header.write(&writer);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    const parsed = try ZMeshHeader.read(&reader);
+
+    try testing.expect(parsed.format_flags.has_normals);
+    try testing.expect(parsed.format_flags.has_uv0);
+    try testing.expect(!parsed.format_flags.has_tangents);
+}
+
+test "ZMeshHeader.read parses AABB" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    const bounds: mesh.AABB = .{ .min = .{ -1.5, 0, 2.5 }, .max = .{ 10, 20, 30 } };
+    const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{}, .{}, bounds);
+    const header = ZMeshHeader.init(cooked);
+    try header.write(&writer);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    const parsed = try ZMeshHeader.read(&reader);
+
+    try testing.expectEqual([3]f32{ -1.5, 0, 2.5 }, parsed.aabb.min);
+    try testing.expectEqual([3]f32{ 10, 20, 30 }, parsed.aabb.max);
+}
+
+test "ZMeshHeader.read parses index format" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
+    const cooked = makeCookedMesh(&verts, .{ .u16 = null, .u32 = @constCast(&[_]u32{0}) }, &.{}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
+    const header = ZMeshHeader.init(cooked);
+    try header.write(&writer);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    const parsed = try ZMeshHeader.read(&reader);
+
+    try testing.expectEqual(mesh.IndexFormat.u32, parsed.index_format);
+}
+
+test "ZMeshHeader.read parses submesh count and offset" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    const submeshes = [_]raw_mesh.RawSubmesh{
+        .{ .index_offset = 0, .index_count = 3, .material_index = 0 },
+        .{ .index_offset = 3, .index_count = 3, .material_index = 1 },
+    };
+    const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
+    const header = ZMeshHeader.init(cooked);
+    try header.write(&writer);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    const parsed = try ZMeshHeader.read(&reader);
+
+    try testing.expectEqual(@as(u16, 2), parsed.submesh_count);
+    try testing.expectEqual(header.submesh_table_offset, parsed.submesh_table_offset);
+}
+
+test "ZMeshHeader.read roundtrips init values" {
+    var buf: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    const flags: mesh.FormatFlags = .{ .has_normals = true, .has_tangents = true, .has_uv0 = true };
+    const bounds: mesh.AABB = .{ .min = .{ -5, -10, -15 }, .max = .{ 5, 10, 15 } };
+    const submeshes = [_]raw_mesh.RawSubmesh{
+        .{ .index_offset = 0, .index_count = 6, .material_index = 2 },
+    };
+    const verts = [_]mesh.CookedVertex{ makeVertex(0, 0, 0), makeVertex(1, 0, 0) };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1 }), .u32 = null }, &submeshes, flags, bounds);
+    const original = ZMeshHeader.init(cooked);
+    try original.write(&writer);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    const parsed = try ZMeshHeader.read(&reader);
+
+    try testing.expectEqual(original.vertex_count, parsed.vertex_count);
+    try testing.expectEqual(original.index_count, parsed.index_count);
+    try testing.expectEqual(original.index_format, parsed.index_format);
+    try testing.expectEqual(original.format_flags, parsed.format_flags);
+    try testing.expectEqual(original.aabb, parsed.aabb);
+    try testing.expectEqual(original.submesh_count, parsed.submesh_count);
+    try testing.expectEqual(original.submesh_table_offset, parsed.submesh_table_offset);
+    try testing.expectEqual(original.lod_count, parsed.lod_count);
+    try testing.expectEqual(original.lod_table_offset, parsed.lod_table_offset);
+}
+
+test "ZMesh.read reads positions" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const verts = [_]mesh.CookedVertex{ makeVertex(1, 2, 3), makeVertex(4, 5, 6), makeVertex(7, 8, 9) };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1, 2 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 1, 2, 3 }, .max = .{ 7, 8, 9 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expectEqual(@as(u32, 3), zmesh.vertex_count);
+    try testing.expectEqual([3]f32{ 1, 2, 3 }, zmesh.positions[0]);
+    try testing.expectEqual([3]f32{ 4, 5, 6 }, zmesh.positions[1]);
+    try testing.expectEqual([3]f32{ 7, 8, 9 }, zmesh.positions[2]);
+}
+
+test "ZMesh.read reads u16 indices" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const verts = [_]mesh.CookedVertex{ makeVertex(0, 0, 0), makeVertex(1, 0, 0), makeVertex(0, 1, 0) };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 2, 1, 0 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expect(zmesh.indices_u16 != null);
+    try testing.expect(zmesh.indices_u32 == null);
+    try testing.expectEqualSlices(u16, &.{ 2, 1, 0 }, zmesh.indices_u16.?);
+}
+
+test "ZMesh.read reads u32 indices" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const verts = [_]mesh.CookedVertex{ makeVertex(0, 0, 0), makeVertex(1, 0, 0), makeVertex(0, 1, 0) };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = null, .u32 = @constCast(&[_]u32{ 0, 2, 1 }) }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expect(zmesh.indices_u16 == null);
+    try testing.expect(zmesh.indices_u32 != null);
+    try testing.expectEqualSlices(u32, &.{ 0, 2, 1 }, zmesh.indices_u32.?);
+}
+
+test "ZMesh.read reads normals when present" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var v = makeVertex(0, 0, 0);
+    v.normal = .{ 100, -200 };
+    const verts = [_]mesh.CookedVertex{v};
+    const flags: mesh.FormatFlags = .{ .has_normals = true };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expect(zmesh.normals != null);
+    try testing.expectEqual([2]i16{ 100, -200 }, zmesh.normals.?[0]);
+}
+
+test "ZMesh.read sets normals to null when absent" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expect(zmesh.normals == null);
+    try testing.expect(zmesh.tangents == null);
+    try testing.expect(zmesh.uv0 == null);
+    try testing.expect(zmesh.uv1 == null);
+    try testing.expect(zmesh.joint_indices == null);
+    try testing.expect(zmesh.joint_weights == null);
+}
+
+test "ZMesh.read reads uv0 when present" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var v = makeVertex(0, 0, 0);
+    v.uv0 = .{ 1000, 2000 };
+    const verts = [_]mesh.CookedVertex{v};
+    const flags: mesh.FormatFlags = .{ .has_uv0 = true };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expect(zmesh.uv0 != null);
+    try testing.expectEqual([2]u16{ 1000, 2000 }, zmesh.uv0.?[0]);
+}
+
+test "ZMesh.read reads AABB" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const bounds: mesh.AABB = .{ .min = .{ -1.5, -2.5, -3.5 }, .max = .{ 4.5, 5.5, 6.5 } };
+    const verts = [_]mesh.CookedVertex{makeVertex(0, 0, 0)};
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, .{}, bounds);
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expectEqual([3]f32{ -1.5, -2.5, -3.5 }, zmesh.aabb_min);
+    try testing.expectEqual([3]f32{ 4.5, 5.5, 6.5 }, zmesh.aabb_max);
+}
+
+test "ZMesh.read reads submeshes" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const verts = [_]mesh.CookedVertex{ makeVertex(0, 0, 0), makeVertex(1, 0, 0), makeVertex(0, 1, 0) };
+    const submeshes = [_]raw_mesh.RawSubmesh{
+        .{ .index_offset = 0, .index_count = 3, .material_index = 5 },
+        .{ .index_offset = 3, .index_count = 3, .material_index = 7 },
+    };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1, 2, 0, 1, 2 }), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expectEqual(@as(usize, 2), zmesh.submeshes.len);
+    try testing.expectEqual(@as(u32, 0), zmesh.submeshes[0].index_offset);
+    try testing.expectEqual(@as(u32, 3), zmesh.submeshes[0].index_count);
+    try testing.expectEqual(@as(u16, 5), zmesh.submeshes[0].material_index);
+    try testing.expectEqual(@as(u32, 3), zmesh.submeshes[1].index_offset);
+    try testing.expectEqual(@as(u32, 3), zmesh.submeshes[1].index_count);
+    try testing.expectEqual(@as(u16, 7), zmesh.submeshes[1].material_index);
+}
+
+test "ZMesh.read roundtrips normals and uv0 together" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var v0 = makeVertex(1, 2, 3);
+    v0.normal = .{ 50, -50 };
+    v0.uv0 = .{ 100, 200 };
+    var v1 = makeVertex(4, 5, 6);
+    v1.normal = .{ -100, 100 };
+    v1.uv0 = .{ 300, 400 };
+    const verts = [_]mesh.CookedVertex{ v0, v1 };
+    const flags: mesh.FormatFlags = .{ .has_normals = true, .has_uv0 = true };
+    const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 2, .material_index = 0 }}, flags, .{ .min = .{ 1, 2, 3 }, .max = .{ 4, 5, 6 } });
+    const file = try writeCookedToTmpFile(&tmp, cooked);
+
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    defer zmesh.deinit(testing.allocator);
+    file.close(testing.io);
+
+    try testing.expectEqual([2]i16{ 50, -50 }, zmesh.normals.?[0]);
+    try testing.expectEqual([2]i16{ -100, 100 }, zmesh.normals.?[1]);
+    try testing.expectEqual([2]u16{ 100, 200 }, zmesh.uv0.?[0]);
+    try testing.expectEqual([2]u16{ 300, 400 }, zmesh.uv0.?[1]);
+}
+
+test "ZMesh.read with writeTestZmeshFile" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(testing.io, &buf);
+    try writeTestZmeshFile(&writer.interface);
+    try writer.flush();
+    file.close(testing.io);
+
+    const read_file = try tmp.dir.openFile(testing.io, "test.zmesh", .{});
+    var zmesh = try ZMesh.read(testing.allocator, testing.io, read_file);
+    defer zmesh.deinit(testing.allocator);
+    read_file.close(testing.io);
+
+    try testing.expectEqual(@as(u32, 3), zmesh.vertex_count);
+    try testing.expectEqual(@as(u32, 3), zmesh.index_count);
+    try testing.expect(zmesh.normals != null);
+    try testing.expect(zmesh.uv0 != null);
+    try testing.expect(zmesh.indices_u16 != null);
+    try testing.expectEqual(@as(usize, 1), zmesh.submeshes.len);
 }
 
 test "ZMesh.write with normals writes normal stream after positions" {
