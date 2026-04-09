@@ -52,16 +52,21 @@ pub const CookCommand = struct {
         return command;
     }
 
-    pub fn run(self: CookCommand) !void {
-        log.info("Running cook command", .{});
-
+    pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
         defer source_scanner.deinit(&list);
 
+        const total_start = std.Io.Clock.Timestamp.now(self.io, .awake);
+
+        const cook_node = progress.start("Cooking assets", list.items.len);
+        defer cook_node.end();
+
         // TODO: parallelize this with zob
         for (list.items) |entry| {
+            const asset_node = cook_node.start(entry.path, 0);
+
             const start = std.Io.Clock.Timestamp.now(self.io, .awake);
 
             const file = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
@@ -84,8 +89,15 @@ pub const CookCommand = struct {
             const end = std.Io.Clock.Timestamp.now(self.io, .awake);
             const elapsed_ns = start.durationTo(end).raw.nanoseconds;
             const elapsed_ms: i64 = @intCast(@divTrunc(elapsed_ns, std.time.ns_per_ms));
-            log.info("Cooked '{s}' in {d}ms", .{ entry.path, elapsed_ms });
+            log.debug("Cooked '{s}' in {d}ms", .{ entry.path, elapsed_ms });
+
+            asset_node.end();
         }
+
+        const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
+        const total_elapsed_ns = total_start.durationTo(total_end).raw.nanoseconds;
+        const total_elapsed_ms: i64 = @intCast(@divTrunc(total_elapsed_ns, std.time.ns_per_ms));
+        log.info("Cooked all assets in {d}ms", .{total_elapsed_ms});
     }
 
     pub fn deinit(self: CookCommand) void {
@@ -154,7 +166,7 @@ test "CookCommand.run executes without error" {
         .io = testing.io,
         .allocator = testing.allocator,
     };
-    try cmd.run();
+    try cmd.run(.none);
 }
 
 test "CookCommand.deinit cleans up without error" {

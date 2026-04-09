@@ -47,9 +47,9 @@ pub const Command = union(enum) {
         return CommandError.UnknownCommand;
     }
 
-    pub fn run(self: Command) !void {
+    pub fn run(self: Command, progress: std.Progress.Node) !void {
         return switch (self) {
-            .Cook => |cmd| cmd.run(),
+            .Cook => |cmd| cmd.run(progress),
             .Pack => |cmd| cmd.run(),
             .Inspect => |cmd| cmd.run(),
         };
@@ -154,12 +154,12 @@ test "Command.run dispatches to correct subcommand" {
     const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", "examples/output", "--output", "examples/output" };
     const cook = try Command.parse(testing.allocator, testing.io, cook_args);
     defer cook.deinit();
-    try cook.run();
+    try cook.run(.none);
 
     const pack_args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
     const pack = try Command.parse(testing.allocator, testing.io, pack_args);
     defer pack.deinit();
-    try pack.run();
+    try pack.run(.none);
 
     // Inspect: write a temp zmesh file since examples/output may not exist on CI
     var tmp = testing.tmpDir(.{});
@@ -179,7 +179,7 @@ test "Command.run dispatches to correct subcommand" {
         .io = testing.io,
     } };
     defer inspect.deinit();
-    try inspect.run();
+    try inspect.run(.none);
 }
 
 test "Command.deinit cleans up all variants" {
