@@ -4,10 +4,10 @@ const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const AssetType = @import("../assets/asset.zig").AssetType;
 
 pub const VERSION = 1;
-pub const MAGIC = "ZACH";
+pub const MAGIC = "ZACHE";
 
-pub const CacheHeader = packed struct {
-    magic: [4]u8 = MAGIC.*,
+pub const CacheHeader = extern struct {
+    magic: [5]u8 = MAGIC.*,
     version: u16 = VERSION,
     entry_count: u32,
 };
@@ -55,32 +55,33 @@ pub const Cache = struct {
         };
     }
 
-    pub fn pushCacheEntry(self: *Cache, entry: CacheEntry) void {
-        self.entries = self.entries.append(entry);
+    pub fn deinit(self: *Cache, allocator: std.mem.Allocator) void {
+        self.entries.deinit(allocator);
+    }
+
+    pub fn pushCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry) void {
+        self.entries = self.entries.append(allocator, entry);
         self.header.entry_count += 1;
     }
 
     pub fn write(self: *const Cache, io: std.Io) !void {
         const cwd = std.Io.Dir.cwd();
-        const file = try cwd.openFile(io, "tmp.zcache", .{
-            .mode = .write_only,
-        });
+        const file = try cwd.createFile(io, "tmp.zcache", .{});
 
         var buf: [4096]u8 = undefined;
-        const writer = file.writer(io, &buf);
-        const io_writer = &writer.interface;
+        var writer = file.writer(io, &buf);
+        var io_writer = &writer.interface;
 
-        try io_writer.writeAll(self.header);
+        try io_writer.writeStruct(self.header, .little);
 
-        for (self.entries) |entry| {
+        for (self.entries.items) |entry| {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
             try io_writer.writeInt(u64, entry.content_hash, .little);
             try io_writer.writeInt(u64, entry.source_size, .little);
             try io_writer.writeInt(i64, entry.source_mtime, .little);
-            try io_writer.writeInt(i64, entry.cook_timestamp, .little);
             try io_writer.writeInt(u64, entry.cooked_path_hash, .little);
-            try io_writer.writeInt(u32, entry.cooked_size, .little);
-            try io_writer.writeInt(u16, entry.asset_type, .little);
+            try io_writer.writeInt(u64, entry.cooked_size, .little);
+            try io_writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
         }
 
         try io_writer.flush();

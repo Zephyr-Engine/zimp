@@ -2,6 +2,7 @@ const std = @import("std");
 
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
+const Cache = @import("../cache/cache.zig").Cache;
 const log = @import("../logger.zig");
 
 pub const CookError = error{
@@ -53,6 +54,9 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
+        var cache = Cache.init(self.source);
+        defer cache.deinit(self.allocator);
+
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
@@ -98,6 +102,8 @@ pub const CookCommand = struct {
         const total_elapsed_ns: u64 = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
         var total_duration_buf: [32]u8 = undefined;
         log.info("Cooked {d} assets in {s}", .{ list.items.len, fmtDuration(total_elapsed_ns, &total_duration_buf) });
+
+        try cache.write(self.io);
     }
 
     pub fn deinit(self: CookCommand) void {

@@ -8,5 +8,5 @@ pub fn inspector() FormatInspector {
 }
 
 fn inspectZCache(_: std.mem.Allocator, _: *std.Io.Reader) !void {
-    log.info("ZCache inspector called");
+    log.info("ZCache inspector called", .{});
 }
