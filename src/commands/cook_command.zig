@@ -4,7 +4,7 @@ const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
 const cache_mod = @import("../cache/cache.zig");
 const log = @import("../logger.zig");
-const CacheEntry = cache_mod.CacheEntry;
+const CacheEntry = @import("../cache/entry.zig").CacheEntry;
 const Cache = cache_mod.Cache;
 
 pub const CookError = error{
@@ -56,7 +56,7 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
-        var cache = Cache.init(self.source);
+        var cache = Cache.init(self.allocator, self.source);
         defer cache.deinit(self.allocator);
 
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
