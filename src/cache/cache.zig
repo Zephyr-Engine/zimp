@@ -62,6 +62,15 @@ pub const Cache = struct {
         return null;
     }
 
+    pub fn lookupEntryMut(self: *Cache, source_file: SourceFile) ?*CacheEntry {
+        const path_hash = source_file.hashPath();
+        if (self.entry_map.get(path_hash)) |entry_idx| {
+            return &self.entries.items[entry_idx];
+        }
+
+        return null;
+    }
+
     pub fn getIdx(self: *const Cache, source_file: SourceFile) ?u32 {
         const path_hash = source_file.hashPath();
         return self.entry_map.get(path_hash);

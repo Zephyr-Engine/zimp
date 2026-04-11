@@ -79,10 +79,18 @@ pub const CookCommand = struct {
 
             const start = std.Io.Clock.Timestamp.now(self.io, .awake);
             var staleness: ?Staleness = null;
-            if (cache.lookupEntry(entry)) |cache_entry| {
+            if (cache.lookupEntryMut(entry)) |cache_entry| {
                 staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
                 if (staleness == .cached) {
                     log.debug("{s} is cached, not cooking", .{entry.path});
+                    continue;
+                }
+
+                // modified time was different but the file didn't actually change, update modified time in cache and don't re-cook
+                if (staleness == .hash_match) {
+                    const info = try entry.getFileInfo(self.source, self.io);
+                    cache_entry.source_mtime = info.modified_ns;
+                    log.debug("{s} hash match, updated mtime", .{entry.path});
                     continue;
                 }
                 log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });

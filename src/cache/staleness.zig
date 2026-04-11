@@ -4,6 +4,7 @@ const CacheEntry = @import("entry.zig").CacheEntry;
 
 pub const Staleness = enum {
     cached,
+    hash_match,
     stale_size,
     stale_content,
     not_cached,
@@ -23,6 +24,6 @@ pub const Staleness = enum {
             return .stale_content;
         }
 
-        return .cached;
+        return .hash_match;
     }
 };
