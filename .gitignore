@@ -4,3 +4,4 @@ zig-pkg/
 *.zmesh
 examples/output/*.zmesh
 .DS_Store
+.zcache
