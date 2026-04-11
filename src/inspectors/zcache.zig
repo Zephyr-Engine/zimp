@@ -5,77 +5,58 @@ const FormatInspector = @import("inspect.zig").FormatInspector;
 const cache = @import("../cache/cache.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
 
-pub const InspectError = error{
-    UnsupportedVersion,
-};
-
-fn readHeader(reader: *std.Io.Reader) !cache.CacheHeader {
-    const version = try reader.takeInt(u16, .little);
-    if (version != cache.VERSION) {
-        return InspectError.UnsupportedVersion;
-    }
-
-    const entry_count = try reader.takeInt(u32, .little);
-
-    return .{
-        .version = version,
-        .entry_count = entry_count,
-    };
-}
-
-fn readEntry(allocator: std.mem.Allocator, reader: *std.Io.Reader) !cache.CacheEntry {
-    const source_path_hash = try reader.takeInt(u64, .little);
-    const content_hash = try reader.takeInt(u64, .little);
-    const source_size = try reader.takeInt(u64, .little);
-    const source_mtime = try reader.takeInt(i96, .little);
-    const cooked_path_hash = try reader.takeInt(u64, .little);
-    const cooked_size = try reader.takeInt(u64, .little);
-    const asset_type: AssetType = @enumFromInt(try reader.takeInt(u16, .little));
-
-    const source_path_len = try reader.takeInt(u16, .little);
-    const source_path = try allocator.alloc(u8, source_path_len);
-    errdefer allocator.free(source_path);
-    try reader.readSliceAll(source_path);
-
-    const cooked_path_len = try reader.takeInt(u16, .little);
-    const cooked_path = try allocator.alloc(u8, cooked_path_len);
-    errdefer allocator.free(cooked_path);
-    try reader.readSliceAll(cooked_path);
-
-    return .{
-        .source_path = source_path,
-        .source_path_hash = source_path_hash,
-        .content_hash = content_hash,
-        .source_size = source_size,
-        .source_mtime = source_mtime,
-        .cooked_path = cooked_path,
-        .cooked_path_hash = cooked_path_hash,
-        .cooked_size = cooked_size,
-        .asset_type = asset_type,
-    };
+fn padRight(buf: []u8, s: []const u8, width: usize) []const u8 {
+    @memcpy(buf[0..s.len], s);
+    const pad = width - s.len;
+    @memset(buf[s.len..][0..pad], ' ');
+    return buf[0 .. s.len + pad];
 }
 
 fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
-    const header = try readHeader(reader);
+    var c = try cache.Cache.read(allocator, reader);
+    defer c.deinit(allocator);
 
-    log.info("zcache v{d}", .{header.version});
-    log.info("  Entries: {d}", .{header.entry_count});
+    log.info("zcache v{d}", .{c.header.version});
+    log.info("  Entries: {d}", .{c.header.entry_count});
+
+    var max_source_len: usize = "source".len;
+    var max_cooked_len: usize = "cooked".len;
+    for (c.entries.items) |entry| {
+        if (entry.source_path.len > max_source_len) max_source_len = entry.source_path.len;
+        if (entry.cooked_path.len > max_cooked_len) max_cooked_len = entry.cooked_path.len;
+    }
+    const source_col = max_source_len + 1;
+    const cooked_col = max_cooked_len + 1;
+
+    const source_buf = try allocator.alloc(u8, source_col);
+    defer allocator.free(source_buf);
+    const cooked_buf = try allocator.alloc(u8, cooked_col);
+    defer allocator.free(cooked_buf);
 
     log.info("", .{});
     log.info("Entries:", .{});
-    log.info("  {s: <35}  {s: <18}  {s: <18}  {s: <10}  {s: <22}  {s: <20}  {s: <18}  {s: <10}  {s: <8}", .{
-        "source", "source_hash", "content_hash", "src_size", "last_updated", "cooked", "cooked_hash", "cook_size", "type",
+    log.info("  {s} {s: <18}  {s: <18}  {s: <10}  {s: <22}  {s} {s: <18}  {s: <10}  {s: <8}", .{
+        padRight(source_buf, "source", source_col),
+        "source_hash",
+        "content_hash",
+        "src_size",
+        "last_updated",
+        padRight(cooked_buf, "cooked", cooked_col),
+        "cooked_hash",
+        "cook_size",
+        "type",
     });
-    log.info("  {s}", .{"-" ** 171});
+
+    const dash_len = source_col + cooked_col + 116;
+    const dashes = try allocator.alloc(u8, dash_len);
+    defer allocator.free(dashes);
+    @memset(dashes, '-');
+    log.info("  {s}", .{dashes});
 
     var total_source_size: u64 = 0;
     var total_cooked_size: u64 = 0;
 
-    for (0..header.entry_count) |_| {
-        const entry = try readEntry(allocator, reader);
-        defer allocator.free(entry.source_path);
-        defer allocator.free(entry.cooked_path);
-
+    for (c.entries.items) |entry| {
         var hash1: [20]u8 = undefined;
         var hash2: [20]u8 = undefined;
         var hash3: [20]u8 = undefined;
@@ -83,13 +64,13 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         var size2: [16]u8 = undefined;
         var ts: [24]u8 = undefined;
 
-        log.info("  {s: <35}  {s: >18}  {s: >18}  {s: <10}  {s: <22}  {s: <20}  {s: >18}  {s: <10}  {s: <8}", .{
-            entry.source_path,
+        log.info("  {s} {s: >18}  {s: >18}  {s: <10}  {s: <22}  {s} {s: >18}  {s: <10}  {s: <8}", .{
+            padRight(source_buf, entry.source_path, source_col),
             fmt.formatHash(&hash1, entry.source_path_hash),
             fmt.formatHash(&hash2, entry.content_hash),
             fmt.formatBytes(&size1, entry.source_size),
             fmt.formatTimestamp(&ts, entry.source_mtime),
-            entry.cooked_path,
+            padRight(cooked_buf, entry.cooked_path, cooked_col),
             fmt.formatHash(&hash3, entry.cooked_path_hash),
             fmt.formatBytes(&size2, entry.cooked_size),
             @tagName(entry.asset_type),
@@ -138,19 +119,21 @@ test "inspector can be called through FormatInspector trait" {
     try insp.inspect(testing.allocator, &reader);
 }
 
-test "readHeader parses a valid zcache header" {
+test "Cache.read parses a valid zcache" {
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
     try writeTestZcache(&writer, .{});
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
-    const header = try readHeader(&reader);
+    var c = try cache.Cache.read(testing.allocator, &reader);
+    defer c.deinit(testing.allocator);
 
-    try testing.expectEqual(cache.VERSION, header.version);
-    try testing.expectEqual(@as(u32, 2), header.entry_count);
+    try testing.expectEqual(cache.VERSION, c.header.version);
+    try testing.expectEqual(@as(u32, 2), c.header.entry_count);
+    try testing.expectEqual(@as(usize, 2), c.entries.items.len);
 }
 
-test "readHeader returns UnsupportedVersion for wrong version" {
+test "Cache.read returns UnsupportedVersion for wrong version" {
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
 
@@ -159,10 +142,10 @@ test "readHeader returns UnsupportedVersion for wrong version" {
     try writer.writeAll(&(.{0} ** 50));
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
-    try testing.expectError(InspectError.UnsupportedVersion, readHeader(&reader));
+    try testing.expectError(error.UnsupportedVersion, cache.Cache.read(testing.allocator, &reader));
 }
 
-test "readHeader accepts zero entries" {
+test "Cache.read accepts zero entries" {
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
 
@@ -171,13 +154,20 @@ test "readHeader accepts zero entries" {
     try writer.writeInt(u32, 0, .little);
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
-    const header = try readHeader(&reader);
-    try testing.expectEqual(@as(u32, 0), header.entry_count);
+    var c = try cache.Cache.read(testing.allocator, &reader);
+    defer c.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 0), c.header.entry_count);
+    try testing.expectEqual(@as(usize, 0), c.entries.items.len);
 }
 
-test "readEntry parses entry fields correctly" {
+test "Cache.read parses entry fields correctly" {
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
+
+    try writer.writeAll(cache.MAGIC);
+    try writer.writeInt(u16, cache.VERSION, .little);
+    try writer.writeInt(u32, 1, .little);
 
     try writer.writeInt(u64, 0xAABBCCDD, .little);
     try writer.writeInt(u64, 0x11223344, .little);
@@ -193,11 +183,11 @@ test "readEntry parses entry fields correctly" {
     try writer.writeInt(u16, cooked_path.len, .little);
     try writer.writeAll(cooked_path);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
-    const entry = try readEntry(testing.allocator, &reader);
-    defer testing.allocator.free(entry.source_path);
-    defer testing.allocator.free(entry.cooked_path);
+    var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
+    var c = try cache.Cache.read(testing.allocator, &reader);
+    defer c.deinit(testing.allocator);
 
+    const entry = c.entries.items[0];
     try testing.expectEqual(@as(u64, 0xAABBCCDD), entry.source_path_hash);
     try testing.expectEqual(@as(u64, 0x11223344), entry.content_hash);
     try testing.expectEqual(@as(u64, 1024), entry.source_size);

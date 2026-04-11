@@ -59,14 +59,6 @@ pub const CookCommand = struct {
         var cache = Cache.init(self.source);
         defer cache.deinit(self.allocator);
 
-        var cooked_filenames: std.ArrayListUnmanaged([]u8) = .empty;
-        defer {
-            for (cooked_filenames.items) |f| {
-                self.allocator.free(f);
-            }
-            cooked_filenames.deinit(self.allocator);
-        }
-
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
@@ -87,7 +79,7 @@ pub const CookCommand = struct {
                 log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
                 continue;
             };
-            try cooked_filenames.append(self.allocator, cooked.path);
+            defer self.allocator.free(cooked.path);
             defer cooked.file.close(self.io);
 
             var buf: [8192]u8 = undefined;
@@ -110,7 +102,7 @@ pub const CookCommand = struct {
 
             try cache.pushCacheEntry(
                 self.allocator,
-                try CacheEntry.create(self.io, self.source, entry, cooked.path, cooked_stat.size),
+                try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
             );
 
             asset_node.end();
