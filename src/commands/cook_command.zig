@@ -78,13 +78,14 @@ pub const CookCommand = struct {
             const asset_node = cook_node.start(entry.path, 0);
 
             const start = std.Io.Clock.Timestamp.now(self.io, .awake);
+            var staleness: ?Staleness = null;
             if (cache.lookupEntry(entry)) |cache_entry| {
-                const staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
+                staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
                 if (staleness == .cached) {
                     log.debug("{s} is cached, not cooking", .{entry.path});
                     continue;
                 }
-                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness) });
+                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });
             }
 
             const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
@@ -112,10 +113,18 @@ pub const CookCommand = struct {
             var duration_buf: [32]u8 = undefined;
             log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
 
-            try cache.pushCacheEntry(
-                self.allocator,
-                try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
-            );
+            if (staleness != null) {
+                try cache.overWriteCacheEntry(
+                    self.allocator,
+                    try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
+                    cache.getIdx(entry).?,
+                );
+            } else {
+                try cache.pushCacheEntry(
+                    self.allocator,
+                    try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
+                );
+            }
 
             asset_node.end();
         }

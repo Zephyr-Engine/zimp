@@ -49,6 +49,10 @@ pub const Cache = struct {
         self.header.entry_count += 1;
     }
 
+    pub fn overWriteCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry, idx: u32) !void {
+        try self.entries.insert(allocator, idx, entry);
+    }
+
     pub fn lookupEntry(self: *const Cache, source_file: SourceFile) ?*const CacheEntry {
         const path_hash = source_file.hashPath();
         if (self.entry_map.get(path_hash)) |entry_idx| {
@@ -56,6 +60,11 @@ pub const Cache = struct {
         }
 
         return null;
+    }
+
+    pub fn getIdx(self: *const Cache, source_file: SourceFile) ?u32 {
+        const path_hash = source_file.hashPath();
+        return self.entry_map.get(path_hash);
     }
 
     pub fn write(self: *const Cache, io: std.Io) !void {
