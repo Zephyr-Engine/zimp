@@ -1,8 +1,10 @@
 const std = @import("std");
 
-const fnv1a = @import("../assets/source_file.zig").fnv1a;
+const source_file_mod = @import("../assets/source_file.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
 const CacheEntry = @import("entry.zig").CacheEntry;
+const fnv1a = source_file_mod.fnv1a;
+const SourceFile = source_file_mod.SourceFile;
 
 pub const VERSION = 1;
 pub const MAGIC = "ZACHE";
@@ -47,6 +49,15 @@ pub const Cache = struct {
         self.header.entry_count += 1;
     }
 
+    pub fn lookupEntry(self: *const Cache, source_file: SourceFile) ?*const CacheEntry {
+        const path_hash = source_file.hashPath();
+        if (self.entry_map.get(path_hash)) |entry_idx| {
+            return &self.entries.items[entry_idx];
+        }
+
+        return null;
+    }
+
     pub fn write(self: *const Cache, io: std.Io) !void {
         const cwd = std.Io.Dir.cwd();
         const file = try cwd.createFile(io, "tmp.zcache", .{});
@@ -77,6 +88,26 @@ pub const Cache = struct {
         file.close(io);
 
         try cwd.rename("tmp.zcache", cwd, ".zcache", io);
+    }
+
+    pub fn readFromDir(allocator: std.mem.Allocator, io: std.Io, source_dir: std.Io.Dir) !Cache {
+        const cwd = std.Io.Dir.cwd();
+        const file = try cwd.openFile(io, ".zcache", .{});
+        defer file.close(io);
+
+        var buf: [8192]u8 = undefined;
+        var file_reader = file.reader(io, &buf);
+        var reader = &file_reader.interface;
+
+        var magic: [MAGIC.len]u8 = undefined;
+        _ = try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, MAGIC)) {
+            return error.InvalidMagic;
+        }
+
+        var cache = try read(allocator, reader);
+        cache.source_dir = source_dir;
+        return cache;
     }
 
     pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Cache {
@@ -190,7 +221,7 @@ fn writeTestCache(writer: *std.Io.Writer, entries: []const CacheEntry) !void {
 // ── Cache.init ──
 
 test "init returns empty cache" {
-    const c = Cache.init(.cwd());
+    const c = Cache.init(testing.allocator, .cwd());
     try testing.expectEqual(@as(u32, 0), c.header.entry_count);
     try testing.expectEqual(@as(usize, 0), c.entries.items.len);
     try testing.expectEqual(VERSION, c.header.version);
@@ -199,7 +230,7 @@ test "init returns empty cache" {
 // ── Cache.deinit ──
 
 test "deinit frees allocated entry paths" {
-    var c = Cache.init(.cwd());
+    var c = Cache.init(testing.allocator, .cwd());
     const entry = try makeTestEntry(testing.allocator, "src/model.glb", "model.zmesh");
     try c.pushCacheEntry(testing.allocator, entry);
     c.deinit(testing.allocator);
@@ -207,14 +238,14 @@ test "deinit frees allocated entry paths" {
 }
 
 test "deinit on empty cache does not error" {
-    var c = Cache.init(.cwd());
+    var c = Cache.init(testing.allocator, .cwd());
     c.deinit(testing.allocator);
 }
 
 // ── pushCacheEntry ──
 
 test "pushCacheEntry adds entry and increments count" {
-    var c = Cache.init(.cwd());
+    var c = Cache.init(testing.allocator, .cwd());
     defer c.deinit(testing.allocator);
 
     const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -226,7 +257,7 @@ test "pushCacheEntry adds entry and increments count" {
 }
 
 test "pushCacheEntry multiple entries" {
-    var c = Cache.init(.cwd());
+    var c = Cache.init(testing.allocator, .cwd());
     defer c.deinit(testing.allocator);
 
     for (0..5) |_| {
@@ -399,7 +430,7 @@ test "write then read round-trip preserves all fields" {
     defer tmp.cleanup();
 
     // Build a cache with entries
-    var c = Cache.init(tmp.dir);
+    var c = Cache.init(testing.allocator, tmp.dir);
     defer c.deinit(testing.allocator);
 
     const entry1 = try makeTestEntry(testing.allocator, "models/hero.glb", "hero.zmesh");
@@ -438,7 +469,7 @@ test "write then read round-trip preserves all fields" {
 }
 
 test "write then read round-trip with zero entries" {
-    var c = Cache.init(.cwd());
+    var c = Cache.init(testing.allocator, .cwd());
     defer c.deinit(testing.allocator);
 
     var buf: [4096]u8 = undefined;

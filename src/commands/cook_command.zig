@@ -1,10 +1,11 @@
 const std = @import("std");
 
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
+const Staleness = @import("../cache/staleness.zig").Staleness;
+const CacheEntry = @import("../cache/entry.zig").CacheEntry;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
 const cache_mod = @import("../cache/cache.zig");
 const log = @import("../logger.zig");
-const CacheEntry = @import("../cache/entry.zig").CacheEntry;
 const Cache = cache_mod.Cache;
 
 pub const CookError = error{
@@ -56,7 +57,10 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
-        var cache = Cache.init(self.allocator, self.source);
+        var cache = Cache.readFromDir(self.allocator, self.io, self.source) catch |err| blk: {
+            log.debug("No existing cache found ({s}), starting fresh", .{@errorName(err)});
+            break :blk Cache.init(self.allocator, self.source);
+        };
         defer cache.deinit(self.allocator);
 
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
@@ -74,6 +78,14 @@ pub const CookCommand = struct {
             const asset_node = cook_node.start(entry.path, 0);
 
             const start = std.Io.Clock.Timestamp.now(self.io, .awake);
+            if (cache.lookupEntry(entry)) |cache_entry| {
+                const staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
+                if (staleness == .cached) {
+                    log.debug("{s} is cached, not cooking", .{entry.path});
+                    continue;
+                }
+                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness) });
+            }
 
             const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
                 log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });

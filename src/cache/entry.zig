@@ -1,8 +1,8 @@
 const std = @import("std");
 const source_file_mod = @import("../assets/source_file.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
-const SourceFile = source_file_mod.SourceFile;
 const fnv1a = source_file_mod.fnv1a;
+const SourceFile = source_file_mod.SourceFile;
 
 pub const CacheEntry = struct {
     source_path: []const u8,
