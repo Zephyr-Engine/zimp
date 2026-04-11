@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn formatBytes(buf: []u8, size: u64) []const u8 {
     if (size < 1024) {
-        return std.fmt.bufPrint(buf, "{d} B", .{size}) catch unreachable;
+        return std.fmt.bufPrint(buf, "{d} B ", .{size}) catch unreachable;
     }
 
     if (size < 1024 * 1024) {
@@ -46,17 +46,17 @@ const testing = std.testing;
 
 test "formatBytes: 0 bytes" {
     var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("0 B", formatBytes(&buf, 0));
+    try testing.expectEqualStrings("0 B ", formatBytes(&buf, 0));
 }
 
 test "formatBytes: small byte count" {
     var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("512 B", formatBytes(&buf, 512));
+    try testing.expectEqualStrings("512 B ", formatBytes(&buf, 512));
 }
 
 test "formatBytes: exactly 1023 bytes stays in bytes" {
     var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("1023 B", formatBytes(&buf, 1023));
+    try testing.expectEqualStrings("1023 B ", formatBytes(&buf, 1023));
 }
 
 test "formatBytes: 1024 bytes shows as 1.0 KB" {

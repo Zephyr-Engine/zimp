@@ -63,10 +63,10 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Entries:", .{});
-    log.info("  {s: <30}  {s: <18}  {s: <18}  {s: <10}  {s: <22}  {s: <20}  {s: <18}  {s: <10}  {s: <8}", .{
+    log.info("  {s: <35}  {s: <18}  {s: <18}  {s: <10}  {s: <22}  {s: <20}  {s: <18}  {s: <10}  {s: <8}", .{
         "source", "source_hash", "content_hash", "src_size", "last_updated", "cooked", "cooked_hash", "cook_size", "type",
     });
-    log.info("  {s}", .{"-" ** 166});
+    log.info("  {s}", .{"-" ** 171});
 
     var total_source_size: u64 = 0;
     var total_cooked_size: u64 = 0;
@@ -83,7 +83,7 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         var size2: [16]u8 = undefined;
         var ts: [24]u8 = undefined;
 
-        log.info("  {s: <30}  {s: >18}  {s: >18}  {s: <10}  {s: <22}  {s: <20}  {s: >18}  {s: <10}  {s: <8}", .{
+        log.info("  {s: <35}  {s: >18}  {s: >18}  {s: <10}  {s: <22}  {s: <20}  {s: >18}  {s: <10}  {s: <8}", .{
             entry.source_path,
             fmt.formatHash(&hash1, entry.source_path_hash),
             fmt.formatHash(&hash2, entry.content_hash),
@@ -182,7 +182,7 @@ test "readEntry parses entry fields correctly" {
     try writer.writeInt(u64, 0xAABBCCDD, .little);
     try writer.writeInt(u64, 0x11223344, .little);
     try writer.writeInt(u64, 1024, .little);
-    try writer.writeInt(i64, 1775606400 * std.time.ns_per_s, .little);
+    try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little);
     try writer.writeInt(u64, 0x55667788, .little);
     try writer.writeInt(u64, 512, .little);
     try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little);
@@ -230,7 +230,7 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
         try writer.writeInt(u64, 0x1000 + i, .little); // source_path_hash
         try writer.writeInt(u64, 0x2000 + i, .little); // content_hash
         try writer.writeInt(u64, 4096 * (i + 1), .little); // source_size
-        try writer.writeInt(i64, 1775606400 * std.time.ns_per_s, .little); // source_mtime
+        try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little); // source_mtime
         try writer.writeInt(u64, 0x3000 + i, .little); // cooked_path_hash
         try writer.writeInt(u64, 2048 * (i + 1), .little); // cooked_size
         try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little); // asset_type
