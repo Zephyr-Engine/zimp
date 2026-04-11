@@ -1,4 +1,4 @@
-name: Test
+name: Zig
 
 on:
   push:
