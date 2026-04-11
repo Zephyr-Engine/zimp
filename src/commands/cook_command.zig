@@ -73,6 +73,11 @@ pub const CookCommand = struct {
 
         defer source_scanner.deinit(&list);
 
+        const pruned = cache.pruneDeleted(self.allocator, list.items);
+        if (pruned > 0) {
+            log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
+        }
+
         const total_start = std.Io.Clock.Timestamp.now(self.io, .awake);
 
         const cook_node = progress.start("Cooking assets", list.items.len);

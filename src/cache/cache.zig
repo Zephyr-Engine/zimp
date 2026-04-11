@@ -5,6 +5,7 @@ const AssetType = @import("../assets/asset.zig").AssetType;
 const CacheEntry = @import("entry.zig").CacheEntry;
 const fnv1a = source_file_mod.fnv1a;
 const SourceFile = source_file_mod.SourceFile;
+const log = @import("../logger.zig");
 
 pub const VERSION = 1;
 pub const MAGIC = "ZACHE";
@@ -69,6 +70,43 @@ pub const Cache = struct {
         }
 
         return null;
+    }
+
+    pub fn pruneDeleted(self: *Cache, allocator: std.mem.Allocator, source_files: []const SourceFile) u32 {
+        var removed: u32 = 0;
+        var i: usize = 0;
+        while (i < self.entries.items.len) {
+            const entry = self.entries.items[i];
+            var found = false;
+            for (source_files) |sf| {
+                if (sf.hashPath() == entry.source_path_hash) {
+                    found = true;
+                    break;
+                }
+            }
+
+            if (!found) {
+                log.debug("Source file not found, removing cooked file {s}", .{entry.cooked_path});
+                allocator.free(entry.source_path);
+                allocator.free(entry.cooked_path);
+                _ = self.entries.orderedRemove(i);
+                _ = self.entry_map.remove(entry.source_path_hash);
+                self.header.entry_count -= 1;
+                removed += 1;
+            } else {
+                i += 1;
+            }
+        }
+
+        // Rebuild entry_map indices after removals
+        if (removed > 0) {
+            self.entry_map.clearRetainingCapacity();
+            for (self.entries.items, 0..) |entry, idx| {
+                self.entry_map.putAssumeCapacity(entry.source_path_hash, @intCast(idx));
+            }
+        }
+
+        return removed;
     }
 
     pub fn getIdx(self: *const Cache, source_file: SourceFile) ?u32 {
