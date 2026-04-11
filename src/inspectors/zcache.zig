@@ -83,7 +83,7 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         var size2: [16]u8 = undefined;
         var ts: [24]u8 = undefined;
 
-        log.info("  {s: <30}  {s: >18}  {s: >18}  {s: >10}  {s: >22}  {s: <20}  {s: >18}  {s: >10}  {s: <8}", .{
+        log.info("  {s: <30}  {s: >18}  {s: >18}  {s: <10}  {s: <22}  {s: <20}  {s: >18}  {s: <10}  {s: <8}", .{
             entry.source_path,
             fmt.formatHash(&hash1, entry.source_path_hash),
             fmt.formatHash(&hash2, entry.content_hash),
