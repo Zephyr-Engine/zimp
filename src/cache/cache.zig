@@ -95,6 +95,7 @@ pub const Cache = struct {
             try io_writer.writeInt(i96, entry.source_mtime, .little);
             try io_writer.writeInt(u64, entry.cooked_path_hash, .little);
             try io_writer.writeInt(u64, entry.cooked_size, .little);
+            try io_writer.writeInt(i96, entry.cooked_at, .little);
             try io_writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
             try io_writer.writeInt(u16, @intCast(entry.source_path.len), .little);
             try io_writer.writeAll(entry.source_path);
@@ -154,6 +155,7 @@ pub const Cache = struct {
             const source_mtime = try reader.takeInt(i96, .little);
             const cooked_path_hash = try reader.takeInt(u64, .little);
             const cooked_size = try reader.takeInt(u64, .little);
+            const cooked_at = try reader.takeInt(i96, .little);
             const asset_type: AssetType = @enumFromInt(try reader.takeInt(u16, .little));
 
             const source_path_len = try reader.takeInt(u16, .little);
@@ -175,6 +177,7 @@ pub const Cache = struct {
                 .cooked_path = cooked_path,
                 .cooked_path_hash = cooked_path_hash,
                 .cooked_size = cooked_size,
+                .cooked_at = cooked_at,
                 .asset_type = asset_type,
             });
         }
@@ -212,6 +215,7 @@ fn makeTestEntry(allocator: std.mem.Allocator, source_path: []const u8, cooked_p
         .cooked_path = owned_cooked,
         .cooked_path_hash = fnv1a(cooked_path),
         .cooked_size = 512,
+        .cooked_at = 1775606400 * std.time.ns_per_s,
         .asset_type = .mesh,
     };
 }
@@ -228,6 +232,7 @@ fn writeTestCache(writer: *std.Io.Writer, entries: []const CacheEntry) !void {
         try writer.writeInt(i96, entry.source_mtime, .little);
         try writer.writeInt(u64, entry.cooked_path_hash, .little);
         try writer.writeInt(u64, entry.cooked_size, .little);
+        try writer.writeInt(i96, entry.cooked_at, .little);
         try writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
         try writer.writeInt(u16, @intCast(entry.source_path.len), .little);
         try writer.writeAll(entry.source_path);
@@ -304,6 +309,7 @@ test "read parses single entry with all fields" {
         .cooked_path = cooked,
         .cooked_path_hash = 0xCCCC,
         .cooked_size = 1024,
+        .cooked_at = 1775606400 * std.time.ns_per_s,
         .asset_type = .mesh,
     };
     try writeTestCache(&writer, &.{entry});
@@ -339,6 +345,7 @@ test "read parses multiple entries" {
             .cooked_path = "a.zmesh",
             .cooked_path_hash = 3,
             .cooked_size = 50,
+            .cooked_at = 0,
             .asset_type = .mesh,
         },
         .{
@@ -350,6 +357,7 @@ test "read parses multiple entries" {
             .cooked_path = "b.zmesh",
             .cooked_path_hash = 6,
             .cooked_size = 75,
+            .cooked_at = 0,
             .asset_type = .unknown,
         },
     };
@@ -403,6 +411,7 @@ test "read handles entry with empty paths" {
         .cooked_path = "",
         .cooked_path_hash = 0,
         .cooked_size = 0,
+        .cooked_at = 0,
         .asset_type = .unknown,
     };
     try writeTestCache(&writer, &.{entry});

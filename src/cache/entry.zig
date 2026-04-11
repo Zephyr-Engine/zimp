@@ -13,6 +13,7 @@ pub const CacheEntry = struct {
     cooked_path: []const u8,
     cooked_path_hash: u64,
     cooked_size: u64,
+    cooked_at: i96,
     asset_type: AssetType,
 
     pub fn create(
@@ -29,6 +30,8 @@ pub const CacheEntry = struct {
         errdefer allocator.free(owned_source);
         const owned_cooked = try allocator.dupe(u8, cooked_path);
 
+        const now = std.Io.Clock.Timestamp.now(io, .real);
+
         return .{
             .source_path = owned_source,
             .source_path_hash = source_file.hashPath(),
@@ -38,6 +41,7 @@ pub const CacheEntry = struct {
             .cooked_path = owned_cooked,
             .cooked_path_hash = fnv1a(cooked_path),
             .cooked_size = cooked_size,
+            .cooked_at = now.raw.nanoseconds,
             .asset_type = source_file.assetType,
         };
     }

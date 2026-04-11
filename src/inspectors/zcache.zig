@@ -35,7 +35,7 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Entries:", .{});
-    log.info("  {s} {s: <18}  {s: <18}  {s: <10}  {s: <22}  {s} {s: <18}  {s: <10}  {s: <8}", .{
+    log.info("  {s} {s: <18} {s: <18} {s: <10} {s: <22} {s} {s: <18} {s: <10} {s: <22} {s: <8}", .{
         padRight(source_buf, "source", source_col),
         "source_hash",
         "content_hash",
@@ -44,10 +44,11 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         padRight(cooked_buf, "cooked", cooked_col),
         "cooked_hash",
         "cook_size",
+        "cooked_at",
         "type",
     });
 
-    const dash_len = source_col + cooked_col + 116;
+    const dash_len = source_col + cooked_col + 131;
     const dashes = try allocator.alloc(u8, dash_len);
     defer allocator.free(dashes);
     @memset(dashes, '-');
@@ -63,8 +64,9 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         var size1: [16]u8 = undefined;
         var size2: [16]u8 = undefined;
         var ts: [24]u8 = undefined;
+        var ts2: [24]u8 = undefined;
 
-        log.info("  {s} {s: >18}  {s: >18}  {s: <10}  {s: <22}  {s} {s: >18}  {s: <10}  {s: <8}", .{
+        log.info("  {s} {s: >18} {s: >18} {s: <10} {s: <22} {s} {s: >18} {s: <10} {s: <22} {s: <8}", .{
             padRight(source_buf, entry.source_path, source_col),
             fmt.formatHash(&hash1, entry.source_path_hash),
             fmt.formatHash(&hash2, entry.content_hash),
@@ -73,6 +75,7 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             padRight(cooked_buf, entry.cooked_path, cooked_col),
             fmt.formatHash(&hash3, entry.cooked_path_hash),
             fmt.formatBytes(&size2, entry.cooked_size),
+            fmt.formatTimestamp(&ts2, entry.cooked_at),
             @tagName(entry.asset_type),
         });
 
@@ -175,6 +178,7 @@ test "Cache.read parses entry fields correctly" {
     try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little);
     try writer.writeInt(u64, 0x55667788, .little);
     try writer.writeInt(u64, 512, .little);
+    try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little);
     try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little);
     const source_path = "meshes/triangle.glb";
     try writer.writeInt(u16, source_path.len, .little);
@@ -223,6 +227,7 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
         try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little); // source_mtime
         try writer.writeInt(u64, 0x3000 + i, .little); // cooked_path_hash
         try writer.writeInt(u64, 2048 * (i + 1), .little); // cooked_size
+        try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little); // cooked_at
         try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little); // asset_type
         const source_path = "meshes/test.glb";
         try writer.writeInt(u16, source_path.len, .little);
