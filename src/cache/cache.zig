@@ -17,7 +17,7 @@ pub const CacheEntry = struct {
     source_path_hash: u64,
     content_hash: u64,
     source_size: u64,
-    source_mtime: i64,
+    source_mtime: i96,
     cooked_path_hash: u64,
     cooked_size: u64,
     asset_type: AssetType,
@@ -60,8 +60,8 @@ pub const Cache = struct {
         self.entries.deinit(allocator);
     }
 
-    pub fn pushCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry) void {
-        self.entries = self.entries.append(allocator, entry);
+    pub fn pushCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry) !void {
+        try self.entries.append(allocator, entry);
         self.header.entry_count += 1;
     }
 
@@ -81,7 +81,7 @@ pub const Cache = struct {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
             try io_writer.writeInt(u64, entry.content_hash, .little);
             try io_writer.writeInt(u64, entry.source_size, .little);
-            try io_writer.writeInt(i64, entry.source_mtime, .little);
+            try io_writer.writeInt(i96, entry.source_mtime, .little);
             try io_writer.writeInt(u64, entry.cooked_path_hash, .little);
             try io_writer.writeInt(u64, entry.cooked_size, .little);
             try io_writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);

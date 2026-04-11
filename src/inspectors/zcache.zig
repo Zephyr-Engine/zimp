@@ -30,7 +30,7 @@ fn readEntry(reader: *std.Io.Reader) !cache.CacheEntry {
         .source_path_hash = try reader.takeInt(u64, .little),
         .content_hash = try reader.takeInt(u64, .little),
         .source_size = try reader.takeInt(u64, .little),
-        .source_mtime = try reader.takeInt(i64, .little),
+        .source_mtime = try reader.takeInt(i96, .little),
         .cooked_path_hash = try reader.takeInt(u64, .little),
         .cooked_size = try reader.takeInt(u64, .little),
         .asset_type = @enumFromInt(try reader.takeInt(u16, .little)),
@@ -46,9 +46,9 @@ fn inspectZCache(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("", .{});
     log.info("Entries:", .{});
     log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >10}  {s: >22}  {s: >18}  {s: >10}  {s: <8}", .{
-        "index", "source_hash", "content_hash", "src_size", "mtime", "cooked_hash", "cook_size", "type",
+        "index", "source_hash", "content_hash", "src_size", "last_updated", "cooked_hash", "cook_size", "type",
     });
-    log.info("  {s}", .{"-" ** 120});
+    log.info("  {s}", .{"-" ** 119});
 
     var total_source_size: u64 = 0;
     var total_cooked_size: u64 = 0;

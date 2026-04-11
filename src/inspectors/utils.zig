@@ -23,7 +23,7 @@ pub fn formatHash(buf: []u8, hash: u64) []const u8 {
     return std.fmt.bufPrint(buf, "0x{x:0>16}", .{hash}) catch unreachable;
 }
 
-pub fn formatTimestamp(buf: []u8, ns: i64) []const u8 {
+pub fn formatTimestamp(buf: []u8, ns: i96) []const u8 {
     const secs: u64 = @intCast(@divTrunc(ns, std.time.ns_per_s));
 
     const epoch = std.time.epoch.EpochSeconds{ .secs = secs };

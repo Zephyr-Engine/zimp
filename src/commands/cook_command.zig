@@ -2,8 +2,10 @@ const std = @import("std");
 
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
-const Cache = @import("../cache/cache.zig").Cache;
+const cache_lib = @import("../cache/cache.zig");
 const log = @import("../logger.zig");
+const CacheEntry = cache_lib.CacheEntry;
+const Cache = cache_lib.Cache;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -96,6 +98,11 @@ pub const CookCommand = struct {
             log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
 
             asset_node.end();
+
+            try cache.pushCacheEntry(
+                self.allocator,
+                try CacheEntry.create(self.io, self.source, entry),
+            );
         }
 
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
