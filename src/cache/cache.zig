@@ -6,8 +6,9 @@ const AssetType = @import("../assets/asset.zig").AssetType;
 pub const VERSION = 1;
 pub const MAGIC = "ZACHE";
 
-pub const CacheHeader = extern struct {
-    magic: [5]u8 = MAGIC.*,
+pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32); // magic + version + entry_count
+
+pub const CacheHeader = struct {
     version: u16 = VERSION,
     entry_count: u32,
 };
@@ -72,7 +73,9 @@ pub const Cache = struct {
         var writer = file.writer(io, &buf);
         var io_writer = &writer.interface;
 
-        try io_writer.writeStruct(self.header, .little);
+        try io_writer.writeAll(MAGIC);
+        try io_writer.writeInt(u16, self.header.version, .little);
+        try io_writer.writeInt(u32, self.header.entry_count, .little);
 
         for (self.entries.items) |entry| {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
