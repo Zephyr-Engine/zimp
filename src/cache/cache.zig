@@ -124,7 +124,16 @@ pub const Cache = struct {
             return error.InvalidMagic;
         }
 
-        var cache = try read(allocator, reader);
+        const version = try reader.takeInt(u16, .little);
+        if (version == 0 or version > VERSION) {
+            return error.UnsupportedVersion;
+        }
+
+        if (version < VERSION) {
+            return error.StaleVersion;
+        }
+
+        var cache = try readEntries(allocator, version, reader);
         cache.source_dir = source_dir;
         return cache;
     }
@@ -135,6 +144,10 @@ pub const Cache = struct {
             return error.UnsupportedVersion;
         }
 
+        return readEntries(allocator, version, reader);
+    }
+
+    fn readEntries(allocator: std.mem.Allocator, version: u16, reader: *std.Io.Reader) !Cache {
         const entry_count = try reader.takeInt(u32, .little);
 
         var entries: std.ArrayList(CacheEntry) = .empty;

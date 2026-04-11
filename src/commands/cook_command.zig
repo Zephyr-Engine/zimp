@@ -58,7 +58,12 @@ pub const CookCommand = struct {
 
     pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
         var cache = Cache.readFromDir(self.allocator, self.io, self.source) catch |err| blk: {
-            log.debug("No existing cache found ({s}), starting fresh", .{@errorName(err)});
+            switch (err) {
+                error.StaleVersion => log.debug("Outdated cache version found, rebuilding entire cache", .{}),
+                error.UnsupportedVersion => log.debug("Corrupt cache found, rebuilding entire cache", .{}),
+                error.FileNotFound => log.debug("No existing cache found, starting fresh", .{}),
+                else => log.debug("Failed to read cache ({s}), starting fresh", .{@errorName(err)}),
+            }
             break :blk Cache.init(self.allocator, self.source);
         };
         defer cache.deinit(self.allocator);
