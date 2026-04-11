@@ -89,6 +89,7 @@ test "create populates all fields from source file" {
     try testing.expectEqual(AssetType.mesh, entry.asset_type);
     try testing.expect(entry.content_hash != 0);
     try testing.expect(entry.source_mtime != 0);
+    try testing.expect(entry.cooked_at != 0);
 }
 
 test "create owns copies of paths" {
@@ -121,7 +122,6 @@ test "create owns copies of paths" {
         testing.allocator.free(entry.cooked_path);
     }
 
-    // Paths are owned copies, not aliases to the input
     try testing.expect(entry.source_path.ptr != mutable_path.ptr);
     try testing.expectEqualStrings("test.glb", entry.source_path);
 }

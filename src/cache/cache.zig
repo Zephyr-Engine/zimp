@@ -292,8 +292,6 @@ fn writeTestCache(writer: *std.Io.Writer, entries: []const CacheEntry) !void {
     }
 }
 
-// ── Cache.init ──
-
 test "init returns empty cache" {
     const c = Cache.init(testing.allocator, .cwd());
     try testing.expectEqual(@as(u32, 0), c.header.entry_count);
@@ -301,22 +299,17 @@ test "init returns empty cache" {
     try testing.expectEqual(VERSION, c.header.version);
 }
 
-// ── Cache.deinit ──
-
 test "deinit frees allocated entry paths" {
     var c = Cache.init(testing.allocator, .cwd());
     const entry = try makeTestEntry(testing.allocator, "src/model.glb", "model.zmesh");
     try c.pushCacheEntry(testing.allocator, entry);
     c.deinit(testing.allocator);
-    // testing.allocator will panic if any memory is leaked
 }
 
 test "deinit on empty cache does not error" {
     var c = Cache.init(testing.allocator, .cwd());
     c.deinit(testing.allocator);
 }
-
-// ── pushCacheEntry ──
 
 test "pushCacheEntry adds entry and increments count" {
     var c = Cache.init(testing.allocator, .cwd());
@@ -343,7 +336,167 @@ test "pushCacheEntry multiple entries" {
     try testing.expectEqual(@as(usize, 5), c.entries.items.len);
 }
 
-// ── Cache.read ──
+test "lookupEntry returns entry when path hash matches" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, entry);
+    try c.entry_map.put(entry.source_path_hash, 0);
+
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const found = c.lookupEntry(sf);
+    try testing.expect(found != null);
+    try testing.expectEqualStrings("a.glb", found.?.source_path);
+}
+
+test "lookupEntry returns null when not found" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const sf = SourceFile{ .path = "missing.glb", .extension = .glb, .assetType = .mesh };
+    try testing.expect(c.lookupEntry(sf) == null);
+}
+
+test "lookupEntryMut returns mutable entry" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, entry);
+    try c.entry_map.put(entry.source_path_hash, 0);
+
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const found = c.lookupEntryMut(sf);
+    try testing.expect(found != null);
+    found.?.source_mtime = 42;
+    try testing.expectEqual(@as(i96, 42), c.entries.items[0].source_mtime);
+}
+
+test "lookupEntryMut returns null when not found" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const sf = SourceFile{ .path = "missing.glb", .extension = .glb, .assetType = .mesh };
+    try testing.expect(c.lookupEntryMut(sf) == null);
+}
+
+test "getIdx returns index when entry exists" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, entry);
+    try c.entry_map.put(entry.source_path_hash, 0);
+
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    try testing.expectEqual(@as(u32, 0), c.getIdx(sf).?);
+}
+
+test "getIdx returns null when entry does not exist" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const sf = SourceFile{ .path = "missing.glb", .extension = .glb, .assetType = .mesh };
+    try testing.expect(c.getIdx(sf) == null);
+}
+
+test "pruneDeleted removes entries not in source list" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, e1);
+    try c.entry_map.put(e1.source_path_hash, 0);
+
+    const e2 = try makeTestEntry(testing.allocator, "b.glb", "b.zmesh");
+    try c.pushCacheEntry(testing.allocator, e2);
+    try c.entry_map.put(e2.source_path_hash, 1);
+
+    const source_files = [_]SourceFile{
+        .{ .path = "a.glb", .extension = .glb, .assetType = .mesh },
+    };
+
+    const removed = c.pruneDeleted(testing.allocator, &source_files);
+    try testing.expectEqual(@as(u32, 1), removed);
+    try testing.expectEqual(@as(u32, 1), c.header.entry_count);
+    try testing.expectEqual(@as(usize, 1), c.entries.items.len);
+    try testing.expectEqualStrings("a.glb", c.entries.items[0].source_path);
+}
+
+test "pruneDeleted returns zero when all entries present" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, e1);
+    try c.entry_map.put(e1.source_path_hash, 0);
+
+    const source_files = [_]SourceFile{
+        .{ .path = "a.glb", .extension = .glb, .assetType = .mesh },
+    };
+
+    const removed = c.pruneDeleted(testing.allocator, &source_files);
+    try testing.expectEqual(@as(u32, 0), removed);
+    try testing.expectEqual(@as(u32, 1), c.header.entry_count);
+}
+
+test "pruneDeleted removes all entries when source list is empty" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, e1);
+    try c.entry_map.put(e1.source_path_hash, 0);
+
+    const e2 = try makeTestEntry(testing.allocator, "b.glb", "b.zmesh");
+    try c.pushCacheEntry(testing.allocator, e2);
+    try c.entry_map.put(e2.source_path_hash, 1);
+
+    const empty: []const SourceFile = &.{};
+    const removed = c.pruneDeleted(testing.allocator, empty);
+    try testing.expectEqual(@as(u32, 2), removed);
+    try testing.expectEqual(@as(u32, 0), c.header.entry_count);
+    try testing.expectEqual(@as(usize, 0), c.entries.items.len);
+}
+
+test "pruneDeleted rebuilds entry_map with correct indices" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, e1);
+    try c.entry_map.put(e1.source_path_hash, 0);
+
+    const e2 = try makeTestEntry(testing.allocator, "b.glb", "b.zmesh");
+    try c.pushCacheEntry(testing.allocator, e2);
+    try c.entry_map.put(e2.source_path_hash, 1);
+
+    const e3 = try makeTestEntry(testing.allocator, "c.glb", "c.zmesh");
+    try c.pushCacheEntry(testing.allocator, e3);
+    try c.entry_map.put(e3.source_path_hash, 2);
+
+    const source_files = [_]SourceFile{
+        .{ .path = "a.glb", .extension = .glb, .assetType = .mesh },
+        .{ .path = "c.glb", .extension = .glb, .assetType = .mesh },
+    };
+
+    _ = c.pruneDeleted(testing.allocator, &source_files);
+
+    const sf_a = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const sf_c = SourceFile{ .path = "c.glb", .extension = .glb, .assetType = .mesh };
+    try testing.expectEqual(@as(u32, 0), c.getIdx(sf_a).?);
+    try testing.expectEqual(@as(u32, 1), c.getIdx(sf_c).?);
+}
+
+test "pruneDeleted on empty cache returns zero" {
+    var c = Cache.init(testing.allocator, .cwd());
+    defer c.deinit(testing.allocator);
+
+    const empty: []const SourceFile = &.{};
+    const removed = c.pruneDeleted(testing.allocator, empty);
+    try testing.expectEqual(@as(u32, 0), removed);
+}
 
 test "read parses single entry with all fields" {
     const source = "meshes/cube.glb";
@@ -482,7 +635,6 @@ test "read errors on truncated entry data" {
     try writer.writeAll(MAGIC);
     try writer.writeInt(u16, VERSION, .little);
     try writer.writeInt(u32, 1, .little);
-    // write only source_path_hash, then stop — truncated
     try writer.writeInt(u64, 0xAAAA, .little);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
@@ -495,19 +647,14 @@ test "read errors on truncated header" {
 
     try writer.writeAll(MAGIC);
     try writer.writeInt(u16, VERSION, .little);
-    // missing entry_count
-
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     try testing.expectError(error.EndOfStream, Cache.read(testing.allocator, &reader));
 }
-
-// ── Write + Read round-trip ──
 
 test "write then read round-trip preserves all fields" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    // Build a cache with entries
     var c = Cache.init(testing.allocator, tmp.dir);
     defer c.deinit(testing.allocator);
 
@@ -521,12 +668,10 @@ test "write then read round-trip preserves all fields" {
     entry2.asset_type = .unknown;
     try c.pushCacheEntry(testing.allocator, entry2);
 
-    // Write to buffer
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
     try writeTestCache(&writer, c.entries.items);
 
-    // Read back
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     var c2 = try Cache.read(testing.allocator, &reader);
     defer c2.deinit(testing.allocator);
@@ -542,6 +687,7 @@ test "write then read round-trip preserves all fields" {
         try testing.expectEqualStrings(original.cooked_path, parsed.cooked_path);
         try testing.expectEqual(original.cooked_path_hash, parsed.cooked_path_hash);
         try testing.expectEqual(original.cooked_size, parsed.cooked_size);
+        try testing.expectEqual(original.cooked_at, parsed.cooked_at);
         try testing.expectEqual(original.asset_type, parsed.asset_type);
     }
 }
@@ -562,9 +708,6 @@ test "write then read round-trip with zero entries" {
     try testing.expectEqual(@as(usize, 0), c2.entries.items.len);
 }
 
-// ── HEADER_SIZE ──
-
 test "HEADER_SIZE matches expected layout" {
-    // magic(5) + version(2) + entry_count(4) = 11
     try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32)), HEADER_SIZE);
 }
