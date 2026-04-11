@@ -12,10 +12,13 @@ pub const FormatInspector = struct {
 };
 
 const zmesh_magic = @import("../formats/zmesh.zig").MAGIC;
+const zcache_magic = @import("../cache/cache.zig").MAGIC;
 const zamesh_inspector = @import("../inspectors/zmesh.zig").inspector();
+const zcache_inspector = @import("../inspectors/zcache.zig").inspector();
 
 pub const inspector_registry = std.StaticStringMap(FormatInspector).initComptime(.{
     .{ zmesh_magic, zamesh_inspector },
+    .{ zcache_magic, zcache_inspector },
 });
 
 const testing = std.testing;

@@ -31,5 +31,8 @@ test {
     _ = @import("gltf/mesh.zig");
     _ = @import("inspectors/inspect.zig");
     _ = @import("inspectors/zmesh.zig");
+    _ = @import("inspectors/zcache.zig");
     _ = @import("inspectors/utils.zig");
+    _ = @import("cache/cache.zig");
+    _ = @import("cache/entry.zig");
 }

@@ -1,4 +1,4 @@
-name: Build
+name: Zig
 
 on:
   push:
@@ -18,5 +18,13 @@ jobs:
       - name: Build project for release
         run: zig build -Doptimize=ReleaseFast
 
-      - name: Build project
+  test:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    container: jackpar/zig:0.16.0-dev.2694
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Test project
         run: zig build test --summary all

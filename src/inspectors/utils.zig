@@ -2,7 +2,7 @@ const std = @import("std");
 
 pub fn formatBytes(buf: []u8, size: u64) []const u8 {
     if (size < 1024) {
-        return std.fmt.bufPrint(buf, "{d} B", .{size}) catch unreachable;
+        return std.fmt.bufPrint(buf, "{d} B ", .{size}) catch unreachable;
     }
 
     if (size < 1024 * 1024) {
@@ -23,7 +23,7 @@ pub fn formatHash(buf: []u8, hash: u64) []const u8 {
     return std.fmt.bufPrint(buf, "0x{x:0>16}", .{hash}) catch unreachable;
 }
 
-pub fn formatTimestamp(buf: []u8, ns: i64) []const u8 {
+pub fn formatTimestamp(buf: []u8, ns: i96) []const u8 {
     const secs: u64 = @intCast(@divTrunc(ns, std.time.ns_per_s));
 
     const epoch = std.time.epoch.EpochSeconds{ .secs = secs };
@@ -46,17 +46,17 @@ const testing = std.testing;
 
 test "formatBytes: 0 bytes" {
     var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("0 B", formatBytes(&buf, 0));
+    try testing.expectEqualStrings("0 B ", formatBytes(&buf, 0));
 }
 
 test "formatBytes: small byte count" {
     var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("512 B", formatBytes(&buf, 512));
+    try testing.expectEqualStrings("512 B ", formatBytes(&buf, 512));
 }
 
 test "formatBytes: exactly 1023 bytes stays in bytes" {
     var buf: [16]u8 = undefined;
-    try testing.expectEqualStrings("1023 B", formatBytes(&buf, 1023));
+    try testing.expectEqualStrings("1023 B ", formatBytes(&buf, 1023));
 }
 
 test "formatBytes: 1024 bytes shows as 1.0 KB" {

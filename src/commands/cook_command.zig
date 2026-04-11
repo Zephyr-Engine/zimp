@@ -1,8 +1,13 @@
 const std = @import("std");
 
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
+const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
+const Staleness = @import("../cache/staleness.zig").Staleness;
+const CacheEntry = @import("../cache/entry.zig").CacheEntry;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
+const cache_mod = @import("../cache/cache.zig");
 const log = @import("../logger.zig");
+const Cache = cache_mod.Cache;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -53,43 +58,122 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
+        var cache = Cache.readFromDir(self.allocator, self.io, self.source) catch |err| blk: {
+            switch (err) {
+                error.StaleVersion => log.debug("Outdated cache version found, rebuilding entire cache", .{}),
+                error.UnsupportedVersion => log.debug("Corrupt cache found, rebuilding entire cache", .{}),
+                error.FileNotFound => log.debug("No existing cache found, starting fresh", .{}),
+                else => log.debug("Failed to read cache ({s}), starting fresh", .{@errorName(err)}),
+            }
+            break :blk Cache.init(self.allocator, self.source);
+        };
+        defer cache.deinit(self.allocator);
+
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
         defer source_scanner.deinit(&list);
+
+        const pruned = cache.pruneDeleted(self.allocator, list.items);
+        if (pruned > 0) {
+            log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
+        }
 
         const total_start = std.Io.Clock.Timestamp.now(self.io, .awake);
 
         const cook_node = progress.start("Cooking assets", list.items.len);
         defer cook_node.end();
 
+        var cache_count: u32 = 0;
+
         // TODO: parallelize this with zob
         for (list.items) |entry| {
             const asset_node = cook_node.start(entry.path, 0);
 
             const start = std.Io.Clock.Timestamp.now(self.io, .awake);
+            var staleness: ?Staleness = null;
+            if (cache.lookupEntryMut(entry)) |cache_entry| {
+                staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
+                if (staleness == .cached) {
+                    log.debug("{s} is cached, not cooking", .{entry.path});
+                    cache_count += 1;
+                    continue;
+                }
 
-            const file = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
+                if (staleness == .hash_match) {
+                    const info = try entry.getFileInfo(self.source, self.io);
+                    cache_entry.source_mtime = info.modified_ns;
+                    log.debug("{s} hash match, updated mtime", .{entry.path});
+                    continue;
+                }
+
+                if (staleness == .errored) {
+                    log.debug("{s} previously errored, retrying", .{entry.path});
+                } else {
+                    log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });
+                }
+            }
+
+            const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
                 log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
-                return err;
+                continue;
             };
-            defer file.close(self.io);
+            defer self.allocator.free(cooked.path);
+            defer cooked.file.close(self.io);
 
             var buf: [8192]u8 = undefined;
-            var file_writer = file.writer(self.io, &buf);
+            var file_writer = cooked.file.writer(self.io, &buf);
 
-            if (entry.extension == .glb) {
-                var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
-                defer glb_cooker.deinit();
-                try glb_cooker.cook(self.allocator, &file_writer.interface);
+            const cook_failed = blk: {
+                if (entry.extension == .glb) {
+                    var glb_cooker = GLBCooker.init(self.allocator, self.io, self.source, entry.path) catch |err| {
+                        log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
+                        break :blk true;
+                    };
+                    defer glb_cooker.deinit();
+                    glb_cooker.cook(self.allocator, &file_writer.interface) catch |err| {
+                        log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
+                        break :blk true;
+                    };
+                }
+                break :blk false;
+            };
+
+            if (cook_failed) {
+                const errored_entry = CacheEntry.createErrored(self.allocator, self.io, self.source, entry) catch |err| {
+                    log.err("Failed to create errored cache entry for '{s}': {s}", .{ entry.path, @errorName(err) });
+                    continue;
+                };
+
+                if (staleness != null) {
+                    try cache.overWriteCacheEntry(self.allocator, errored_entry, cache.getIdx(entry).?);
+                } else {
+                    try cache.pushCacheEntry(self.allocator, errored_entry);
+                }
+                continue;
             }
 
             try file_writer.flush();
+
+            const cooked_stat = try cooked.file.stat(self.io);
 
             const end = std.Io.Clock.Timestamp.now(self.io, .awake);
             const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
             var duration_buf: [32]u8 = undefined;
             log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
+
+            if (staleness != null) {
+                try cache.overWriteCacheEntry(
+                    self.allocator,
+                    try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
+                    cache.getIdx(entry).?,
+                );
+            } else {
+                try cache.pushCacheEntry(
+                    self.allocator,
+                    try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
+                );
+            }
 
             asset_node.end();
         }
@@ -97,7 +181,13 @@ pub const CookCommand = struct {
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
         const total_elapsed_ns: u64 = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
         var total_duration_buf: [32]u8 = undefined;
-        log.info("Cooked {d} assets in {s}", .{ list.items.len, fmtDuration(total_elapsed_ns, &total_duration_buf) });
+        log.info("Cooked {d} assets in {s}({d} cached)", .{
+            list.items.len,
+            fmtDuration(total_elapsed_ns, &total_duration_buf),
+            cache_count,
+        });
+
+        try cache.write(self.io);
     }
 
     pub fn deinit(self: CookCommand) void {
