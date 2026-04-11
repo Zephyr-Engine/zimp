@@ -59,6 +59,14 @@ pub const CookCommand = struct {
         var cache = Cache.init(self.source);
         defer cache.deinit(self.allocator);
 
+        var cooked_filenames: std.ArrayListUnmanaged([]u8) = .empty;
+        defer {
+            for (cooked_filenames.items) |f| {
+                self.allocator.free(f);
+            }
+            cooked_filenames.deinit(self.allocator);
+        }
+
         const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
         var list = try source_scanner.scan();
 
@@ -75,14 +83,15 @@ pub const CookCommand = struct {
 
             const start = std.Io.Clock.Timestamp.now(self.io, .awake);
 
-            const file = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
+            const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
                 log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
-                return err;
+                continue;
             };
-            defer file.close(self.io);
+            try cooked_filenames.append(self.allocator, cooked.path);
+            defer cooked.file.close(self.io);
 
             var buf: [8192]u8 = undefined;
-            var file_writer = file.writer(self.io, &buf);
+            var file_writer = cooked.file.writer(self.io, &buf);
 
             if (entry.extension == .glb) {
                 var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
@@ -92,17 +101,19 @@ pub const CookCommand = struct {
 
             try file_writer.flush();
 
+            const cooked_stat = try cooked.file.stat(self.io);
+
             const end = std.Io.Clock.Timestamp.now(self.io, .awake);
             const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
             var duration_buf: [32]u8 = undefined;
             log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
 
-            asset_node.end();
-
             try cache.pushCacheEntry(
                 self.allocator,
-                try CacheEntry.create(self.io, self.source, entry),
+                try CacheEntry.create(self.io, self.source, entry, cooked.path, cooked_stat.size),
             );
+
+            asset_node.end();
         }
 
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);

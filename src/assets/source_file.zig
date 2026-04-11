@@ -54,12 +54,20 @@ pub const SourceFile = struct {
         return fnv1a(self.path);
     }
 
-    pub fn createCookedFile(self: *const SourceFile, allocator: std.mem.Allocator, io: std.Io, output_dir: std.Io.Dir) !std.Io.File {
+    pub const CookedFile = struct {
+        file: std.Io.File,
+        path: []u8,
+    };
+
+    pub fn createCookedFile(self: *const SourceFile, allocator: std.mem.Allocator, io: std.Io, output_dir: std.Io.Dir) !CookedFile {
         const stem = std.fs.path.stem(self.path);
         const ext = self.assetType.cookedExtension();
         const filename = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ stem, ext });
-        defer allocator.free(filename);
-        return output_dir.createFile(io, filename, .{});
+        errdefer allocator.free(filename);
+        return .{
+            .file = try output_dir.createFile(io, filename, .{}),
+            .path = filename,
+        };
     }
 };
 
@@ -188,8 +196,9 @@ test "createCookedFile creates file with correct extension for mesh" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
-    file.close(testing.io);
+    const cooked = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
+    cooked.file.close(testing.io);
+    defer testing.allocator.free(cooked.path);
 
     const opened = try tmp.dir.openFile(testing.io, "triangle.zmesh", .{});
     opened.close(testing.io);
@@ -200,8 +209,9 @@ test "createCookedFile strips directory from source path" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
-    file.close(testing.io);
+    const cooked = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
+    cooked.file.close(testing.io);
+    defer testing.allocator.free(cooked.path);
 
     const opened = try tmp.dir.openFile(testing.io, "model.zmesh", .{});
     opened.close(testing.io);
@@ -212,8 +222,9 @@ test "createCookedFile works for file without directory prefix" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
-    file.close(testing.io);
+    const cooked = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
+    cooked.file.close(testing.io);
+    defer testing.allocator.free(cooked.path);
 
     const opened = try tmp.dir.openFile(testing.io, "cube.zmesh", .{});
     opened.close(testing.io);
@@ -224,11 +235,12 @@ test "createCookedFile returns writable file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const file = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
-    defer file.close(testing.io);
+    const cooked = try sf.createCookedFile(testing.allocator, testing.io, tmp.dir);
+    defer cooked.file.close(testing.io);
+    defer testing.allocator.free(cooked.path);
 
     var buf: [4096]u8 = undefined;
-    var writer = file.writer(testing.io, &buf);
+    var writer = cooked.file.writer(testing.io, &buf);
     writer.interface.writeAll("hello") catch |err| {
         std.debug.print("Write failed: {s}\n", .{@errorName(err)});
         return err;
@@ -242,11 +254,13 @@ test "createCookedFile uses asset type extension not source extension" {
     defer tmp.cleanup();
 
     const f1 = try sf_glb.createCookedFile(testing.allocator, testing.io, tmp.dir);
-    f1.close(testing.io);
+    f1.file.close(testing.io);
+    defer testing.allocator.free(f1.path);
 
     // Both .glb and .gltf map to mesh, so both produce .zmesh
     const f2 = try sf_gltf.createCookedFile(testing.allocator, testing.io, tmp.dir);
-    f2.close(testing.io);
+    f2.file.close(testing.io);
+    defer testing.allocator.free(f2.path);
 
     const opened = try tmp.dir.openFile(testing.io, "test_ext.zmesh", .{});
     opened.close(testing.io);

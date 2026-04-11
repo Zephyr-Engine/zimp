@@ -1,6 +1,8 @@
 const std = @import("std");
 
-const SourceFile = @import("../assets/source_file.zig").SourceFile;
+const source_file_mod = @import("../assets/source_file.zig");
+const SourceFile = source_file_mod.SourceFile;
+const fnv1a = source_file_mod.fnv1a;
 const AssetType = @import("../assets/asset.zig").AssetType;
 
 pub const VERSION = 1;
@@ -28,6 +30,8 @@ pub const CacheEntry = struct {
         io: std.Io,
         source_dir: std.Io.Dir,
         source_file: SourceFile,
+        cooked_path: []const u8,
+        cooked_size: u64,
     ) !CacheEntry {
         const source_info = try source_file.getFileInfo(source_dir, io);
 
@@ -37,9 +41,9 @@ pub const CacheEntry = struct {
             .content_hash = 0,
             .source_size = source_info.size,
             .source_mtime = source_info.modified_ns,
-            .cooked_path = "",
-            .cooked_path_hash = 0,
-            .cooked_size = 0,
+            .cooked_path = cooked_path,
+            .cooked_path_hash = fnv1a(cooked_path),
+            .cooked_size = cooked_size,
             .asset_type = source_file.assetType,
         };
     }
