@@ -73,6 +73,8 @@ pub const CookCommand = struct {
         const cook_node = progress.start("Cooking assets", list.items.len);
         defer cook_node.end();
 
+        var cache_count: u32 = 0;
+
         // TODO: parallelize this with zob
         for (list.items) |entry| {
             const asset_node = cook_node.start(entry.path, 0);
@@ -83,6 +85,7 @@ pub const CookCommand = struct {
                 staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
                 if (staleness == .cached) {
                     log.debug("{s} is cached, not cooking", .{entry.path});
+                    cache_count += 1;
                     continue;
                 }
 
@@ -140,7 +143,11 @@ pub const CookCommand = struct {
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
         const total_elapsed_ns: u64 = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
         var total_duration_buf: [32]u8 = undefined;
-        log.info("Cooked {d} assets in {s}", .{ list.items.len, fmtDuration(total_elapsed_ns, &total_duration_buf) });
+        log.info("Cooked {d} assets in {s}({d} cached)", .{
+            list.items.len,
+            fmtDuration(total_elapsed_ns, &total_duration_buf),
+            cache_count,
+        });
 
         try cache.write(self.io);
     }
