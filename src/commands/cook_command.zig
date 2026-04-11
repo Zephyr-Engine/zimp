@@ -2,10 +2,10 @@ const std = @import("std");
 
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
-const cache_lib = @import("../cache/cache.zig");
+const cache_mod = @import("../cache/cache.zig");
 const log = @import("../logger.zig");
-const CacheEntry = cache_lib.CacheEntry;
-const Cache = cache_lib.Cache;
+const CacheEntry = cache_mod.CacheEntry;
+const Cache = cache_mod.Cache;
 
 pub const CookError = error{
     NotEnoughArguments,

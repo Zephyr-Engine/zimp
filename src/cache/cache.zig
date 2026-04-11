@@ -43,7 +43,7 @@ pub const CacheEntry = struct {
         return .{
             .source_path = owned_source,
             .source_path_hash = source_file.hashPath(),
-            .content_hash = 0,
+            .content_hash = try source_file.hash(source_dir, io),
             .source_size = source_info.size,
             .source_mtime = source_info.modified_ns,
             .cooked_path = owned_cooked,
