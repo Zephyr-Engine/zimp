@@ -1,4 +1,4 @@
-name: Build
+name: Test
 
 on:
   push:
@@ -15,5 +15,5 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v5
 
-      - name: Build project for release
-        run: zig build -Doptimize=ReleaseFast
+      - name: Build project
+        run: zig build test --summary all
