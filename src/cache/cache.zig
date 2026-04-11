@@ -14,10 +14,12 @@ pub const CacheHeader = struct {
 };
 
 pub const CacheEntry = struct {
+    source_path: []const u8,
     source_path_hash: u64,
     content_hash: u64,
     source_size: u64,
     source_mtime: i96,
+    cooked_path: []const u8,
     cooked_path_hash: u64,
     cooked_size: u64,
     asset_type: AssetType,
@@ -30,10 +32,12 @@ pub const CacheEntry = struct {
         const source_info = try source_file.getFileInfo(source_dir, io);
 
         return .{
+            .source_path = source_file.path,
             .source_path_hash = source_file.hashPath(),
             .content_hash = 0,
             .source_size = source_info.size,
             .source_mtime = source_info.modified_ns,
+            .cooked_path = "",
             .cooked_path_hash = 0,
             .cooked_size = 0,
             .asset_type = source_file.assetType,
@@ -85,6 +89,10 @@ pub const Cache = struct {
             try io_writer.writeInt(u64, entry.cooked_path_hash, .little);
             try io_writer.writeInt(u64, entry.cooked_size, .little);
             try io_writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
+            try io_writer.writeInt(u16, @intCast(entry.source_path.len), .little);
+            try io_writer.writeAll(entry.source_path);
+            try io_writer.writeInt(u16, @intCast(entry.cooked_path.len), .little);
+            try io_writer.writeAll(entry.cooked_path);
         }
 
         try io_writer.flush();
