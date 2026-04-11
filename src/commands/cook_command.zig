@@ -97,7 +97,7 @@ pub const CookCommand = struct {
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
         const total_elapsed_ns: u64 = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
         var total_duration_buf: [32]u8 = undefined;
-        log.info("Cooked all assets in {s}", .{fmtDuration(total_elapsed_ns, &total_duration_buf)});
+        log.info("Cooked {d} assets in {s}", .{ list.items.len, fmtDuration(total_elapsed_ns, &total_duration_buf) });
     }
 
     pub fn deinit(self: CookCommand) void {
