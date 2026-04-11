@@ -7,9 +7,14 @@ pub const Staleness = enum {
     hash_match,
     stale_size,
     stale_content,
+    errored,
     not_cached,
 
     pub fn check(io: std.Io, source_dir: std.Io.Dir, cache_entry: *const CacheEntry, source_file: *const SourceFile) !Staleness {
+        if (cache_entry.isErrored()) {
+            return .errored;
+        }
+
         const source_file_info = try source_file.getFileInfo(source_dir, io);
         if (cache_entry.source_mtime == source_file_info.modified_ns) {
             return .cached;

@@ -4,6 +4,8 @@ const AssetType = @import("../assets/asset.zig").AssetType;
 const fnv1a = source_file_mod.fnv1a;
 const SourceFile = source_file_mod.SourceFile;
 
+pub const FLAG_ERRORED: u16 = 1 << 0;
+
 pub const CacheEntry = struct {
     source_path: []const u8,
     source_path_hash: u64,
@@ -14,7 +16,12 @@ pub const CacheEntry = struct {
     cooked_path_hash: u64,
     cooked_size: u64,
     cooked_at: i96,
+    flags: u16 = 0,
     asset_type: AssetType,
+
+    pub fn isErrored(self: *const CacheEntry) bool {
+        return self.flags & FLAG_ERRORED != 0;
+    }
 
     pub fn create(
         allocator: std.mem.Allocator,
@@ -42,6 +49,33 @@ pub const CacheEntry = struct {
             .cooked_path_hash = fnv1a(cooked_path),
             .cooked_size = cooked_size,
             .cooked_at = now.raw.nanoseconds,
+            .asset_type = source_file.assetType,
+        };
+    }
+
+    pub fn createErrored(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        source_dir: std.Io.Dir,
+        source_file: SourceFile,
+    ) !CacheEntry {
+        const source_info = try source_file.getFileInfo(source_dir, io);
+
+        const owned_source = try allocator.dupe(u8, source_file.path);
+        errdefer allocator.free(owned_source);
+        const owned_cooked = try allocator.dupe(u8, "");
+
+        return .{
+            .source_path = owned_source,
+            .source_path_hash = source_file.hashPath(),
+            .content_hash = try source_file.hash(source_dir, io),
+            .source_size = source_info.size,
+            .source_mtime = source_info.modified_ns,
+            .cooked_path = owned_cooked,
+            .cooked_path_hash = 0,
+            .cooked_size = 0,
+            .cooked_at = 0,
+            .flags = FLAG_ERRORED,
             .asset_type = source_file.assetType,
         };
     }

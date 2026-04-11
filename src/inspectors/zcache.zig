@@ -4,6 +4,7 @@ const fmt = @import("utils.zig");
 const FormatInspector = @import("inspect.zig").FormatInspector;
 const cache = @import("../cache/cache.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
+const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
 
 fn padRight(buf: []u8, s: []const u8, width: usize) []const u8 {
     @memcpy(buf[0..s.len], s);
@@ -35,7 +36,7 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Entries:", .{});
-    log.info("  {s} {s: <18} {s: <18} {s: <10} {s: <22} {s} {s: <18} {s: <10} {s: <22} {s: <8}", .{
+    log.info("  {s} {s: <18} {s: <18} {s: <10} {s: <22} {s} {s: <18} {s: <10} {s: <22} {s: <8} {s: <8}", .{
         padRight(source_buf, "source", source_col),
         "source_hash",
         "content_hash",
@@ -46,9 +47,10 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         "cook_size",
         "cooked_at",
         "type",
+        "status",
     });
 
-    const dash_len = source_col + cooked_col + 131;
+    const dash_len = source_col + cooked_col + 142;
     const dashes = try allocator.alloc(u8, dash_len);
     defer allocator.free(dashes);
     @memset(dashes, '-');
@@ -66,7 +68,9 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         var ts: [24]u8 = undefined;
         var ts2: [24]u8 = undefined;
 
-        log.info("  {s} {s: >18} {s: >18} {s: <10} {s: <22} {s} {s: >18} {s: <10} {s: <22} {s: <8}", .{
+        const status: []const u8 = if (entry.flags & FLAG_ERRORED != 0) "ERRORED" else "COOKED";
+
+        log.info("  {s} {s: >18} {s: >18} {s: <10} {s: <22} {s} {s: >18} {s: <10} {s: <22} {s: <8} {s: <8}", .{
             padRight(source_buf, entry.source_path, source_col),
             fmt.formatHash(&hash1, entry.source_path_hash),
             fmt.formatHash(&hash2, entry.content_hash),
@@ -77,6 +81,7 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             fmt.formatBytes(&size2, entry.cooked_size),
             fmt.formatTimestamp(&ts2, entry.cooked_at),
             @tagName(entry.asset_type),
+            status,
         });
 
         total_source_size += entry.source_size;
@@ -179,6 +184,7 @@ test "Cache.read parses entry fields correctly" {
     try writer.writeInt(u64, 0x55667788, .little);
     try writer.writeInt(u64, 512, .little);
     try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little);
+    try writer.writeInt(u16, 0, .little);
     try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little);
     const source_path = "meshes/triangle.glb";
     try writer.writeInt(u16, source_path.len, .little);
@@ -228,6 +234,7 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
         try writer.writeInt(u64, 0x3000 + i, .little); // cooked_path_hash
         try writer.writeInt(u64, 2048 * (i + 1), .little); // cooked_size
         try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little); // cooked_at
+        try writer.writeInt(u16, 0, .little); // flags
         try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little); // asset_type
         const source_path = "meshes/test.glb";
         try writer.writeInt(u16, source_path.len, .little);

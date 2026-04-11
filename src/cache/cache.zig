@@ -134,6 +134,7 @@ pub const Cache = struct {
             try io_writer.writeInt(u64, entry.cooked_path_hash, .little);
             try io_writer.writeInt(u64, entry.cooked_size, .little);
             try io_writer.writeInt(i96, entry.cooked_at, .little);
+            try io_writer.writeInt(u16, entry.flags, .little);
             try io_writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
             try io_writer.writeInt(u16, @intCast(entry.source_path.len), .little);
             try io_writer.writeAll(entry.source_path);
@@ -207,6 +208,7 @@ pub const Cache = struct {
             const cooked_path_hash = try reader.takeInt(u64, .little);
             const cooked_size = try reader.takeInt(u64, .little);
             const cooked_at = try reader.takeInt(i96, .little);
+            const flags = try reader.takeInt(u16, .little);
             const asset_type: AssetType = @enumFromInt(try reader.takeInt(u16, .little));
 
             const source_path_len = try reader.takeInt(u16, .little);
@@ -229,6 +231,7 @@ pub const Cache = struct {
                 .cooked_path_hash = cooked_path_hash,
                 .cooked_size = cooked_size,
                 .cooked_at = cooked_at,
+                .flags = flags,
                 .asset_type = asset_type,
             });
         }
@@ -284,6 +287,7 @@ fn writeTestCache(writer: *std.Io.Writer, entries: []const CacheEntry) !void {
         try writer.writeInt(u64, entry.cooked_path_hash, .little);
         try writer.writeInt(u64, entry.cooked_size, .little);
         try writer.writeInt(i96, entry.cooked_at, .little);
+        try writer.writeInt(u16, entry.flags, .little);
         try writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
         try writer.writeInt(u16, @intCast(entry.source_path.len), .little);
         try writer.writeAll(entry.source_path);

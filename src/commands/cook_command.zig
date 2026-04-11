@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
+const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
 const Staleness = @import("../cache/staleness.zig").Staleness;
 const CacheEntry = @import("../cache/entry.zig").CacheEntry;
 const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
@@ -99,14 +100,18 @@ pub const CookCommand = struct {
                     continue;
                 }
 
-                // modified time was different but the file didn't actually change, update modified time in cache and don't re-cook
                 if (staleness == .hash_match) {
                     const info = try entry.getFileInfo(self.source, self.io);
                     cache_entry.source_mtime = info.modified_ns;
                     log.debug("{s} hash match, updated mtime", .{entry.path});
                     continue;
                 }
-                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });
+
+                if (staleness == .errored) {
+                    log.debug("{s} previously errored, retrying", .{entry.path});
+                } else {
+                    log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });
+                }
             }
 
             const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
@@ -119,10 +124,33 @@ pub const CookCommand = struct {
             var buf: [8192]u8 = undefined;
             var file_writer = cooked.file.writer(self.io, &buf);
 
-            if (entry.extension == .glb) {
-                var glb_cooker = try GLBCooker.init(self.allocator, self.io, self.source, entry.path);
-                defer glb_cooker.deinit();
-                try glb_cooker.cook(self.allocator, &file_writer.interface);
+            const cook_failed = blk: {
+                if (entry.extension == .glb) {
+                    var glb_cooker = GLBCooker.init(self.allocator, self.io, self.source, entry.path) catch |err| {
+                        log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
+                        break :blk true;
+                    };
+                    defer glb_cooker.deinit();
+                    glb_cooker.cook(self.allocator, &file_writer.interface) catch |err| {
+                        log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
+                        break :blk true;
+                    };
+                }
+                break :blk false;
+            };
+
+            if (cook_failed) {
+                const errored_entry = CacheEntry.createErrored(self.allocator, self.io, self.source, entry) catch |err| {
+                    log.err("Failed to create errored cache entry for '{s}': {s}", .{ entry.path, @errorName(err) });
+                    continue;
+                };
+
+                if (staleness != null) {
+                    try cache.overWriteCacheEntry(self.allocator, errored_entry, cache.getIdx(entry).?);
+                } else {
+                    try cache.pushCacheEntry(self.allocator, errored_entry);
+                }
+                continue;
             }
 
             try file_writer.flush();
