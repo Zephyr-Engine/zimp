@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const log = @import("../logger.zig");
-const inspector_registry = @import("../inspectors/inspect.zig").inspector_registry;
+const inspectors = @import("../inspectors/inspect.zig").inspector_registry;
 
 pub const InspectError = error{
     NotEnoughArguments,
@@ -44,7 +44,7 @@ pub const InspectCommand = struct {
         var magic: [5]u8 = undefined;
         _ = try reader.readSliceAll(&magic);
 
-        const inspector = inspector_registry.get(&magic) orelse {
+        const inspector = inspectors.get(&magic) orelse {
             log.err("No inspector found for file with magic '{s}'", .{magic});
             return InspectError.UnkownFormat;
         };
@@ -129,4 +129,3 @@ test "InspectCommand.deinit cleans up without error" {
     const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     cmd.deinit();
 }
-
