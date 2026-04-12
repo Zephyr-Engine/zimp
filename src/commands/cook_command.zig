@@ -18,6 +18,7 @@ pub const CookError = error{
 pub const CookCommand = struct {
     source: std.Io.Dir,
     output: std.Io.Dir,
+    output_path: []const u8 = ".",
     io: std.Io,
     allocator: std.mem.Allocator,
 
@@ -48,6 +49,7 @@ pub const CookCommand = struct {
                     log.err("cook: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.OutputDirNotFound;
                 };
+                command.output_path = args[i + 1];
                 i += 1;
             }
 
@@ -58,14 +60,15 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
-        var cache = Cache.readFromDir(self.allocator, self.io, self.source) catch |err| blk: {
+        var cache = Cache.readFromDir(self.allocator, self.io, self.source, self.output_path) catch |err| blk: {
             switch (err) {
+                error.OutputDirChanged => log.debug("Output directory changed, rebuilding cache", .{}),
                 error.StaleVersion => log.debug("Outdated cache version found, rebuilding entire cache", .{}),
                 error.UnsupportedVersion => log.debug("Corrupt cache found, rebuilding entire cache", .{}),
                 error.FileNotFound => log.debug("No existing cache found, starting fresh", .{}),
                 else => log.debug("Failed to read cache ({s}), starting fresh", .{@errorName(err)}),
             }
-            break :blk Cache.init(self.allocator, self.source);
+            break :blk try Cache.init(self.allocator, self.source, self.output_path);
         };
         defer cache.deinit(self.allocator);
 
@@ -95,16 +98,22 @@ pub const CookCommand = struct {
             if (cache.lookupEntryMut(entry)) |cache_entry| {
                 staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
                 if (staleness == .cached) {
-                    log.debug("{s} is cached, not cooking", .{entry.path});
-                    cache_count += 1;
-                    continue;
+                    if (self.outputFileExists(cache_entry.cooked_path)) {
+                        log.debug("{s} is cached, not cooking", .{entry.path});
+                        cache_count += 1;
+                        continue;
+                    }
+                    log.debug("{s} cached but output file missing, recooking", .{entry.path});
                 }
 
                 if (staleness == .hash_match) {
-                    const info = try entry.getFileInfo(self.source, self.io);
-                    cache_entry.source_mtime = info.modified_ns;
-                    log.debug("{s} hash match, updated mtime", .{entry.path});
-                    continue;
+                    if (self.outputFileExists(cache_entry.cooked_path)) {
+                        const info = try entry.getFileInfo(self.source, self.io);
+                        cache_entry.source_mtime = info.modified_ns;
+                        log.debug("{s} hash match, updated mtime", .{entry.path});
+                        continue;
+                    }
+                    log.debug("{s} hash match but output file missing, recooking", .{entry.path});
                 }
 
                 if (staleness == .errored) {
@@ -185,6 +194,17 @@ pub const CookCommand = struct {
         });
 
         try cache.write(self.io);
+    }
+
+    fn outputFileExists(self: CookCommand, cooked_path: []const u8) bool {
+        if (cooked_path.len == 0) {
+            return false;
+        }
+
+        const file = self.output.openFile(self.io, cooked_path, .{}) catch return false;
+        file.close(self.io);
+
+        return true;
     }
 
     pub fn deinit(self: CookCommand) void {
