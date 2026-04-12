@@ -7,7 +7,7 @@ const fnv1a = source_file_mod.fnv1a;
 const SourceFile = source_file_mod.SourceFile;
 const log = @import("../logger.zig");
 
-pub const VERSION = 1;
+pub const VERSION = 2;
 pub const MAGIC = "ZACHE";
 
 pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32); // magic + version + entry_count
@@ -24,8 +24,9 @@ pub const Cache = struct {
     entries: std.ArrayList(CacheEntry),
     entry_map: EntryMap,
     source_dir: std.Io.Dir,
+    output_dir_path: []const u8 = "",
 
-    pub fn init(allocator: std.mem.Allocator, source_dir: std.Io.Dir) Cache {
+    pub fn init(allocator: std.mem.Allocator, source_dir: std.Io.Dir, output_dir_path: []const u8) !Cache {
         return .{
             .header = .{
                 .entry_count = 0,
@@ -33,6 +34,7 @@ pub const Cache = struct {
             .entry_map = .init(allocator),
             .entries = .empty,
             .source_dir = source_dir,
+            .output_dir_path = try allocator.dupe(u8, output_dir_path),
         };
     }
 
@@ -43,6 +45,7 @@ pub const Cache = struct {
         }
         self.entries.deinit(allocator);
         self.entry_map.deinit();
+        allocator.free(self.output_dir_path);
     }
 
     pub fn pushCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry) !void {
@@ -125,6 +128,8 @@ pub const Cache = struct {
         try io_writer.writeAll(MAGIC);
         try io_writer.writeInt(u16, self.header.version, .little);
         try io_writer.writeInt(u32, self.header.entry_count, .little);
+        try io_writer.writeInt(u16, @intCast(self.output_dir_path.len), .little);
+        try io_writer.writeAll(self.output_dir_path);
 
         for (self.entries.items) |entry| {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
@@ -148,7 +153,7 @@ pub const Cache = struct {
         try cwd.rename("tmp.zcache", cwd, ".zcache", io);
     }
 
-    pub fn readFromDir(allocator: std.mem.Allocator, io: std.Io, source_dir: std.Io.Dir) !Cache {
+    pub fn readFromDir(allocator: std.mem.Allocator, io: std.Io, source_dir: std.Io.Dir, output_dir_path: []const u8) !Cache {
         const cwd = std.Io.Dir.cwd();
         const file = try cwd.openFile(io, ".zcache", .{});
         defer file.close(io);
@@ -174,6 +179,31 @@ pub const Cache = struct {
 
         var cache = try readEntries(allocator, version, reader);
         cache.source_dir = source_dir;
+
+        if (!std.mem.eql(u8, cache.output_dir_path, output_dir_path)) {
+            const old_output_dir_path = cache.output_dir_path;
+            defer {
+                cache.deinit(allocator);
+            }
+
+            if (old_output_dir_path.len > 0) {
+                log.info("Output directory changed from '{s}' to '{s}', invalidating cache", .{ old_output_dir_path, output_dir_path });
+                if (std.Io.Dir.openDir(cwd, io, old_output_dir_path, .{})) |old_output_dir| {
+                    for (cache.entries.items) |entry| {
+                        if (entry.cooked_path.len > 0) {
+                            old_output_dir.deleteFile(io, entry.cooked_path) catch |err| {
+                                log.warn("Failed to delete old cooked file '{s}' from '{s}': {s}", .{ entry.cooked_path, old_output_dir_path, @errorName(err) });
+                            };
+                        }
+                    }
+                } else |_| {
+                    log.warn("Could not open old output directory '{s}' to clean up cooked files", .{old_output_dir_path});
+                }
+            }
+
+            return error.OutputDirChanged;
+        }
+
         return cache;
     }
 
@@ -188,6 +218,11 @@ pub const Cache = struct {
 
     fn readEntries(allocator: std.mem.Allocator, version: u16, reader: *std.Io.Reader) !Cache {
         const entry_count = try reader.takeInt(u32, .little);
+
+        const output_dir_path_len = try reader.takeInt(u16, .little);
+        const output_dir_path = try allocator.alloc(u8, output_dir_path_len);
+        errdefer allocator.free(output_dir_path);
+        try reader.readSliceAll(output_dir_path);
 
         var entries: std.ArrayList(CacheEntry) = .empty;
         errdefer {
@@ -250,6 +285,7 @@ pub const Cache = struct {
             .entry_map = entry_map,
             .entries = entries,
             .source_dir = .cwd(),
+            .output_dir_path = output_dir_path,
         };
     }
 };
@@ -275,9 +311,15 @@ fn makeTestEntry(allocator: std.mem.Allocator, source_path: []const u8, cooked_p
 }
 
 fn writeTestCache(writer: *std.Io.Writer, entries: []const CacheEntry) !void {
+    try writeTestCacheWithOutputDir(writer, entries, ".");
+}
+
+fn writeTestCacheWithOutputDir(writer: *std.Io.Writer, entries: []const CacheEntry, output_dir_path: []const u8) !void {
     try writer.writeAll(MAGIC);
     try writer.writeInt(u16, VERSION, .little);
     try writer.writeInt(u32, @intCast(entries.len), .little);
+    try writer.writeInt(u16, @intCast(output_dir_path.len), .little);
+    try writer.writeAll(output_dir_path);
 
     for (entries) |entry| {
         try writer.writeInt(u64, entry.source_path_hash, .little);
@@ -297,26 +339,27 @@ fn writeTestCache(writer: *std.Io.Writer, entries: []const CacheEntry) !void {
 }
 
 test "init returns empty cache" {
-    const c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
     try testing.expectEqual(@as(u32, 0), c.header.entry_count);
     try testing.expectEqual(@as(usize, 0), c.entries.items.len);
     try testing.expectEqual(VERSION, c.header.version);
 }
 
 test "deinit frees allocated entry paths" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     const entry = try makeTestEntry(testing.allocator, "src/model.glb", "model.zmesh");
     try c.pushCacheEntry(testing.allocator, entry);
     c.deinit(testing.allocator);
 }
 
 test "deinit on empty cache does not error" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     c.deinit(testing.allocator);
 }
 
 test "pushCacheEntry adds entry and increments count" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -328,7 +371,7 @@ test "pushCacheEntry adds entry and increments count" {
 }
 
 test "pushCacheEntry multiple entries" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     for (0..5) |_| {
@@ -341,7 +384,7 @@ test "pushCacheEntry multiple entries" {
 }
 
 test "lookupEntry returns entry when path hash matches" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -355,7 +398,7 @@ test "lookupEntry returns entry when path hash matches" {
 }
 
 test "lookupEntry returns null when not found" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const sf = SourceFile{ .path = "missing.glb", .extension = .glb, .assetType = .mesh };
@@ -363,7 +406,7 @@ test "lookupEntry returns null when not found" {
 }
 
 test "lookupEntryMut returns mutable entry" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -378,7 +421,7 @@ test "lookupEntryMut returns mutable entry" {
 }
 
 test "lookupEntryMut returns null when not found" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const sf = SourceFile{ .path = "missing.glb", .extension = .glb, .assetType = .mesh };
@@ -386,7 +429,7 @@ test "lookupEntryMut returns null when not found" {
 }
 
 test "getIdx returns index when entry exists" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -398,7 +441,7 @@ test "getIdx returns index when entry exists" {
 }
 
 test "getIdx returns null when entry does not exist" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const sf = SourceFile{ .path = "missing.glb", .extension = .glb, .assetType = .mesh };
@@ -406,7 +449,7 @@ test "getIdx returns null when entry does not exist" {
 }
 
 test "pruneDeleted removes entries not in source list" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -429,7 +472,7 @@ test "pruneDeleted removes entries not in source list" {
 }
 
 test "pruneDeleted returns zero when all entries present" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -446,7 +489,7 @@ test "pruneDeleted returns zero when all entries present" {
 }
 
 test "pruneDeleted removes all entries when source list is empty" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -465,7 +508,7 @@ test "pruneDeleted removes all entries when source list is empty" {
 }
 
 test "pruneDeleted rebuilds entry_map with correct indices" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
@@ -494,7 +537,7 @@ test "pruneDeleted rebuilds entry_map with correct indices" {
 }
 
 test "pruneDeleted on empty cache returns zero" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     const empty: []const SourceFile = &.{};
@@ -639,6 +682,8 @@ test "read errors on truncated entry data" {
     try writer.writeAll(MAGIC);
     try writer.writeInt(u16, VERSION, .little);
     try writer.writeInt(u32, 1, .little);
+    try writer.writeInt(u16, 1, .little); // output_dir_path len
+    try writer.writeAll("."); // output_dir_path
     try writer.writeInt(u64, 0xAAAA, .little);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
@@ -646,7 +691,7 @@ test "read errors on truncated entry data" {
 }
 
 test "read errors on truncated header" {
-    var buf: [8]u8 = undefined;
+    var buf: [16]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
 
     try writer.writeAll(MAGIC);
@@ -659,7 +704,7 @@ test "write then read round-trip preserves all fields" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    var c = Cache.init(testing.allocator, tmp.dir);
+    var c = try Cache.init(testing.allocator, tmp.dir, ".");
     defer c.deinit(testing.allocator);
 
     const entry1 = try makeTestEntry(testing.allocator, "models/hero.glb", "hero.zmesh");
@@ -697,7 +742,7 @@ test "write then read round-trip preserves all fields" {
 }
 
 test "write then read round-trip with zero entries" {
-    var c = Cache.init(testing.allocator, .cwd());
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
     defer c.deinit(testing.allocator);
 
     var buf: [4096]u8 = undefined;
