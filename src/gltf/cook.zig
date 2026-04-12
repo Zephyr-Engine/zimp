@@ -19,7 +19,7 @@ pub const GLBCooker = struct {
         const glb_file = try GLBFile.parse(allocator, file_bytes);
         const gltf = try Gltf.parse(glb_file.json, allocator);
 
-        return GLBCooker{
+        return .{
             .file = glb_file,
             .file_bytes = file_bytes,
             .gltf = gltf,

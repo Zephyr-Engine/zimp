@@ -15,23 +15,27 @@ pub const AssetType = enum {
 const asset_map = std.EnumArray(Extension, AssetType).init(.{
     .gltf = .mesh,
     .glb = .mesh,
+    .obj = .mesh,
     .other = .unknown,
 });
 
 const extension_map = std.StaticStringMap(Extension).initComptime(.{
     .{ "gltf", .gltf },
     .{ "glb", .glb },
+    .{ "obj", .obj },
 });
 
 pub const Extension = enum {
     gltf,
     glb,
+    obj,
     other,
 
     pub fn string(self: Extension) []const u8 {
         return switch (self) {
             .gltf => "gltf",
             .glb => "glb",
+            .obj => "obj",
             .other => "other",
         };
     }
