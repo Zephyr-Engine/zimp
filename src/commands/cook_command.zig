@@ -1,10 +1,10 @@
 const std = @import("std");
 
+const cookers = @import("../cookers/cooker.zig").cooker_registry;
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
 const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
 const Staleness = @import("../cache/staleness.zig").Staleness;
 const CacheEntry = @import("../cache/entry.zig").CacheEntry;
-const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
 const cache_mod = @import("../cache/cache.zig");
 const log = @import("../logger.zig");
 const Cache = cache_mod.Cache;
@@ -125,16 +125,13 @@ pub const CookCommand = struct {
             var file_writer = cooked.file.writer(self.io, &buf);
 
             const cook_failed = blk: {
-                if (entry.extension == .glb) {
-                    var glb_cooker = GLBCooker.init(self.allocator, self.io, self.source, entry.path) catch |err| {
+                if (cookers.get(entry.extension)) |cooker| {
+                    cooker.cook(self.allocator, self.io, self.source, entry.path, &file_writer.interface) catch |err| {
                         log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
                         break :blk true;
                     };
-                    defer glb_cooker.deinit();
-                    glb_cooker.cook(self.allocator, &file_writer.interface) catch |err| {
-                        log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
-                        break :blk true;
-                    };
+                } else {
+                    log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ entry.extension.string(), entry.path });
                 }
                 break :blk false;
             };

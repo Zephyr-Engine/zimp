@@ -1,7 +1,7 @@
 const std = @import("std");
 const mesh = @import("../assets/cooked/mesh.zig");
 
-pub const MAGIC = "ZMESH";
+pub const MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH;
 pub const ZMESH_VERSION: u32 = 1;
 
 pub const HEADER_SIZE: u32 = MAGIC.len // magic

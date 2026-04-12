@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const FORMAT_MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC;
+
 pub const FormatInspector = struct {
     inspectFn: *const fn (
         allocator: std.mem.Allocator,
@@ -11,14 +13,12 @@ pub const FormatInspector = struct {
     }
 };
 
-const zmesh_magic = @import("../formats/zmesh.zig").MAGIC;
-const zcache_magic = @import("../cache/cache.zig").MAGIC;
 const zamesh_inspector = @import("../inspectors/zmesh.zig").inspector();
 const zcache_inspector = @import("../inspectors/zcache.zig").inspector();
 
 pub const inspector_registry = std.StaticStringMap(FormatInspector).initComptime(.{
-    .{ zmesh_magic, zamesh_inspector },
-    .{ zcache_magic, zcache_inspector },
+    .{ FORMAT_MAGIC.ZMESH, zamesh_inspector },
+    .{ FORMAT_MAGIC.ZACHE, zcache_inspector },
 });
 
 const testing = std.testing;
@@ -57,7 +57,7 @@ test "FormatInspector struct size is one pointer wide" {
 }
 
 test "inspector_registry contains ZMESH magic" {
-    try testing.expect(inspector_registry.get(zmesh_magic) != null);
+    try testing.expect(inspector_registry.get(FORMAT_MAGIC.ZMESH) != null);
 }
 
 test "inspector_registry returns null for unknown magic" {
@@ -65,6 +65,6 @@ test "inspector_registry returns null for unknown magic" {
 }
 
 test "inspector_registry maps ZMESH to zamesh_inspector" {
-    const found = inspector_registry.get(zmesh_magic).?;
+    const found = inspector_registry.get(FORMAT_MAGIC.ZMESH).?;
     try testing.expectEqual(zamesh_inspector.inspectFn, found.inspectFn);
 }
