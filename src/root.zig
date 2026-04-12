@@ -31,6 +31,9 @@ test {
     _ = @import("gltf/mesh.zig");
     _ = @import("cookers/cooker.zig");
     _ = @import("cookers/glb.zig");
+    _ = @import("cookers/obj.zig");
+    _ = @import("obj/obj_parser.zig");
+    _ = @import("obj/cook.zig");
     _ = @import("inspectors/inspect.zig");
     _ = @import("inspectors/zmesh.zig");
     _ = @import("inspectors/zcache.zig");

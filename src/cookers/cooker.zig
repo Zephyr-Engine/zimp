@@ -24,10 +24,12 @@ pub const Cooker = struct {
 };
 
 const glb_cooker = @import("glb.zig").cooker();
+const obj_cooker = @import("obj.zig").cooker();
 
 pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .glb = glb_cooker,
     .gltf = glb_cooker,
+    .obj = obj_cooker,
     .other = null,
 });
 
