@@ -737,3 +737,45 @@ test "write then read round-trip with zero entries" {
 test "HEADER_SIZE matches expected layout" {
     try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32)), HEADER_SIZE);
 }
+
+test "upsertEntry inserts new entry when not in cache" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.upsertEntry(testing.allocator, sf, entry);
+
+    try testing.expectEqual(@as(u32, 1), c.header.entry_count);
+    try testing.expectEqualStrings("a.glb", c.entries.items[0].source_path);
+}
+
+test "upsertEntry overwrites existing entry with matching path" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const entry1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, entry1);
+    try c.entry_map.put(entry1.source_path_hash, 0);
+
+    var entry2 = try makeTestEntry(testing.allocator, "a.glb", "a_v2.zmesh");
+    entry2.cooked_size = 999;
+    try c.upsertEntry(testing.allocator, sf, entry2);
+
+    try testing.expectEqualStrings("a_v2.zmesh", c.entries.items[0].cooked_path);
+    try testing.expectEqual(@as(u64, 999), c.entries.items[0].cooked_size);
+}
+
+test "upsertEntry handles multiple distinct entries" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const sf_a = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const sf_b = SourceFile{ .path = "b.glb", .extension = .glb, .assetType = .mesh };
+
+    try c.upsertEntry(testing.allocator, sf_a, try makeTestEntry(testing.allocator, "a.glb", "a.zmesh"));
+    try c.upsertEntry(testing.allocator, sf_b, try makeTestEntry(testing.allocator, "b.glb", "b.zmesh"));
+
+    try testing.expectEqual(@as(u32, 2), c.header.entry_count);
+}
