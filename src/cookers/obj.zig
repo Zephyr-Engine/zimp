@@ -6,7 +6,7 @@ const ObjParser = @import("../parsers/obj/obj_parser.zig").ObjParser;
 const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
 
 pub fn cooker() Cooker {
-    return .{ .cookFn = cookObj };
+    return .{ .cookFn = cookObj, .asset_type = .mesh };
 }
 
 fn cookObj(

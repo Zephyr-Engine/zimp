@@ -8,7 +8,7 @@ const GltfMesh = @import("../parsers/gltf/mesh.zig").GltfMesh;
 const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
 
 pub fn cooker() Cooker {
-    return .{ .cookFn = cookGlb };
+    return .{ .cookFn = cookGlb, .asset_type = .mesh };
 }
 
 fn cookGlb(
@@ -31,7 +31,7 @@ fn cookGlb(
         var gltf_mesh = try GltfMesh.buildMesh(allocator, &gltf.value, i, glb_file.bin);
         defer gltf_mesh.deinit();
 
-        var cooked_mesh = try gltf_mesh.cook(allocator);
+        var cooked_mesh = try CookedMesh.cook(allocator, &gltf_mesh.raw);
         defer cooked_mesh.deinit(allocator);
 
         try ZMesh.write(writer, cooked_mesh);
