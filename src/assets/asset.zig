@@ -2,11 +2,13 @@ const std = @import("std");
 
 pub const AssetType = enum {
     mesh,
+    texture,
     unknown,
 
     pub fn cookedExtension(self: AssetType) []const u8 {
         return switch (self) {
             .mesh => "zmesh",
+            .texture => "ztex",
             .unknown => "",
         };
     }
@@ -16,6 +18,9 @@ const asset_map = std.EnumArray(Extension, AssetType).init(.{
     .gltf = .mesh,
     .glb = .mesh,
     .obj = .mesh,
+    .png = .texture,
+    .jpg = .texture,
+    .jpeg = .texture,
     .other = .unknown,
 });
 
@@ -23,12 +28,18 @@ const extension_map = std.StaticStringMap(Extension).initComptime(.{
     .{ "gltf", .gltf },
     .{ "glb", .glb },
     .{ "obj", .obj },
+    .{ "png", .png },
+    .{ "jpg", .jpg },
+    .{ "jpeg", .jpeg },
 });
 
 pub const Extension = enum {
     gltf,
     glb,
     obj,
+    png,
+    jpg,
+    jpeg,
     other,
 
     pub fn string(self: Extension) []const u8 {
@@ -36,6 +47,9 @@ pub const Extension = enum {
             .gltf => "gltf",
             .glb => "glb",
             .obj => "obj",
+            .png => "png",
+            .jpg => "jpg",
+            .jpeg => "jpeg",
             .other => "other",
         };
     }
