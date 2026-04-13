@@ -3,12 +3,10 @@ const std = @import("std");
 const cookers = @import("../cookers/cooker.zig").cooker_registry;
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
-const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
 const Staleness = @import("../cache/staleness.zig").Staleness;
 const CacheEntry = @import("../cache/entry.zig").CacheEntry;
-const cache_mod = @import("../cache/cache.zig");
+const Cache = @import("../cache/cache.zig").Cache;
 const log = @import("../logger.zig");
-const Cache = cache_mod.Cache;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -93,7 +91,9 @@ pub const CookCommand = struct {
         // TODO: parallelize this with zob
         for (list.items) |entry| {
             const result = try self.processAsset(&cache, entry, cook_node);
-            if (result == .cached or result == .hash_match) cache_count += 1;
+            if (result == .cached or result == .hash_match) {
+                cache_count += 1;
+            }
         }
 
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
@@ -170,11 +170,7 @@ pub const CookCommand = struct {
                 return .errored;
             };
 
-            if (staleness != null) {
-                try cache.overWriteCacheEntry(self.allocator, errored_entry, cache.getIdx(entry).?);
-            } else {
-                try cache.pushCacheEntry(self.allocator, errored_entry);
-            }
+            try cache.upsertEntry(self.allocator, entry, errored_entry);
             return .errored;
         }
 
@@ -187,18 +183,11 @@ pub const CookCommand = struct {
         var duration_buf: [32]u8 = undefined;
         log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
 
-        if (staleness != null) {
-            try cache.overWriteCacheEntry(
-                self.allocator,
-                try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
-                cache.getIdx(entry).?,
-            );
-        } else {
-            try cache.pushCacheEntry(
-                self.allocator,
-                try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
-            );
-        }
+        try cache.upsertEntry(
+            self.allocator,
+            entry,
+            try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
+        );
 
         asset_node.end();
         return .cooked;
