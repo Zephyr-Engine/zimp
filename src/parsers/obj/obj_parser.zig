@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const raw_mesh = @import("../assets/raw/mesh.zig");
+const raw_mesh = @import("../../assets/raw/mesh.zig");
 const RawMesh = raw_mesh.RawMesh;
 const RawVertex = raw_mesh.RawVertex;
 const RawSubmesh = raw_mesh.RawSubmesh;

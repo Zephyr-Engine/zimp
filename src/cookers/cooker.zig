@@ -1,6 +1,8 @@
 const std = @import("std");
 
-const Extension = @import("../assets/asset.zig").Extension;
+const asset = @import("../assets/asset.zig");
+const Extension = asset.Extension;
+const AssetType = asset.AssetType;
 
 pub const Cooker = struct {
     cookFn: *const fn (
@@ -10,6 +12,7 @@ pub const Cooker = struct {
         file_path: []const u8,
         writer: *std.Io.Writer,
     ) anyerror!void,
+    asset_type: AssetType,
 
     pub fn cook(
         self: Cooker,
@@ -33,6 +36,17 @@ pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .other = null,
 });
 
+comptime {
+    for (std.meta.fields(Extension)) |field| {
+        const ext: Extension = @enumFromInt(field.value);
+        if (cooker_registry.get(ext)) |cooker| {
+            if (cooker.asset_type != ext.assetType()) {
+                @compileError("Cooker for extension '" ++ field.name ++ "' has asset_type that does not match asset.zig mapping");
+            }
+        }
+    }
+}
+
 const testing = std.testing;
 
 var test_called: bool = false;
@@ -47,7 +61,7 @@ fn failingCook(_: std.mem.Allocator, _: std.Io, _: std.Io.Dir, _: []const u8, _:
 
 test "Cooker.cook calls the provided function pointer" {
     test_called = false;
-    const cooker = Cooker{ .cookFn = stubCook };
+    const cooker = Cooker{ .cookFn = stubCook, .asset_type = .mesh };
 
     var buf: [1]u8 = .{0};
     var writer = std.Io.Writer.fixed(&buf);
@@ -57,18 +71,17 @@ test "Cooker.cook calls the provided function pointer" {
 }
 
 test "Cooker.cook propagates errors from cookFn" {
-    const cooker = Cooker{ .cookFn = failingCook };
+    const cooker = Cooker{ .cookFn = failingCook, .asset_type = .mesh };
 
     var buf: [1]u8 = .{0};
     var writer = std.Io.Writer.fixed(&buf);
     try testing.expectError(error.TestCookFailed, cooker.cook(testing.allocator, testing.io, std.Io.Dir.cwd(), "", &writer));
 }
 
-test "Cooker struct size is one pointer wide" {
-    try testing.expectEqual(
-        @sizeOf(*const fn (std.mem.Allocator, std.Io, std.Io.Dir, []const u8, *std.Io.Writer) anyerror!void),
-        @sizeOf(Cooker),
-    );
+test "Cooker struct contains cookFn and asset_type" {
+    try testing.expect(@sizeOf(Cooker) > @sizeOf(*const fn (std.mem.Allocator, std.Io, std.Io.Dir, []const u8, *std.Io.Writer) anyerror!void));
+    try testing.expect(@hasField(Cooker, "cookFn"));
+    try testing.expect(@hasField(Cooker, "asset_type"));
 }
 
 test "cooker_registry contains glb" {

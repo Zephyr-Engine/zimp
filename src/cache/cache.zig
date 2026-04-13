@@ -57,15 +57,6 @@ pub const Cache = struct {
         try self.entries.insert(allocator, idx, entry);
     }
 
-    pub fn lookupEntry(self: *const Cache, source_file: SourceFile) ?*const CacheEntry {
-        const path_hash = source_file.hashPath();
-        if (self.entry_map.get(path_hash)) |entry_idx| {
-            return &self.entries.items[entry_idx];
-        }
-
-        return null;
-    }
-
     pub fn lookupEntryMut(self: *Cache, source_file: SourceFile) ?*CacheEntry {
         const path_hash = source_file.hashPath();
         if (self.entry_map.get(path_hash)) |entry_idx| {
@@ -115,6 +106,14 @@ pub const Cache = struct {
     pub fn getIdx(self: *const Cache, source_file: SourceFile) ?u32 {
         const path_hash = source_file.hashPath();
         return self.entry_map.get(path_hash);
+    }
+
+    pub fn upsertEntry(self: *Cache, allocator: std.mem.Allocator, source_file: SourceFile, entry: CacheEntry) !void {
+        if (self.getIdx(source_file)) |idx| {
+            try self.overWriteCacheEntry(allocator, entry, idx);
+        } else {
+            try self.pushCacheEntry(allocator, entry);
+        }
     }
 
     pub fn write(self: *const Cache, io: std.Io) !void {
@@ -381,28 +380,6 @@ test "pushCacheEntry multiple entries" {
 
     try testing.expectEqual(@as(u32, 5), c.header.entry_count);
     try testing.expectEqual(@as(usize, 5), c.entries.items.len);
-}
-
-test "lookupEntry returns entry when path hash matches" {
-    var c = try Cache.init(testing.allocator, .cwd(), ".");
-    defer c.deinit(testing.allocator);
-
-    const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
-    try c.pushCacheEntry(testing.allocator, entry);
-    try c.entry_map.put(entry.source_path_hash, 0);
-
-    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
-    const found = c.lookupEntry(sf);
-    try testing.expect(found != null);
-    try testing.expectEqualStrings("a.glb", found.?.source_path);
-}
-
-test "lookupEntry returns null when not found" {
-    var c = try Cache.init(testing.allocator, .cwd(), ".");
-    defer c.deinit(testing.allocator);
-
-    const sf = SourceFile{ .path = "missing.glb", .extension = .glb, .assetType = .mesh };
-    try testing.expect(c.lookupEntry(sf) == null);
 }
 
 test "lookupEntryMut returns mutable entry" {
@@ -759,4 +736,46 @@ test "write then read round-trip with zero entries" {
 
 test "HEADER_SIZE matches expected layout" {
     try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32)), HEADER_SIZE);
+}
+
+test "upsertEntry inserts new entry when not in cache" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.upsertEntry(testing.allocator, sf, entry);
+
+    try testing.expectEqual(@as(u32, 1), c.header.entry_count);
+    try testing.expectEqualStrings("a.glb", c.entries.items[0].source_path);
+}
+
+test "upsertEntry overwrites existing entry with matching path" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const entry1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
+    try c.pushCacheEntry(testing.allocator, entry1);
+    try c.entry_map.put(entry1.source_path_hash, 0);
+
+    var entry2 = try makeTestEntry(testing.allocator, "a.glb", "a_v2.zmesh");
+    entry2.cooked_size = 999;
+    try c.upsertEntry(testing.allocator, sf, entry2);
+
+    try testing.expectEqualStrings("a_v2.zmesh", c.entries.items[0].cooked_path);
+    try testing.expectEqual(@as(u64, 999), c.entries.items[0].cooked_size);
+}
+
+test "upsertEntry handles multiple distinct entries" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const sf_a = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const sf_b = SourceFile{ .path = "b.glb", .extension = .glb, .assetType = .mesh };
+
+    try c.upsertEntry(testing.allocator, sf_a, try makeTestEntry(testing.allocator, "a.glb", "a.zmesh"));
+    try c.upsertEntry(testing.allocator, sf_b, try makeTestEntry(testing.allocator, "b.glb", "b.zmesh"));
+
+    try testing.expectEqual(@as(u32, 2), c.header.entry_count);
 }

@@ -2,12 +2,11 @@ const std = @import("std");
 
 const cookers = @import("../cookers/cooker.zig").cooker_registry;
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
-const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
+const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const Staleness = @import("../cache/staleness.zig").Staleness;
 const CacheEntry = @import("../cache/entry.zig").CacheEntry;
-const cache_mod = @import("../cache/cache.zig");
+const Cache = @import("../cache/cache.zig").Cache;
 const log = @import("../logger.zig");
-const Cache = cache_mod.Cache;
 
 pub const CookError = error{
     NotEnoughArguments,
@@ -59,7 +58,7 @@ pub const CookCommand = struct {
         return command;
     }
 
-    pub fn run(self: CookCommand, progress: std.Progress.Node) !void {
+    pub fn run(self: *const CookCommand, progress: std.Progress.Node) !void {
         var cache = Cache.readFromDir(self.allocator, self.io, self.source, self.output_path) catch |err| blk: {
             switch (err) {
                 error.OutputDirChanged => log.debug("Output directory changed, rebuilding cache", .{}),
@@ -91,97 +90,10 @@ pub const CookCommand = struct {
 
         // TODO: parallelize this with zob
         for (list.items) |entry| {
-            const asset_node = cook_node.start(entry.path, 0);
-
-            const start = std.Io.Clock.Timestamp.now(self.io, .awake);
-            var staleness: ?Staleness = null;
-            if (cache.lookupEntryMut(entry)) |cache_entry| {
-                staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
-                if (staleness == .cached) {
-                    if (self.outputFileExists(cache_entry.cooked_path)) {
-                        log.debug("{s} is cached, not cooking", .{entry.path});
-                        cache_count += 1;
-                        continue;
-                    }
-                    log.debug("{s} cached but output file missing, recooking", .{entry.path});
-                }
-
-                if (staleness == .hash_match) {
-                    if (self.outputFileExists(cache_entry.cooked_path)) {
-                        const info = try entry.getFileInfo(self.source, self.io);
-                        cache_entry.source_mtime = info.modified_ns;
-                        log.debug("{s} hash match, updated mtime", .{entry.path});
-                        continue;
-                    }
-                    log.debug("{s} hash match but output file missing, recooking", .{entry.path});
-                }
-
-                if (staleness == .errored) {
-                    log.debug("{s} previously errored, retrying", .{entry.path});
-                } else {
-                    log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });
-                }
+            const result = try self.processAsset(&cache, entry, cook_node);
+            if (result == .cached or result == .hash_match) {
+                cache_count += 1;
             }
-
-            const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
-                log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
-                continue;
-            };
-            defer self.allocator.free(cooked.path);
-            defer cooked.file.close(self.io);
-
-            var buf: [8192]u8 = undefined;
-            var file_writer = cooked.file.writer(self.io, &buf);
-
-            const cook_failed = blk: {
-                if (cookers.get(entry.extension)) |cooker| {
-                    cooker.cook(self.allocator, self.io, self.source, entry.path, &file_writer.interface) catch |err| {
-                        log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
-                        break :blk true;
-                    };
-                } else {
-                    log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ entry.extension.string(), entry.path });
-                }
-                break :blk false;
-            };
-
-            if (cook_failed) {
-                const errored_entry = CacheEntry.createErrored(self.allocator, self.io, self.source, entry) catch |err| {
-                    log.err("Failed to create errored cache entry for '{s}': {s}", .{ entry.path, @errorName(err) });
-                    continue;
-                };
-
-                if (staleness != null) {
-                    try cache.overWriteCacheEntry(self.allocator, errored_entry, cache.getIdx(entry).?);
-                } else {
-                    try cache.pushCacheEntry(self.allocator, errored_entry);
-                }
-                continue;
-            }
-
-            try file_writer.flush();
-
-            const cooked_stat = try cooked.file.stat(self.io);
-
-            const end = std.Io.Clock.Timestamp.now(self.io, .awake);
-            const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
-            var duration_buf: [32]u8 = undefined;
-            log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
-
-            if (staleness != null) {
-                try cache.overWriteCacheEntry(
-                    self.allocator,
-                    try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
-                    cache.getIdx(entry).?,
-                );
-            } else {
-                try cache.pushCacheEntry(
-                    self.allocator,
-                    try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
-                );
-            }
-
-            asset_node.end();
         }
 
         const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
@@ -196,7 +108,92 @@ pub const CookCommand = struct {
         try cache.write(self.io);
     }
 
-    fn outputFileExists(self: CookCommand, cooked_path: []const u8) bool {
+    const ProcessResult = enum { cached, hash_match, cooked, skipped, errored };
+
+    fn processAsset(self: *const CookCommand, cache: *Cache, entry: SourceFile, cook_node: std.Progress.Node) !ProcessResult {
+        const asset_node = cook_node.start(entry.path, 0);
+
+        const start = std.Io.Clock.Timestamp.now(self.io, .awake);
+        var staleness: ?Staleness = null;
+        if (cache.lookupEntryMut(entry)) |cache_entry| {
+            staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
+            if (staleness == .cached) {
+                if (self.outputFileExists(cache_entry.cooked_path)) {
+                    log.debug("{s} is cached, not cooking", .{entry.path});
+                    return .cached;
+                }
+                log.debug("{s} cached but output file missing, recooking", .{entry.path});
+            }
+
+            if (staleness == .hash_match) {
+                if (self.outputFileExists(cache_entry.cooked_path)) {
+                    const info = try entry.getFileInfo(self.source, self.io);
+                    cache_entry.source_mtime = info.modified_ns;
+                    log.debug("{s} hash match, updated mtime", .{entry.path});
+                    return .hash_match;
+                }
+                log.debug("{s} hash match but output file missing, recooking", .{entry.path});
+            }
+
+            if (staleness == .errored) {
+                log.debug("{s} previously errored, retrying", .{entry.path});
+            } else {
+                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });
+            }
+        }
+
+        const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
+            log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
+            return .errored;
+        };
+        defer self.allocator.free(cooked.path);
+        defer cooked.file.close(self.io);
+
+        var buf: [8192]u8 = undefined;
+        var file_writer = cooked.file.writer(self.io, &buf);
+
+        const cook_failed = blk: {
+            if (cookers.get(entry.extension)) |cooker| {
+                cooker.cook(self.allocator, self.io, self.source, entry.path, &file_writer.interface) catch |err| {
+                    log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
+                    break :blk true;
+                };
+            } else {
+                log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ entry.extension.string(), entry.path });
+            }
+            break :blk false;
+        };
+
+        if (cook_failed) {
+            const errored_entry = CacheEntry.createErrored(self.allocator, self.io, self.source, entry) catch |err| {
+                log.err("Failed to create errored cache entry for '{s}': {s}", .{ entry.path, @errorName(err) });
+                return .errored;
+            };
+
+            try cache.upsertEntry(self.allocator, entry, errored_entry);
+            return .errored;
+        }
+
+        try file_writer.flush();
+
+        const cooked_stat = try cooked.file.stat(self.io);
+
+        const end = std.Io.Clock.Timestamp.now(self.io, .awake);
+        const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
+        var duration_buf: [32]u8 = undefined;
+        log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
+
+        try cache.upsertEntry(
+            self.allocator,
+            entry,
+            try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
+        );
+
+        asset_node.end();
+        return .cooked;
+    }
+
+    fn outputFileExists(self: *const CookCommand, cooked_path: []const u8) bool {
         if (cooked_path.len == 0) {
             return false;
         }
@@ -207,7 +204,7 @@ pub const CookCommand = struct {
         return true;
     }
 
-    pub fn deinit(self: CookCommand) void {
+    pub fn deinit(self: *const CookCommand) void {
         self.source.close(self.io);
         self.output.close(self.io);
     }
