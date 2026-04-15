@@ -1,15 +1,9 @@
 const std = @import("std");
+const Image = @import("../parsers/texture/texture.zig").Image;
 
 pub const stb = @cImport({
     @cInclude("stb_image.h");
 });
-
-const Image = struct {
-    width: u32,
-    height: u32,
-    channels: u32, // always 4 after decode (RGBA)
-    pixels: []u8, // length = width * height * channels
-};
 
 const Cooker = @import("cooker.zig").Cooker;
 
