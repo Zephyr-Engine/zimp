@@ -1,10 +1,9 @@
 const std = @import("std");
 
 const Cooker = @import("cooker.zig").Cooker;
-const OBJCooker = @import("../obj/cook.zig").OBJCooker;
 
 pub fn cooker() Cooker {
-    return .{ .cookFn = cookObj };
+    return .{ .cookFn = cookObj, .asset_type = .texture };
 }
 
 fn cookObj(
