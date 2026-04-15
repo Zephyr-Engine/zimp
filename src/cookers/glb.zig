@@ -1,10 +1,14 @@
 const std = @import("std");
 
 const Cooker = @import("cooker.zig").Cooker;
-const GLBCooker = @import("../gltf/cook.zig").GLBCooker;
+const ZMesh = @import("../formats/zmesh.zig").ZMesh;
+const GLBFile = @import("../parsers/gltf/glb_parser.zig").GLBFile;
+const Gltf = @import("../parsers/gltf/gltf_json_parser.zig").Gltf;
+const GltfMesh = @import("../parsers/gltf/mesh.zig").GltfMesh;
+const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
 
 pub fn cooker() Cooker {
-    return .{ .cookFn = cookGlb };
+    return .{ .cookFn = cookGlb, .asset_type = .mesh };
 }
 
 fn cookGlb(
@@ -14,7 +18,22 @@ fn cookGlb(
     file_path: []const u8,
     writer: *std.Io.Writer,
 ) !void {
-    var glb_cooker = try GLBCooker.init(allocator, io, source_dir, file_path);
-    defer glb_cooker.deinit();
-    try glb_cooker.cook(allocator, writer);
+    const file_bytes = try source_dir.readFileAlloc(io, file_path, allocator, .unlimited);
+    defer allocator.free(file_bytes);
+
+    const glb_file = try GLBFile.parse(allocator, file_bytes);
+    defer allocator.destroy(glb_file);
+
+    var gltf = try Gltf.parse(glb_file.json, allocator);
+    defer gltf.deinit();
+
+    for (0..gltf.value.meshes.len) |i| {
+        var gltf_mesh = try GltfMesh.buildMesh(allocator, &gltf.value, i, glb_file.bin);
+        defer gltf_mesh.deinit();
+
+        var cooked_mesh = try CookedMesh.cook(allocator, &gltf_mesh.raw);
+        defer cooked_mesh.deinit(allocator);
+
+        try ZMesh.write(writer, cooked_mesh);
+    }
 }

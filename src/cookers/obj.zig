@@ -1,10 +1,12 @@
 const std = @import("std");
 
 const Cooker = @import("cooker.zig").Cooker;
-const OBJCooker = @import("../obj/cook.zig").OBJCooker;
+const ZMesh = @import("../formats/zmesh.zig").ZMesh;
+const ObjParser = @import("../parsers/obj/obj_parser.zig").ObjParser;
+const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
 
 pub fn cooker() Cooker {
-    return .{ .cookFn = cookObj };
+    return .{ .cookFn = cookObj, .asset_type = .mesh };
 }
 
 fn cookObj(
@@ -14,7 +16,16 @@ fn cookObj(
     file_path: []const u8,
     writer: *std.Io.Writer,
 ) !void {
-    var obj_cooker = try OBJCooker.init(allocator, io, source_dir, file_path);
-    defer obj_cooker.deinit();
-    try obj_cooker.cook(allocator, writer);
+    var parser = try ObjParser.init(allocator, io, source_dir, file_path);
+    defer parser.deinit();
+
+    var raw_mesh = try parser.parse(allocator);
+    defer allocator.free(raw_mesh.vertices);
+    defer allocator.free(raw_mesh.indices);
+    defer allocator.free(raw_mesh.submeshes);
+
+    var cooked_mesh = try CookedMesh.cook(allocator, &raw_mesh);
+    defer cooked_mesh.deinit(allocator);
+
+    try ZMesh.write(writer, cooked_mesh);
 }
