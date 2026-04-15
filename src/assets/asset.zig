@@ -95,8 +95,13 @@ test "Extension.processEntry returns gltf for .gltf file" {
     try testing.expectEqual(.gltf, Extension.processEntry(entry));
 }
 
-test "Extension.processEntry returns other for unknown extension" {
+test "Extension.processEntry returns png for .png file" {
     const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = "image.png", .kind = .file };
+    try testing.expectEqual(.png, Extension.processEntry(entry));
+}
+
+test "Extension.processEntry returns other for unknown extension" {
+    const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = "data.csv", .kind = .file };
     try testing.expectEqual(.other, Extension.processEntry(entry));
 }
 

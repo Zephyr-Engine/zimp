@@ -13,6 +13,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
     });
 
+    mod.addIncludePath(b.path("external/image"));
+    mod.addCSourceFile(.{
+        .file = b.path("external/image/stb_image.c"),
+        .flags = &.{"-O3"},
+    });
+    // mod.link_libc = true;
+
     const exe = b.addExecutable(.{
         .name = "zimp",
         .root_module = b.createModule(.{
@@ -24,6 +31,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.root_module.addIncludePath(b.path("external/image"));
 
     b.installArtifact(exe);
 
