@@ -26,6 +26,64 @@ const Image = struct {
         const idx = @as(usize, (y * self.width + x) * self.channels);
         std.mem.copyForwards(u8, self.pixels[idx .. idx + self.channels], color);
     }
+
+    pub fn generateMipmaps(self: *const Image, allocator: std.mem.Allocator) ![]Image {
+        const count = @floor(@log2(@max(self.width, self.height))) + 1;
+
+        const images = try allocator.alloc(Image, count);
+        for (0..count) |i| {
+            const mip_width = @max(1, self.width >> i);
+            const mip_height = @max(1, self.height >> i);
+
+            const bytes = try allocator.alloc(u8, @as(usize, mip_width) * @as(usize, mip_height) * self.channels);
+
+            var image = Image{
+                .width = mip_width,
+                .height = mip_height,
+                .channels = self.channels,
+                .pixels = bytes,
+            };
+            try self.boxFilter(&image);
+
+            images[i] = image;
+        }
+
+        return images;
+    }
+
+    fn boxFilter(original_image: *const Image, new_image: *Image) !void {
+        for (0..new_image.height) |y| {
+            for (0..new_image.width) |x| {
+                var r: u32 = 0;
+                var g: u32 = 0;
+                var b: u32 = 0;
+                var a: u32 = 0;
+                var count: u32 = 0;
+
+                for (0..2) |j| {
+                    for (0..2) |i| {
+                        const src_x = @min(original_image.width - 1, x * 2 + i);
+                        const src_y = @min(original_image.height - 1, y * 2 + j);
+                        if (original_image.getPixel(src_x, src_y)) |color| {
+                            r += color[0];
+                            g += color[1];
+                            b += color[2];
+                            a += color[3];
+                            count += 1;
+                        }
+                    }
+                }
+
+                const avg_color = [4]u8{
+                    @intCast(r / count),
+                    @intCast(g / count),
+                    @intCast(b / count),
+                    @intCast(a / count),
+                };
+                try new_image.setPixel(@intCast(x), @intCast(y), &avg_color);
+            }
+        }
+    }
 };
 
 const ColorSpace = enum {
