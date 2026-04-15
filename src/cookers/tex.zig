@@ -43,6 +43,13 @@ fn cookObj(
         .pixels = pixels[0..len],
     };
 
-    _ = image;
+    const mipmaps = try image.generateMipmaps(allocator);
+    defer {
+        for (mipmaps) |mip| {
+            allocator.free(mip.pixels);
+        }
+        allocator.free(mipmaps);
+    }
+
     _ = writer;
 }

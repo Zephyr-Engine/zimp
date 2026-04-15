@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const Image = struct {
+pub const Image = struct {
     width: u32,
     height: u32,
     channels: u32, // always 4 after decode (RGBA)
@@ -28,12 +28,13 @@ const Image = struct {
     }
 
     pub fn generateMipmaps(self: *const Image, allocator: std.mem.Allocator) ![]Image {
-        const count = @floor(@log2(@max(self.width, self.height))) + 1;
+        const count = std.math.log2(@max(self.width, self.height)) + 1;
 
         const images = try allocator.alloc(Image, count);
         for (0..count) |i| {
-            const mip_width = @max(1, self.width >> i);
-            const mip_height = @max(1, self.height >> i);
+            const shift: u5 = @intCast(i);
+            const mip_width = @max(1, self.width >> shift);
+            const mip_height = @max(1, self.height >> shift);
 
             const bytes = try allocator.alloc(u8, @as(usize, mip_width) * @as(usize, mip_height) * self.channels);
 
