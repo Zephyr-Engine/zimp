@@ -1,10 +1,41 @@
 const std = @import("std");
 
+pub const stb = @cImport({
+    @cInclude("stb_image.h");
+});
+
 pub const Image = struct {
     width: u32,
     height: u32,
     channels: u32, // always 4 after decode (RGBA)
     pixels: []u8, // length = width * height * channels
+    class: TextureClass,
+
+    pub fn init(filename: []const u8, file_bytes: []u8) Image {
+        var width: c_int = 0;
+        var height: c_int = 0;
+        var channels: c_int = 0;
+        const pixels = stb.stbi_load_from_memory(
+            file_bytes.ptr,
+            @intCast(file_bytes.len),
+            &width,
+            &height,
+            &channels,
+            4,
+        );
+        defer stb.stbi_image_free(pixels);
+
+        const len = @as(usize, @intCast(width)) * @as(usize, @intCast(height)) * 4;
+
+        const image = Image{
+            .width = @as(u32, @intCast(width)),
+            .height = @as(u32, @intCast(height)),
+            .channels = 4,
+            .pixels = pixels[0..len],
+            .class = TextureClass.classify(filename),
+        };
+        return image;
+    }
 
     pub fn getPixel(self: *const Image, x: u32, y: u32) ?[]const u8 {
         if (x >= self.width or y >= self.height) {
@@ -43,6 +74,7 @@ pub const Image = struct {
                 .height = mip_height,
                 .channels = self.channels,
                 .pixels = bytes,
+                .class = self.class,
             };
             try self.boxFilter(&image);
 
