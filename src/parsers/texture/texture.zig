@@ -84,35 +84,8 @@ pub const Image = struct {
         return images;
     }
 
-    const srgb_to_linear_lut: [256]f32 = blk: {
-        var lut: [256]f32 = undefined;
-        for (0..256) |i| {
-            const f: f32 = @as(f32, @floatFromInt(i)) / 255.0;
-            lut[i] = if (f > 0) @exp(@log(f) * 2.2) else 0.0;
-        }
-        break :blk lut;
-    };
-
-    fn srgbToLinear(v: u8) f32 {
-        return srgb_to_linear_lut[v];
-    }
-
-    fn linearToSrgb(v: f32) u8 {
-        const clamped = std.math.clamp(v, 0.0, 1.0);
-        return @intFromFloat(std.math.pow(f32, clamped, 1.0 / 2.2) * 255.0 + 0.5);
-    }
-
-    fn byteToSigned(v: u8) f32 {
-        return @as(f32, @floatFromInt(v)) / 255.0 * 2.0 - 1.0;
-    }
-
-    fn signedToByte(v: f32) u8 {
-        return @intFromFloat(std.math.clamp((v + 1.0) * 0.5 * 255.0 + 0.5, 0.0, 255.0));
-    }
-
     fn boxFilter(original_image: *const Image, new_image: *Image) !void {
-        const srgb = original_image.class.colorSpace() == .srgb;
-        const is_normal = original_image.class == .normal_linear;
+        const class = original_image.class;
 
         for (0..new_image.height) |y| {
             for (0..new_image.width) |x| {
@@ -127,19 +100,9 @@ pub const Image = struct {
                         const src_x = @min(original_image.width - 1, x * 2 + i);
                         const src_y = @min(original_image.height - 1, y * 2 + j);
                         if (original_image.getPixel(src_x, src_y)) |color| {
-                            if (srgb) {
-                                r += srgbToLinear(color[0]);
-                                g += srgbToLinear(color[1]);
-                                b += srgbToLinear(color[2]);
-                            } else if (is_normal) {
-                                r += byteToSigned(color[0]);
-                                g += byteToSigned(color[1]);
-                                b += byteToSigned(color[2]);
-                            } else {
-                                r += @as(f32, @floatFromInt(color[0])) / 255.0;
-                                g += @as(f32, @floatFromInt(color[1])) / 255.0;
-                                b += @as(f32, @floatFromInt(color[2])) / 255.0;
-                            }
+                            r += class.decode(color[0]);
+                            g += class.decode(color[1]);
+                            b += class.decode(color[2]);
                             a += @as(f32, @floatFromInt(color[3])) / 255.0;
                             count += 1;
                         }
@@ -147,27 +110,11 @@ pub const Image = struct {
                 }
 
                 const inv = 1.0 / count;
-                const avg_color = if (srgb) [4]u8{
-                    linearToSrgb(r * inv),
-                    linearToSrgb(g * inv),
-                    linearToSrgb(b * inv),
-                    @intFromFloat(std.math.clamp(a * inv, 0.0, 1.0) * 255.0 + 0.5),
-                } else if (is_normal) blk: {
-                    const nx = r * inv;
-                    const ny = g * inv;
-                    const nz = b * inv;
-                    const len = @sqrt(nx * nx + ny * ny + nz * nz);
-                    const s = if (len > 0.0) 1.0 / len else 0.0;
-                    break :blk [4]u8{
-                        signedToByte(nx * s),
-                        signedToByte(ny * s),
-                        signedToByte(nz * s),
-                        @intFromFloat(std.math.clamp(a * inv, 0.0, 1.0) * 255.0 + 0.5),
-                    };
-                } else [4]u8{
-                    @intFromFloat(std.math.clamp(r * inv, 0.0, 1.0) * 255.0 + 0.5),
-                    @intFromFloat(std.math.clamp(g * inv, 0.0, 1.0) * 255.0 + 0.5),
-                    @intFromFloat(std.math.clamp(b * inv, 0.0, 1.0) * 255.0 + 0.5),
+                const rgb = class.postAverage(r * inv, g * inv, b * inv);
+                const avg_color = [4]u8{
+                    class.encode(rgb[0]),
+                    class.encode(rgb[1]),
+                    class.encode(rgb[2]),
                     @intFromFloat(std.math.clamp(a * inv, 0.0, 1.0) * 255.0 + 0.5),
                 };
                 try new_image.setPixel(@intCast(x), @intCast(y), &avg_color);
@@ -237,6 +184,40 @@ const TextureClass = enum {
         return .color_srgb;
     }
 
+    const srgb_to_linear_lut: [256]f32 = blk: {
+        var lut: [256]f32 = undefined;
+        for (0..256) |i| {
+            const f: f32 = @as(f32, @floatFromInt(i)) / 255.0;
+            lut[i] = if (f > 0) @exp(@log(f) * 2.2) else 0.0;
+        }
+        break :blk lut;
+    };
+
+    pub fn decode(self: TextureClass, v: u8) f32 {
+        return switch (self) {
+            .color_srgb => srgb_to_linear_lut[v],
+            .normal_linear => @as(f32, @floatFromInt(v)) / 255.0 * 2.0 - 1.0,
+            else => @as(f32, @floatFromInt(v)) / 255.0,
+        };
+    }
+
+    pub fn encode(self: TextureClass, v: f32) u8 {
+        return switch (self) {
+            .color_srgb => @intFromFloat(std.math.pow(f32, std.math.clamp(v, 0.0, 1.0), 1.0 / 2.2) * 255.0 + 0.5),
+            .normal_linear => @intFromFloat(std.math.clamp((v + 1.0) * 0.5 * 255.0 + 0.5, 0.0, 255.0)),
+            else => @intFromFloat(std.math.clamp(v, 0.0, 1.0) * 255.0 + 0.5),
+        };
+    }
+
+    pub fn postAverage(self: TextureClass, r: f32, g: f32, b: f32) [3]f32 {
+        if (self == .normal_linear) {
+            const len = @sqrt(r * r + g * g + b * b);
+            const s = if (len > 0.0) 1.0 / len else 0.0;
+            return .{ r * s, g * s, b * s };
+        }
+        return .{ r, g, b };
+    }
+
     pub fn colorSpace(self: TextureClass) ColorSpace {
         return switch (self) {
             .color_srgb => .srgb,
@@ -244,3 +225,298 @@ const TextureClass = enum {
         };
     }
 };
+
+const testing = std.testing;
+
+test "classify: albedo suffix maps to color_srgb" {
+    try testing.expectEqual(.color_srgb, TextureClass.classify("textures/brick_albedo.png"));
+}
+
+test "classify: diffuse suffix maps to color_srgb" {
+    try testing.expectEqual(.color_srgb, TextureClass.classify("brick_diffuse.jpg"));
+}
+
+test "classify: basecolor suffix maps to color_srgb" {
+    try testing.expectEqual(.color_srgb, TextureClass.classify("brick_basecolor.png"));
+}
+
+test "classify: emissive suffix maps to color_srgb" {
+    try testing.expectEqual(.color_srgb, TextureClass.classify("light_emissive.png"));
+}
+
+test "classify: emission suffix maps to color_srgb" {
+    try testing.expectEqual(.color_srgb, TextureClass.classify("light_emission.png"));
+}
+
+test "classify: normal suffix maps to normal_linear" {
+    try testing.expectEqual(.normal_linear, TextureClass.classify("brick_normal.png"));
+}
+
+test "classify: nrm suffix maps to normal_linear" {
+    try testing.expectEqual(.normal_linear, TextureClass.classify("brick_nrm.png"));
+}
+
+test "classify: roughness suffix maps to single_linear" {
+    try testing.expectEqual(.single_linear, TextureClass.classify("brick_roughness.png"));
+}
+
+test "classify: metallic suffix maps to single_linear" {
+    try testing.expectEqual(.single_linear, TextureClass.classify("metal_metallic.png"));
+}
+
+test "classify: ao suffix maps to single_linear" {
+    try testing.expectEqual(.single_linear, TextureClass.classify("brick_ao.png"));
+}
+
+test "classify: height suffix maps to single_linear" {
+    try testing.expectEqual(.single_linear, TextureClass.classify("terrain_height.png"));
+}
+
+test "classify: opacity suffix maps to single_linear" {
+    try testing.expectEqual(.single_linear, TextureClass.classify("leaf_opacity.png"));
+}
+
+test "classify: alpha suffix maps to single_linear" {
+    try testing.expectEqual(.single_linear, TextureClass.classify("leaf_alpha.png"));
+}
+
+test "classify: orm suffix maps to packed_linear" {
+    try testing.expectEqual(.packed_linear, TextureClass.classify("brick_orm.png"));
+}
+
+test "classify: rm suffix maps to packed_linear" {
+    try testing.expectEqual(.packed_linear, TextureClass.classify("brick_rm.png"));
+}
+
+test "classify: .hdr extension maps to hdr_linear" {
+    try testing.expectEqual(.hdr_linear, TextureClass.classify("sky.hdr"));
+}
+
+test "classify: .exr extension maps to hdr_linear" {
+    try testing.expectEqual(.hdr_linear, TextureClass.classify("sky.exr"));
+}
+
+test "classify: hdr extension takes priority over stem" {
+    try testing.expectEqual(.hdr_linear, TextureClass.classify("sky_albedo.hdr"));
+}
+
+test "classify: unknown suffix defaults to color_srgb" {
+    try testing.expectEqual(.color_srgb, TextureClass.classify("photo.png"));
+}
+
+test "classify: no underscore in stem defaults to color_srgb" {
+    try testing.expectEqual(.color_srgb, TextureClass.classify("texture.png"));
+}
+
+test "classify: nested path classifies correctly" {
+    try testing.expectEqual(.normal_linear, TextureClass.classify("assets/textures/brick_normal.png"));
+}
+
+test "decode/encode round-trip: srgb 0 stays 0" {
+    const v = TextureClass.color_srgb.decode(0);
+    try testing.expectEqual(@as(u8, 0), TextureClass.color_srgb.encode(v));
+}
+
+test "decode/encode round-trip: srgb 255 stays 255" {
+    const v = TextureClass.color_srgb.decode(255);
+    try testing.expectEqual(@as(u8, 255), TextureClass.color_srgb.encode(v));
+}
+
+test "decode/encode round-trip: srgb 128 round-trips" {
+    const v = TextureClass.color_srgb.decode(128);
+    const result = TextureClass.color_srgb.encode(v);
+    try testing.expectEqual(@as(u8, 128), result);
+}
+
+test "decode/encode round-trip: linear preserves value" {
+    const class = TextureClass.single_linear;
+    for (0..256) |i| {
+        const byte: u8 = @intCast(i);
+        const decoded = class.decode(byte);
+        const encoded = class.encode(decoded);
+        try testing.expectEqual(byte, encoded);
+    }
+}
+
+test "decode/encode round-trip: normal 128 maps to ~0 signed" {
+    const class = TextureClass.normal_linear;
+    const decoded = class.decode(128);
+    try testing.expect(@abs(decoded) < 0.01);
+}
+
+test "decode/encode round-trip: normal 0 maps to -1" {
+    const class = TextureClass.normal_linear;
+    const decoded = class.decode(0);
+    try testing.expect(@abs(decoded - (-1.0)) < 0.01);
+}
+
+test "decode/encode round-trip: normal 255 maps to 1" {
+    const class = TextureClass.normal_linear;
+    const decoded = class.decode(255);
+    try testing.expect(@abs(decoded - 1.0) < 0.01);
+}
+
+test "postAverage: linear passes through unchanged" {
+    const rgb = TextureClass.single_linear.postAverage(0.5, 0.3, 0.7);
+    try testing.expectEqual(@as(f32, 0.5), rgb[0]);
+    try testing.expectEqual(@as(f32, 0.3), rgb[1]);
+    try testing.expectEqual(@as(f32, 0.7), rgb[2]);
+}
+
+test "postAverage: srgb passes through unchanged" {
+    const rgb = TextureClass.color_srgb.postAverage(0.5, 0.3, 0.7);
+    try testing.expectEqual(@as(f32, 0.5), rgb[0]);
+    try testing.expectEqual(@as(f32, 0.3), rgb[1]);
+    try testing.expectEqual(@as(f32, 0.7), rgb[2]);
+}
+
+test "postAverage: normal renormalizes to unit length" {
+    const rgb = TextureClass.normal_linear.postAverage(0.5, 0.5, 0.0);
+    const len = @sqrt(rgb[0] * rgb[0] + rgb[1] * rgb[1] + rgb[2] * rgb[2]);
+    try testing.expect(@abs(len - 1.0) < 0.001);
+}
+
+test "postAverage: normal preserves direction" {
+    const rgb = TextureClass.normal_linear.postAverage(0.0, 0.0, 0.5);
+    try testing.expect(@abs(rgb[0]) < 0.001);
+    try testing.expect(@abs(rgb[1]) < 0.001);
+    try testing.expect(@abs(rgb[2] - 1.0) < 0.001);
+}
+
+test "postAverage: normal handles zero vector" {
+    const rgb = TextureClass.normal_linear.postAverage(0.0, 0.0, 0.0);
+    try testing.expectEqual(@as(f32, 0.0), rgb[0]);
+    try testing.expectEqual(@as(f32, 0.0), rgb[1]);
+    try testing.expectEqual(@as(f32, 0.0), rgb[2]);
+}
+
+test "colorSpace: color_srgb returns srgb" {
+    try testing.expectEqual(ColorSpace.srgb, TextureClass.color_srgb.colorSpace());
+}
+
+test "colorSpace: normal_linear returns linear" {
+    try testing.expectEqual(ColorSpace.linear, TextureClass.normal_linear.colorSpace());
+}
+
+test "colorSpace: single_linear returns linear" {
+    try testing.expectEqual(ColorSpace.linear, TextureClass.single_linear.colorSpace());
+}
+
+test "srgb LUT: entry 0 is 0" {
+    try testing.expectEqual(@as(f32, 0.0), TextureClass.srgb_to_linear_lut[0]);
+}
+
+test "srgb LUT: entry 255 is ~1.0" {
+    try testing.expect(@abs(TextureClass.srgb_to_linear_lut[255] - 1.0) < 0.001);
+}
+
+test "srgb LUT: monotonically increasing" {
+    for (1..256) |i| {
+        try testing.expect(TextureClass.srgb_to_linear_lut[i] >= TextureClass.srgb_to_linear_lut[i - 1]);
+    }
+}
+
+test "srgb LUT: midpoint is less than 0.5 due to gamma" {
+    try testing.expect(TextureClass.srgb_to_linear_lut[128] < 0.25);
+}
+
+test "getPixel: returns null for out of bounds x" {
+    var pixels = [_]u8{ 255, 0, 0, 255 };
+    const image = Image{ .width = 1, .height = 1, .channels = 4, .pixels = &pixels, .class = .color_srgb };
+    try testing.expect(image.getPixel(1, 0) == null);
+}
+
+test "getPixel: returns null for out of bounds y" {
+    var pixels = [_]u8{ 255, 0, 0, 255 };
+    const image = Image{ .width = 1, .height = 1, .channels = 4, .pixels = &pixels, .class = .color_srgb };
+    try testing.expect(image.getPixel(0, 1) == null);
+}
+
+test "getPixel: returns correct pixel data" {
+    var pixels = [_]u8{ 10, 20, 30, 40, 50, 60, 70, 80 };
+    const image = Image{ .width = 2, .height = 1, .channels = 4, .pixels = &pixels, .class = .color_srgb };
+    const p0 = image.getPixel(0, 0).?;
+    try testing.expectEqual(@as(u8, 10), p0[0]);
+    const p1 = image.getPixel(1, 0).?;
+    try testing.expectEqual(@as(u8, 50), p1[0]);
+}
+
+test "setPixel: writes correct pixel data" {
+    var pixels = [_]u8{0} ** 8;
+    var image = Image{ .width = 2, .height = 1, .channels = 4, .pixels = &pixels, .class = .color_srgb };
+    try image.setPixel(1, 0, &.{ 11, 22, 33, 44 });
+    try testing.expectEqual(@as(u8, 11), pixels[4]);
+    try testing.expectEqual(@as(u8, 22), pixels[5]);
+    try testing.expectEqual(@as(u8, 33), pixels[6]);
+    try testing.expectEqual(@as(u8, 44), pixels[7]);
+}
+
+test "setPixel: returns error for out of bounds" {
+    var pixels = [_]u8{0} ** 4;
+    var image = Image{ .width = 1, .height = 1, .channels = 4, .pixels = &pixels, .class = .color_srgb };
+    try testing.expectError(error.OutOfBounds, image.setPixel(1, 0, &.{ 0, 0, 0, 0 }));
+}
+
+test "setPixel: returns error for wrong color length" {
+    var pixels = [_]u8{0} ** 4;
+    var image = Image{ .width = 1, .height = 1, .channels = 4, .pixels = &pixels, .class = .color_srgb };
+    try testing.expectError(error.InvalidColor, image.setPixel(0, 0, &.{ 0, 0, 0 }));
+}
+
+test "generateMipmaps: 4x4 produces correct mip count" {
+    const alloc = testing.allocator;
+    var pixels = [_]u8{128} ** (4 * 4 * 4);
+    const image = Image{ .width = 4, .height = 4, .channels = 4, .pixels = &pixels, .class = .single_linear };
+    const mipmaps = try image.generateMipmaps(alloc);
+    defer {
+        for (mipmaps) |mip| alloc.free(mip.pixels);
+        alloc.free(mipmaps);
+    }
+    try testing.expectEqual(@as(usize, 3), mipmaps.len);
+    try testing.expectEqual(@as(u32, 4), mipmaps[0].width);
+    try testing.expectEqual(@as(u32, 2), mipmaps[1].width);
+    try testing.expectEqual(@as(u32, 1), mipmaps[2].width);
+}
+
+test "generateMipmaps: uniform linear image preserves value" {
+    const alloc = testing.allocator;
+    var pixels = [_]u8{100} ** (4 * 4 * 4);
+    const image = Image{ .width = 4, .height = 4, .channels = 4, .pixels = &pixels, .class = .single_linear };
+    const mipmaps = try image.generateMipmaps(alloc);
+    defer {
+        for (mipmaps) |mip| alloc.free(mip.pixels);
+        alloc.free(mipmaps);
+    }
+    const smallest = mipmaps[mipmaps.len - 1];
+    try testing.expectEqual(@as(u8, 100), smallest.pixels[0]);
+    try testing.expectEqual(@as(u8, 100), smallest.pixels[1]);
+    try testing.expectEqual(@as(u8, 100), smallest.pixels[2]);
+    try testing.expectEqual(@as(u8, 100), smallest.pixels[3]);
+}
+
+test "generateMipmaps: normal mip is renormalized" {
+    const alloc = testing.allocator;
+    var pixels = [_]u8{ 128, 128, 255, 255 } ** (2 * 2);
+    const image = Image{ .width = 2, .height = 2, .channels = 4, .pixels = &pixels, .class = .normal_linear };
+    const mipmaps = try image.generateMipmaps(alloc);
+    defer {
+        for (mipmaps) |mip| alloc.free(mip.pixels);
+        alloc.free(mipmaps);
+    }
+    const mip1 = mipmaps[1];
+    try testing.expect(mip1.pixels[2] > 250);
+}
+
+test "generateMipmaps: mips inherit texture class" {
+    const alloc = testing.allocator;
+    var pixels = [_]u8{128} ** (2 * 2 * 4);
+    const image = Image{ .width = 2, .height = 2, .channels = 4, .pixels = &pixels, .class = .normal_linear };
+    const mipmaps = try image.generateMipmaps(alloc);
+    defer {
+        for (mipmaps) |mip| alloc.free(mip.pixels);
+        alloc.free(mipmaps);
+    }
+    for (mipmaps) |mip| {
+        try testing.expectEqual(TextureClass.normal_linear, mip.class);
+    }
+}

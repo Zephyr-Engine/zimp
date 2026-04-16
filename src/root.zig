@@ -33,6 +33,7 @@ test {
     _ = @import("cookers/glb.zig");
     _ = @import("cookers/obj.zig");
     _ = @import("parsers/obj/obj_parser.zig");
+    _ = @import("parsers/texture/texture.zig");
     _ = @import("inspectors/inspect.zig");
     _ = @import("inspectors/zmesh.zig");
     _ = @import("inspectors/zcache.zig");
