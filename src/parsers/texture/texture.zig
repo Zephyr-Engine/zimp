@@ -84,34 +84,91 @@ pub const Image = struct {
         return images;
     }
 
+    const srgb_to_linear_lut: [256]f32 = blk: {
+        var lut: [256]f32 = undefined;
+        for (0..256) |i| {
+            const f: f32 = @as(f32, @floatFromInt(i)) / 255.0;
+            lut[i] = if (f > 0) @exp(@log(f) * 2.2) else 0.0;
+        }
+        break :blk lut;
+    };
+
+    fn srgbToLinear(v: u8) f32 {
+        return srgb_to_linear_lut[v];
+    }
+
+    fn linearToSrgb(v: f32) u8 {
+        const clamped = std.math.clamp(v, 0.0, 1.0);
+        return @intFromFloat(std.math.pow(f32, clamped, 1.0 / 2.2) * 255.0 + 0.5);
+    }
+
+    fn byteToSigned(v: u8) f32 {
+        return @as(f32, @floatFromInt(v)) / 255.0 * 2.0 - 1.0;
+    }
+
+    fn signedToByte(v: f32) u8 {
+        return @intFromFloat(std.math.clamp((v + 1.0) * 0.5 * 255.0 + 0.5, 0.0, 255.0));
+    }
+
     fn boxFilter(original_image: *const Image, new_image: *Image) !void {
+        const srgb = original_image.class.colorSpace() == .srgb;
+        const is_normal = original_image.class == .normal_linear;
+
         for (0..new_image.height) |y| {
             for (0..new_image.width) |x| {
-                var r: u32 = 0;
-                var g: u32 = 0;
-                var b: u32 = 0;
-                var a: u32 = 0;
-                var count: u32 = 0;
+                var r: f32 = 0;
+                var g: f32 = 0;
+                var b: f32 = 0;
+                var a: f32 = 0;
+                var count: f32 = 0;
 
                 for (0..2) |j| {
                     for (0..2) |i| {
                         const src_x = @min(original_image.width - 1, x * 2 + i);
                         const src_y = @min(original_image.height - 1, y * 2 + j);
                         if (original_image.getPixel(src_x, src_y)) |color| {
-                            r += color[0];
-                            g += color[1];
-                            b += color[2];
-                            a += color[3];
+                            if (srgb) {
+                                r += srgbToLinear(color[0]);
+                                g += srgbToLinear(color[1]);
+                                b += srgbToLinear(color[2]);
+                            } else if (is_normal) {
+                                r += byteToSigned(color[0]);
+                                g += byteToSigned(color[1]);
+                                b += byteToSigned(color[2]);
+                            } else {
+                                r += @as(f32, @floatFromInt(color[0])) / 255.0;
+                                g += @as(f32, @floatFromInt(color[1])) / 255.0;
+                                b += @as(f32, @floatFromInt(color[2])) / 255.0;
+                            }
+                            a += @as(f32, @floatFromInt(color[3])) / 255.0;
                             count += 1;
                         }
                     }
                 }
 
-                const avg_color = [4]u8{
-                    @intCast(r / count),
-                    @intCast(g / count),
-                    @intCast(b / count),
-                    @intCast(a / count),
+                const inv = 1.0 / count;
+                const avg_color = if (srgb) [4]u8{
+                    linearToSrgb(r * inv),
+                    linearToSrgb(g * inv),
+                    linearToSrgb(b * inv),
+                    @intFromFloat(std.math.clamp(a * inv, 0.0, 1.0) * 255.0 + 0.5),
+                } else if (is_normal) blk: {
+                    const nx = r * inv;
+                    const ny = g * inv;
+                    const nz = b * inv;
+                    const len = @sqrt(nx * nx + ny * ny + nz * nz);
+                    const s = if (len > 0.0) 1.0 / len else 0.0;
+                    break :blk [4]u8{
+                        signedToByte(nx * s),
+                        signedToByte(ny * s),
+                        signedToByte(nz * s),
+                        @intFromFloat(std.math.clamp(a * inv, 0.0, 1.0) * 255.0 + 0.5),
+                    };
+                } else [4]u8{
+                    @intFromFloat(std.math.clamp(r * inv, 0.0, 1.0) * 255.0 + 0.5),
+                    @intFromFloat(std.math.clamp(g * inv, 0.0, 1.0) * 255.0 + 0.5),
+                    @intFromFloat(std.math.clamp(b * inv, 0.0, 1.0) * 255.0 + 0.5),
+                    @intFromFloat(std.math.clamp(a * inv, 0.0, 1.0) * 255.0 + 0.5),
                 };
                 try new_image.setPixel(@intCast(x), @intCast(y), &avg_color);
             }
