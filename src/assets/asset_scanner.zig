@@ -46,7 +46,6 @@ pub const AssetScanner = struct {
                     .path = path,
                     .assetType = ext.assetType(),
                 });
-                log.debug("Found {s} file: {s}", .{ ext.string(), path });
             } else if (entry.kind == .directory) {
                 const subdir = try std.Io.Dir.openDir(dir, self.io, entry.name, .{ .iterate = true });
                 const subprefix = if (prefix.len > 0)
