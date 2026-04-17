@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("../../logger.zig");
 
 pub const stb = @cImport({
     @cInclude("stb_image.h");
@@ -7,15 +8,15 @@ pub const stb = @cImport({
 pub const Image = struct {
     width: u32,
     height: u32,
-    channels: u32, // always 4 after decode (RGBA)
+    channels: u32, // 4 (RGBA) or 2 (RG for normal maps)
     pixels: []u8, // length = width * height * channels
     class: TextureClass,
 
-    pub fn init(filename: []const u8, file_bytes: []u8) Image {
+    pub fn init(filename: []const u8, file_bytes: []u8, allocator: std.mem.Allocator) !Image {
         var width: c_int = 0;
         var height: c_int = 0;
         var channels: c_int = 0;
-        const pixels = stb.stbi_load_from_memory(
+        const stb_pixels = stb.stbi_load_from_memory(
             file_bytes.ptr,
             @intCast(file_bytes.len),
             &width,
@@ -23,18 +24,23 @@ pub const Image = struct {
             &channels,
             4,
         );
-        defer stb.stbi_image_free(pixels);
+        defer stb.stbi_image_free(stb_pixels);
 
         const len = @as(usize, @intCast(width)) * @as(usize, @intCast(height)) * 4;
+        const pixels = try allocator.alloc(u8, len);
+        @memcpy(pixels, stb_pixels[0..len]);
 
-        const image = Image{
+        return Image{
             .width = @as(u32, @intCast(width)),
             .height = @as(u32, @intCast(height)),
             .channels = 4,
-            .pixels = pixels[0..len],
+            .pixels = pixels,
             .class = TextureClass.classify(filename),
         };
-        return image;
+    }
+
+    pub fn deinit(self: *const Image, allocator: std.mem.Allocator) void {
+        allocator.free(self.pixels);
     }
 
     pub fn getPixel(self: *const Image, x: u32, y: u32) ?[]const u8 {
@@ -59,6 +65,13 @@ pub const Image = struct {
     }
 
     pub fn generateMipmaps(self: *const Image, allocator: std.mem.Allocator) ![]Image {
+        const is_normal = self.class == .normal_linear;
+
+        // Validate normal map source data before mip generation
+        if (is_normal) {
+            self.validateNormals();
+        }
+
         const count = std.math.log2(@max(self.width, self.height)) + 1;
 
         const images = try allocator.alloc(Image, count);
@@ -78,10 +91,67 @@ pub const Image = struct {
             };
             try self.boxFilter(&image);
 
-            images[i] = image;
+            // Normal maps: extract RG channels, discard B (Z reconstructed in shader)
+            if (is_normal) {
+                const cooked = try image.cookNormalMap(allocator);
+                image.deinit(allocator);
+                images[i] = cooked;
+            } else {
+                images[i] = image;
+            }
         }
 
         return images;
+    }
+
+    /// Warns if any pixel in the normal map has a significantly non-unit normal.
+    fn validateNormals(self: *const Image) void {
+        const tolerance = 0.1;
+        var bad_count: u32 = 0;
+        for (0..self.height) |y| {
+            for (0..self.width) |x| {
+                if (self.getPixel(@intCast(x), @intCast(y))) |color| {
+                    const nx = self.class.decode(color[0]);
+                    const ny = self.class.decode(color[1]);
+                    const nz = self.class.decode(color[2]);
+                    const len = @sqrt(nx * nx + ny * ny + nz * nz);
+                    if (@abs(len - 1.0) > tolerance) {
+                        bad_count += 1;
+                    }
+                }
+            }
+        }
+        if (bad_count > 0) {
+            log.warn("normal map has {d} pixels with non-unit normals out of {d} total", .{
+                bad_count, self.width * self.height,
+            });
+        }
+    }
+
+    /// Extracts R and G channels (X/Y) from a normal map image.
+    /// The Z component is discarded — reconstructed in the shader as sqrt(1 - x² - y²).
+    /// Returns a new 2-channel image. Caller owns the returned pixel memory.
+    fn cookNormalMap(self: *const Image, allocator: std.mem.Allocator) !Image {
+        const pixel_count = @as(usize, self.width) * @as(usize, self.height);
+        const bytes = try allocator.alloc(u8, pixel_count * 2);
+
+        for (0..self.height) |y| {
+            for (0..self.width) |x| {
+                if (self.getPixel(@intCast(x), @intCast(y))) |color| {
+                    const dst = (y * self.width + x) * 2;
+                    bytes[dst] = color[0];
+                    bytes[dst + 1] = color[1];
+                }
+            }
+        }
+
+        return Image{
+            .width = self.width,
+            .height = self.height,
+            .channels = 2,
+            .pixels = bytes,
+            .class = self.class,
+        };
     }
 
     fn boxFilter(original_image: *const Image, new_image: *Image) !void {
@@ -494,8 +564,9 @@ test "generateMipmaps: uniform linear image preserves value" {
     try testing.expectEqual(@as(u8, 100), smallest.pixels[3]);
 }
 
-test "generateMipmaps: normal mip is renormalized" {
+test "generateMipmaps: normal mip is cooked to 2 channels" {
     const alloc = testing.allocator;
+    // Normal pointing +Z: (128, 128, 255) => signed (0, 0, 1)
     var pixels = [_]u8{ 128, 128, 255, 255 } ** (2 * 2);
     const image = Image{ .width = 2, .height = 2, .channels = 4, .pixels = &pixels, .class = .normal_linear };
     const mipmaps = try image.generateMipmaps(alloc);
@@ -504,7 +575,11 @@ test "generateMipmaps: normal mip is renormalized" {
         alloc.free(mipmaps);
     }
     const mip1 = mipmaps[1];
-    try testing.expect(mip1.pixels[2] > 250);
+    // After cooking: 2 channels (RG only), Z discarded
+    try testing.expectEqual(@as(u32, 2), mip1.channels);
+    // X and Y should be near zero (~128 in unsigned byte space)
+    try testing.expect(mip1.pixels[0] >= 126 and mip1.pixels[0] <= 130);
+    try testing.expect(mip1.pixels[1] >= 126 and mip1.pixels[1] <= 130);
 }
 
 test "generateMipmaps: mips inherit texture class" {
@@ -519,4 +594,40 @@ test "generateMipmaps: mips inherit texture class" {
     for (mipmaps) |mip| {
         try testing.expectEqual(TextureClass.normal_linear, mip.class);
     }
+}
+
+test "cookNormalMap: produces 2-channel image" {
+    const alloc = testing.allocator;
+    // A unit normal pointing +Z: (128, 128, 255) in unsigned byte space
+    var pixels = [_]u8{ 128, 128, 255, 255 } ** (2 * 2);
+    const image = Image{ .width = 2, .height = 2, .channels = 4, .pixels = &pixels, .class = .normal_linear };
+    const cooked = try image.cookNormalMap(alloc);
+    defer alloc.free(cooked.pixels);
+    try testing.expectEqual(@as(u32, 2), cooked.channels);
+    try testing.expectEqual(@as(usize, 2 * 2 * 2), cooked.pixels.len);
+}
+
+test "cookNormalMap: extracts R and G channels" {
+    const alloc = testing.allocator;
+    var pixels = [_]u8{ 100, 200, 255, 255, 50, 150, 255, 255 };
+    const image = Image{ .width = 2, .height = 1, .channels = 4, .pixels = &pixels, .class = .normal_linear };
+    const cooked = try image.cookNormalMap(alloc);
+    defer alloc.free(cooked.pixels);
+    // Pixel 0: R=100, G=200
+    try testing.expectEqual(@as(u8, 100), cooked.pixels[0]);
+    try testing.expectEqual(@as(u8, 200), cooked.pixels[1]);
+    // Pixel 1: R=50, G=150
+    try testing.expectEqual(@as(u8, 50), cooked.pixels[2]);
+    try testing.expectEqual(@as(u8, 150), cooked.pixels[3]);
+}
+
+test "cookNormalMap: preserves dimensions and class" {
+    const alloc = testing.allocator;
+    var pixels = [_]u8{ 128, 128, 255, 255 } ** (3 * 2);
+    const image = Image{ .width = 3, .height = 2, .channels = 4, .pixels = &pixels, .class = .normal_linear };
+    const cooked = try image.cookNormalMap(alloc);
+    defer alloc.free(cooked.pixels);
+    try testing.expectEqual(@as(u32, 3), cooked.width);
+    try testing.expectEqual(@as(u32, 2), cooked.height);
+    try testing.expectEqual(TextureClass.normal_linear, cooked.class);
 }

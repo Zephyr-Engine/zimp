@@ -17,12 +17,12 @@ fn cookObj(
     const file_bytes = try source_dir.readFileAlloc(io, file_path, allocator, .unlimited);
     defer allocator.free(file_bytes);
 
-    const image = Image.init(file_path, file_bytes);
+    const image = try Image.init(file_path, file_bytes, allocator);
+    defer image.deinit(allocator);
+
     const mipmaps = try image.generateMipmaps(allocator);
     defer {
-        for (mipmaps) |mip| {
-            allocator.free(mip.pixels);
-        }
+        for (mipmaps) |mip| mip.deinit(allocator);
         allocator.free(mipmaps);
     }
 

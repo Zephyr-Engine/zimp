@@ -18,7 +18,7 @@ pub fn build(b: *std.Build) void {
         .file = b.path("external/image/stb_image.c"),
         .flags = &.{"-O3"},
     });
-    // mod.link_libc = true;
+    mod.link_libc = true;
 
     const exe = b.addExecutable(.{
         .name = "zimp",
