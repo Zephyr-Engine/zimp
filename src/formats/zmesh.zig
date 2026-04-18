@@ -76,12 +76,6 @@ pub const ZMeshHeader = struct {
     }
 
     pub fn read(reader: *std.Io.Reader) !ZMeshHeader {
-        var magic: [5]u8 = undefined;
-        try reader.readSliceAll(&magic);
-        if (!std.mem.eql(u8, &magic, MAGIC)) {
-            return error.InvalidMagic;
-        }
-
         const version = try reader.takeInt(u32, .little);
         if (version != ZMESH_VERSION) {
             return error.UnsupportedVersion;
@@ -167,6 +161,12 @@ pub const ZMesh = struct {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
         var reader = &file_reader.interface;
+
+        var magic: [5]u8 = undefined;
+        try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, MAGIC)) {
+            return error.InvalidMagic;
+        }
 
         const header = try ZMeshHeader.read(reader);
         const vertex_count = header.vertex_count;

@@ -21,6 +21,7 @@ const asset_map = std.EnumArray(Extension, AssetType).init(.{
     .png = .texture,
     .jpg = .texture,
     .jpeg = .texture,
+    .hdr = .texture,
     .other = .unknown,
 });
 
@@ -31,6 +32,7 @@ const extension_map = std.StaticStringMap(Extension).initComptime(.{
     .{ "png", .png },
     .{ "jpg", .jpg },
     .{ "jpeg", .jpeg },
+    .{ "hdr", .hdr },
 });
 
 pub const Extension = enum {
@@ -40,6 +42,7 @@ pub const Extension = enum {
     png,
     jpg,
     jpeg,
+    hdr,
     other,
 
     pub fn string(self: Extension) []const u8 {
@@ -50,6 +53,7 @@ pub const Extension = enum {
             .png => "png",
             .jpg => "jpg",
             .jpeg => "jpeg",
+            .hdr => "hdr",
             .other => "other",
         };
     }

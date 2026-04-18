@@ -37,6 +37,7 @@ pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .png = tex_cooker,
     .jpeg = tex_cooker,
     .jpg = tex_cooker,
+    .hdr = tex_cooker,
     .other = null,
 });
 
