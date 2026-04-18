@@ -17,6 +17,7 @@ pub fn addCookStep(b: *std.Build, dep: *std.Build.Dependency, options: CookStepO
 }
 
 pub const ZMesh = @import("formats/zmesh.zig").ZMesh;
+pub const Zatex = @import("formats/ztex.zig").Zatex;
 pub const mesh = @import("assets/cooked/mesh.zig");
 
 test {
