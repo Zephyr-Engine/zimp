@@ -77,7 +77,7 @@ pub const ZMeshHeader = struct {
 
     pub fn read(reader: *std.Io.Reader) !ZMeshHeader {
         var magic: [5]u8 = undefined;
-        _ = try reader.readSliceAll(&magic);
+        try reader.readSliceAll(&magic);
         if (!std.mem.eql(u8, &magic, MAGIC)) {
             return error.InvalidMagic;
         }

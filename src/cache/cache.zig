@@ -162,7 +162,7 @@ pub const Cache = struct {
         var reader = &file_reader.interface;
 
         var magic: [MAGIC.len]u8 = undefined;
-        _ = try reader.readSliceAll(&magic);
+        try reader.readSliceAll(&magic);
         if (!std.mem.eql(u8, &magic, MAGIC)) {
             return error.InvalidMagic;
         }
