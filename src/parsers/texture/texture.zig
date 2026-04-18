@@ -89,7 +89,7 @@ pub const Image = struct {
                 .pixels = bytes,
                 .class = self.class,
             };
-            try self.boxFilter(&image);
+            try self.kaiserFilter(&image, allocator);
 
             // Normal maps: extract RG channels, discard B (Z reconstructed in shader)
             if (is_normal) {
@@ -154,44 +154,117 @@ pub const Image = struct {
         };
     }
 
-    fn boxFilter(original_image: *const Image, new_image: *Image) !void {
+    /// Separable Kaiser-windowed sinc filter for 2x downsampling.
+    /// Filters in linear space (class.decode → accumulate → class.encode),
+    /// applies clamp-to-edge at borders.
+    fn kaiserFilter(original_image: *const Image, new_image: *Image, allocator: std.mem.Allocator) !void {
         const class = original_image.class;
+        const radius: f32 = 3.0;
+        const alpha: f32 = 4.0;
+        const taps: usize = 12;
+        // Output pixel x's kernel center sits at source coord 2x + 1 (between two source pixels).
+        // Source samples at integer offsets {-5..6} relative to 2x cover the radius in both directions.
+        const start_offset: i32 = -5;
 
+        var weights: [taps]f32 = undefined;
+        var weight_sum: f32 = 0;
+        for (0..taps) |i| {
+            const offset_i: i32 = start_offset + @as(i32, @intCast(i));
+            const dist_out: f32 = (@as(f32, @floatFromInt(offset_i)) - 0.5) / 2.0;
+            weights[i] = kaiserSinc(dist_out, radius, alpha);
+            weight_sum += weights[i];
+        }
+        for (0..taps) |i| weights[i] /= weight_sum;
+
+        const ch = original_image.channels;
+        const scratch = try allocator.alloc(
+            f32,
+            @as(usize, new_image.width) * @as(usize, original_image.height) * ch,
+        );
+        defer allocator.free(scratch);
+
+        // Horizontal pass: source -> scratch (new_width × original_height, linear f32)
+        for (0..original_image.height) |y| {
+            for (0..new_image.width) |x| {
+                var c: [4]f32 = .{ 0, 0, 0, 0 };
+                for (0..taps) |i| {
+                    const src_x_signed: i32 = @as(i32, @intCast(x)) * 2 + start_offset + @as(i32, @intCast(i));
+                    const src_x: u32 = @intCast(std.math.clamp(
+                        src_x_signed,
+                        0,
+                        @as(i32, @intCast(original_image.width)) - 1,
+                    ));
+                    const color = original_image.getPixel(src_x, @intCast(y)).?;
+                    const w = weights[i];
+                    c[0] += class.decode(color[0]) * w;
+                    c[1] += class.decode(color[1]) * w;
+                    c[2] += class.decode(color[2]) * w;
+                    c[3] += @as(f32, @floatFromInt(color[3])) / 255.0 * w;
+                }
+                const idx = (y * new_image.width + x) * ch;
+                scratch[idx + 0] = c[0];
+                scratch[idx + 1] = c[1];
+                scratch[idx + 2] = c[2];
+                scratch[idx + 3] = c[3];
+            }
+        }
+
+        // Vertical pass: scratch -> new_image (encode back to u8)
         for (0..new_image.height) |y| {
             for (0..new_image.width) |x| {
-                var r: f32 = 0;
-                var g: f32 = 0;
-                var b: f32 = 0;
-                var a: f32 = 0;
-                var count: f32 = 0;
-
-                for (0..2) |j| {
-                    for (0..2) |i| {
-                        const src_x = @min(original_image.width - 1, x * 2 + i);
-                        const src_y = @min(original_image.height - 1, y * 2 + j);
-                        if (original_image.getPixel(src_x, src_y)) |color| {
-                            r += class.decode(color[0]);
-                            g += class.decode(color[1]);
-                            b += class.decode(color[2]);
-                            a += @as(f32, @floatFromInt(color[3])) / 255.0;
-                            count += 1;
-                        }
-                    }
+                var c: [4]f32 = .{ 0, 0, 0, 0 };
+                for (0..taps) |i| {
+                    const src_y_signed: i32 = @as(i32, @intCast(y)) * 2 + start_offset + @as(i32, @intCast(i));
+                    const src_y: u32 = @intCast(std.math.clamp(
+                        src_y_signed,
+                        0,
+                        @as(i32, @intCast(original_image.height)) - 1,
+                    ));
+                    const idx = (@as(usize, src_y) * new_image.width + x) * ch;
+                    const w = weights[i];
+                    c[0] += scratch[idx + 0] * w;
+                    c[1] += scratch[idx + 1] * w;
+                    c[2] += scratch[idx + 2] * w;
+                    c[3] += scratch[idx + 3] * w;
                 }
-
-                const inv = 1.0 / count;
-                const rgb = class.postAverage(r * inv, g * inv, b * inv);
-                const avg_color = [4]u8{
+                const rgb = class.postAverage(c[0], c[1], c[2]);
+                const out_color = [4]u8{
                     class.encode(rgb[0]),
                     class.encode(rgb[1]),
                     class.encode(rgb[2]),
-                    @intFromFloat(std.math.clamp(a * inv, 0.0, 1.0) * 255.0 + 0.5),
+                    @intFromFloat(std.math.clamp(c[3], 0.0, 1.0) * 255.0 + 0.5),
                 };
-                try new_image.setPixel(@intCast(x), @intCast(y), &avg_color);
+                try new_image.setPixel(@intCast(x), @intCast(y), &out_color);
             }
         }
     }
 };
+
+fn kaiserSinc(x: f32, radius: f32, alpha: f32) f32 {
+    const ax = @abs(x);
+    if (ax >= radius) return 0;
+    const sinc_val: f32 = if (ax < 1e-6) 1.0 else @sin(std.math.pi * x) / (std.math.pi * x);
+    const t = ax / radius;
+    const window = besselI0(alpha * @sqrt(1.0 - t * t)) / besselI0(alpha);
+    return sinc_val * window;
+}
+
+/// Modified Bessel function of the first kind, order 0.
+/// Series: I0(x) = Σ_{k=0}^∞ (x/2)^(2k) / (k!)^2
+fn besselI0(x: f32) f32 {
+    var result: f32 = 1.0;
+    var term: f32 = 1.0;
+    const half_x_sq = (x * 0.5) * (x * 0.5);
+    var k: f32 = 1.0;
+    var i: u32 = 1;
+    while (i < 30) : (i += 1) {
+        term *= half_x_sq / (k * k);
+        result += term;
+        if (term < 1e-7 * result) break;
+        k += 1.0;
+    }
+    return result;
+}
 
 const ColorSpace = enum {
     srgb,
