@@ -24,7 +24,9 @@ test {
     _ = @import("assets/asset_scanner.zig");
     _ = @import("assets/source_file.zig");
     _ = @import("assets/raw/mesh.zig");
+    _ = @import("assets/raw/texture.zig");
     _ = @import("assets/cooked/mesh.zig");
+    _ = @import("assets/cooked/texture.zig");
     _ = @import("commands/command.zig");
     _ = @import("parsers/gltf/glb_parser.zig");
     _ = @import("parsers/gltf/gltf_json_parser.zig");
@@ -33,7 +35,6 @@ test {
     _ = @import("cookers/glb.zig");
     _ = @import("cookers/obj.zig");
     _ = @import("parsers/obj/obj_parser.zig");
-    _ = @import("parsers/texture/texture.zig");
     _ = @import("inspectors/inspect.zig");
     _ = @import("inspectors/zmesh.zig");
     _ = @import("inspectors/zcache.zig");

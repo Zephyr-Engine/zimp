@@ -1,5 +1,8 @@
 const std = @import("std");
-const Image = @import("../parsers/texture/texture.zig").Image;
+
+const Zatex = @import("../formats/ztex.zig").Zatex;
+const RawTexture = @import("../assets/raw/texture.zig").RawTexture;
+const CookedTexture = @import("../assets/cooked/texture.zig").CookedTexture;
 
 const Cooker = @import("cooker.zig").Cooker;
 
@@ -17,14 +20,11 @@ fn cookObj(
     const file_bytes = try source_dir.readFileAlloc(io, file_path, allocator, .unlimited);
     defer allocator.free(file_bytes);
 
-    const image = try Image.init(file_path, file_bytes, allocator);
-    defer image.deinit(allocator);
+    const raw = try RawTexture.init(file_path, file_bytes, allocator);
+    defer raw.deinit(allocator);
 
-    const mipmaps = try image.generateMipmaps(allocator);
-    defer {
-        for (mipmaps) |mip| mip.deinit(allocator);
-        allocator.free(mipmaps);
-    }
+    var cooked = try CookedTexture.cook(allocator, &raw);
+    defer cooked.deinit(allocator);
 
-    _ = writer;
+    try Zatex.write(writer, cooked);
 }

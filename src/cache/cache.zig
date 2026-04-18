@@ -191,6 +191,9 @@ pub const Cache = struct {
                     for (cache.entries.items) |entry| {
                         if (entry.cooked_path.len > 0) {
                             old_output_dir.deleteFile(io, entry.cooked_path) catch |err| {
+                                if (err == std.Io.Dir.DeleteDirError.FileNotFound) {
+                                    continue;
+                                }
                                 log.warn("Failed to delete old cooked file '{s}' from '{s}': {s}", .{ entry.cooked_path, old_output_dir_path, @errorName(err) });
                             };
                         }
