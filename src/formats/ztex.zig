@@ -17,13 +17,13 @@ pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u8) // texture_type
 + @sizeOf(u8); // color_space
 
-const TextureType = enum(u8) {
+pub const TextureType = enum(u8) {
     texture_2d = 0,
     texture_cube = 1,
     texture_array = 2,
 };
 
-const ZatexHeader = struct {
+pub const ZatexHeader = struct {
     magic: [5]u8 = MAGIC.*,
     version: u32 = ZATEX_VERSION,
     width: u32,
@@ -45,12 +45,6 @@ const ZatexHeader = struct {
     }
 
     pub fn read(reader: *std.Io.Reader) !ZatexHeader {
-        var magic: [5]u8 = undefined;
-        try reader.readSliceAll(&magic);
-        if (!std.mem.eql(u8, &magic, MAGIC)) {
-            return error.InvalidMagic;
-        }
-
         const version = try reader.takeInt(u32, .little);
         if (version != ZATEX_VERSION) {
             return error.UnsupportedVersion;
@@ -103,6 +97,12 @@ pub const Zatex = struct {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
         const reader = &file_reader.interface;
+
+        var magic: [5]u8 = undefined;
+        try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, MAGIC)) {
+            return error.InvalidMagic;
+        }
 
         const header = try ZatexHeader.read(reader);
 
