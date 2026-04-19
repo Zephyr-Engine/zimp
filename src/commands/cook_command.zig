@@ -1,8 +1,12 @@
 const std = @import("std");
 
 const cookers = @import("../cookers/cooker.zig").cooker_registry;
+const extractDependencies = @import("../extractors/extractor.zig").extractDependencies;
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
-const SourceFile = @import("../assets/source_file.zig").SourceFile;
+const source_file_mod = @import("../assets/source_file.zig");
+const SourceFile = source_file_mod.SourceFile;
+const fnv1a = source_file_mod.fnv1a;
+const DepGraph = @import("../assets/dependency_graph.zig").DepGraph;
 const Staleness = @import("../cache/staleness.zig").Staleness;
 const CacheEntry = @import("../cache/entry.zig").CacheEntry;
 const Cache = @import("../cache/cache.zig").Cache;
@@ -90,6 +94,14 @@ pub const CookCommand = struct {
             log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
         }
 
+        var dep_graph = DepGraph.init(self.allocator);
+        defer dep_graph.deinit();
+        try self.buildDependencyGraph(&dep_graph, list.items);
+        log.debug("Built dependency graph: {d} edge(s) across {d} source file(s)", .{
+            dep_graph.totalDependencyCount(),
+            list.items.len,
+        });
+
         const total_start = std.Io.Clock.Timestamp.now(self.io, .awake);
 
         const cook_node = progress.start("Cooking assets", list.items.len);
@@ -115,6 +127,28 @@ pub const CookCommand = struct {
         });
 
         try cache.write(self.io);
+    }
+
+    fn buildDependencyGraph(
+        self: *const CookCommand,
+        dep_graph: *DepGraph,
+        source_files: []const SourceFile,
+    ) !void {
+        for (source_files) |source| {
+            const deps = extractDependencies(&source, self.source, self.io, self.allocator) catch |err| {
+                log.warn("Failed to extract dependencies for '{s}': {s}", .{ source.path, @errorName(err) });
+                continue;
+            };
+            defer {
+                for (deps) |d| self.allocator.free(d);
+                self.allocator.free(deps);
+            }
+
+            const from = source.hashPath();
+            for (deps) |dep_path| {
+                try dep_graph.addDependency(from, fnv1a(dep_path));
+            }
+        }
     }
 
     const ProcessResult = enum { cached, hash_match, cooked, skipped, errored };

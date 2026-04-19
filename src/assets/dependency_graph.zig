@@ -26,19 +26,19 @@ pub const DepGraph = struct {
     }
 
     pub fn addDependency(self: *DepGraph, from: Hash, to: Hash) !void {
-        if (self.edges.get(from)) |entry| {
+        const gop = try self.edges.getOrPut(from);
+        if (!gop.found_existing) {
+            gop.value_ptr.* = .empty;
+        } else {
             // exit early if dependency is already present
-            for (entry.items) |to_hash| {
+            for (gop.value_ptr.items) |to_hash| {
                 if (to_hash == to) {
                     return;
                 }
             }
-
-            return entry.append(self.allocator, to);
         }
 
-        // new entry, create edge with single value
-        try self.edges.put(from, .initBuffer(&.{to}));
+        try gop.value_ptr.append(self.allocator, to);
     }
 
     pub fn getDependencies(self: *const DepGraph, path: Hash) ?Dependencies {
