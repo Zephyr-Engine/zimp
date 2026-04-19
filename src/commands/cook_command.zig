@@ -20,6 +20,7 @@ pub const CookCommand = struct {
     output_path: []const u8 = ".",
     io: std.Io,
     allocator: std.mem.Allocator,
+    force: bool = false,
 
     pub fn parseFromArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) CookError!CookCommand {
         const cwd = std.Io.Dir.cwd();
@@ -50,6 +51,8 @@ pub const CookCommand = struct {
                 };
                 command.output_path = args[i + 1];
                 i += 1;
+            } else if (std.mem.eql(u8, "--force", args[i])) {
+                command.force = true;
             }
 
             i += 1;
@@ -59,15 +62,21 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: *const CookCommand, progress: std.Progress.Node) !void {
-        var cache = Cache.readFromDir(self.allocator, self.io, self.source, self.output_path) catch |err| blk: {
-            switch (err) {
-                error.OutputDirChanged => log.debug("Output directory changed, rebuilding cache", .{}),
-                error.StaleVersion => log.debug("Outdated cache version found, rebuilding entire cache", .{}),
-                error.UnsupportedVersion => log.debug("Corrupt cache found, rebuilding entire cache", .{}),
-                error.FileNotFound => log.debug("No existing cache found, starting fresh", .{}),
-                else => log.debug("Failed to read cache ({s}), starting fresh", .{@errorName(err)}),
+        var cache = blk: {
+            if (self.force) {
+                break :blk try Cache.init(self.allocator, self.source, self.output_path);
             }
-            break :blk try Cache.init(self.allocator, self.source, self.output_path);
+
+            break :blk Cache.readFromDir(self.allocator, self.io, self.source, self.output_path) catch |err| {
+                switch (err) {
+                    error.OutputDirChanged => log.debug("Output directory changed, rebuilding cache", .{}),
+                    error.StaleVersion => log.debug("Outdated cache version found, rebuilding entire cache", .{}),
+                    error.UnsupportedVersion => log.debug("Corrupt cache found, rebuilding entire cache", .{}),
+                    error.FileNotFound => log.debug("No existing cache found, starting fresh", .{}),
+                    else => log.debug("Failed to read cache ({s}), starting fresh", .{@errorName(err)}),
+                }
+                break :blk try Cache.init(self.allocator, self.source, self.output_path);
+            };
         };
         defer cache.deinit(self.allocator);
 
