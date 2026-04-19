@@ -105,13 +105,12 @@ pub const CookedTexture = struct {
 };
 
 fn selectFormat(class: TextureClass) TexelFormat {
-    // TODO: remaining BC encoders — color_srgb/packed → BC7, normal_linear → BC5, hdr_linear → BC6H.
     return switch (class) {
-        .color_srgb => .rgba8,
-        .normal_linear => .rg8,
+        .color_srgb => .bc7,
+        .normal_linear => .bc5,
         .single_linear => .bc4,
-        .packed_linear => .rgba8,
-        .hdr_linear => .rgb16f,
+        .packed_linear => .bc7,
+        .hdr_linear => .bc6h,
     };
 }
 
@@ -156,7 +155,34 @@ fn cookMip(allocator: std.mem.Allocator, src: *const RawTexture, format: TexelFo
             for (0..pixel_count) |i| r_channel[i] = ldr[i * 4];
             compression.encode(.bc4, r_channel, src.width, src.height, data);
         },
-        .bc5, .bc7, .bc6h => unreachable,
+        .bc5 => {
+            const ldr = src.pixels.ldr;
+            const rg = try allocator.alloc(u8, pixel_count * 2);
+            defer allocator.free(rg);
+            for (0..pixel_count) |i| {
+                rg[i * 2 + 0] = ldr[i * 4 + 0];
+                rg[i * 2 + 1] = ldr[i * 4 + 1];
+            }
+            compression.encode(.bc5, rg, src.width, src.height, data);
+        },
+        .bc7 => {
+            // Source is already the RGBA8 layout stb_image produced.
+            compression.encode(.bc7, src.pixels.ldr, src.width, src.height, data);
+        },
+        .bc6h => {
+            const hdr = src.pixels.hdr;
+            const rgb_half = try allocator.alloc(u8, pixel_count * 6);
+            defer allocator.free(rgb_half);
+            for (0..pixel_count) |i| {
+                const r: f16 = @floatCast(hdr[i * 3 + 0]);
+                const g: f16 = @floatCast(hdr[i * 3 + 1]);
+                const b: f16 = @floatCast(hdr[i * 3 + 2]);
+                std.mem.writeInt(u16, rgb_half[i * 6 + 0 ..][0..2], @bitCast(r), .little);
+                std.mem.writeInt(u16, rgb_half[i * 6 + 2 ..][0..2], @bitCast(g), .little);
+                std.mem.writeInt(u16, rgb_half[i * 6 + 4 ..][0..2], @bitCast(b), .little);
+            }
+            compression.encode(.bc6h, rgb_half, src.width, src.height, data);
+        },
     }
 
     return .{ .width = src.width, .height = src.height, .data = data };
@@ -193,24 +219,24 @@ fn makeUniformRawHdr(allocator: std.mem.Allocator, width: u32, height: u32, fill
     };
 }
 
-test "selectFormat: color_srgb picks rgba8" {
-    try testing.expectEqual(TexelFormat.rgba8, selectFormat(.color_srgb));
+test "selectFormat: color_srgb picks bc7" {
+    try testing.expectEqual(TexelFormat.bc7, selectFormat(.color_srgb));
 }
 
-test "selectFormat: normal_linear picks rg8" {
-    try testing.expectEqual(TexelFormat.rg8, selectFormat(.normal_linear));
+test "selectFormat: normal_linear picks bc5" {
+    try testing.expectEqual(TexelFormat.bc5, selectFormat(.normal_linear));
 }
 
 test "selectFormat: single_linear picks bc4" {
     try testing.expectEqual(TexelFormat.bc4, selectFormat(.single_linear));
 }
 
-test "selectFormat: packed_linear picks rgba8" {
-    try testing.expectEqual(TexelFormat.rgba8, selectFormat(.packed_linear));
+test "selectFormat: packed_linear picks bc7" {
+    try testing.expectEqual(TexelFormat.bc7, selectFormat(.packed_linear));
 }
 
-test "selectFormat: hdr_linear picks rgb16f" {
-    try testing.expectEqual(TexelFormat.rgb16f, selectFormat(.hdr_linear));
+test "selectFormat: hdr_linear picks bc6h" {
+    try testing.expectEqual(TexelFormat.bc6h, selectFormat(.hdr_linear));
 }
 
 test "imageSize: rgba8 4x4 = 64" {
@@ -307,7 +333,7 @@ test "CookedTexture.cook: preserves dimensions and picks color_space" {
     try testing.expectEqual(@as(u32, 4), cooked.width);
     try testing.expectEqual(@as(u32, 4), cooked.height);
     try testing.expectEqual(ColorSpace.srgb, cooked.color_space);
-    try testing.expectEqual(TexelFormat.rgba8, cooked.format);
+    try testing.expectEqual(TexelFormat.bc7, cooked.format);
 }
 
 test "CookedTexture.cook: produces full mip chain" {
@@ -325,10 +351,10 @@ test "CookedTexture.cook: produces full mip chain" {
     try testing.expectEqual(@as(u32, 1), cooked.mips[2].width);
 }
 
-test "CookedTexture.cook: normal_linear produces rg8 mips" {
+test "CookedTexture.cook: normal_linear produces bc5 mips" {
     const alloc = testing.allocator;
     // Pixel (128, 128, 255) → signed normal (0, 0, 1)
-    const pixel_count: usize = 2 * 2;
+    const pixel_count: usize = 4 * 4;
     const pixels = try alloc.alloc(u8, pixel_count * 4);
     for (0..pixel_count) |i| {
         pixels[i * 4 + 0] = 128;
@@ -336,24 +362,26 @@ test "CookedTexture.cook: normal_linear produces rg8 mips" {
         pixels[i * 4 + 2] = 255;
         pixels[i * 4 + 3] = 255;
     }
-    var raw = RawTexture{ .width = 2, .height = 2, .channels = 4, .pixels = .{ .ldr = pixels }, .class = .normal_linear };
+    var raw = RawTexture{ .width = 4, .height = 4, .channels = 4, .pixels = .{ .ldr = pixels }, .class = .normal_linear };
     defer raw.deinit(alloc);
 
     var cooked = try CookedTexture.cook(alloc, &raw);
     defer cooked.deinit(alloc);
 
-    try testing.expectEqual(TexelFormat.rg8, cooked.format);
+    try testing.expectEqual(TexelFormat.bc5, cooked.format);
     try testing.expectEqual(ColorSpace.linear, cooked.color_space);
 
-    // Each mip stores 2 bytes per pixel (R, G)
+    // Each mip is one BC5 block (2 × 8-byte BC4 halves = 16 bytes) since dims collapse to ≤4x4.
     for (cooked.mips) |mip| {
-        try testing.expectEqual(@as(usize, mip.width) * @as(usize, mip.height) * 2, mip.data.len);
+        try testing.expectEqual(@as(usize, 16), mip.data.len);
     }
 
-    // Smallest mip: RG should both be ~128 (the normal didn't change direction under filtering)
-    const smallest = cooked.mips[cooked.mips.len - 1];
-    try testing.expect(smallest.data[0] >= 126 and smallest.data[0] <= 130);
-    try testing.expect(smallest.data[1] >= 126 and smallest.data[1] <= 130);
+    // On a uniform (128, 128) block, BC4 endpoints both equal 128 and selectors are all zero.
+    const top = cooked.mips[0];
+    try testing.expectEqual(@as(u8, 128), top.data[0]); // R red0
+    try testing.expectEqual(@as(u8, 128), top.data[1]); // R red1
+    try testing.expectEqual(@as(u8, 128), top.data[8]); // G red0
+    try testing.expectEqual(@as(u8, 128), top.data[9]); // G red1
 }
 
 test "CookedTexture.cook: single_linear produces bc4 mips" {
