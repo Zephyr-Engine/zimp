@@ -112,11 +112,10 @@ pub const Zatex = struct {
         var loaded: usize = 0;
         errdefer for (mips[0..loaded]) |mip| allocator.free(mip.data);
 
-        const bpp = header.format.bytesPerPixel();
         for (0..header.mip_count) |i| {
             const width = try reader.takeInt(u32, .little);
             const height = try reader.takeInt(u32, .little);
-            const size: usize = @as(usize, width) * @as(usize, height) * bpp;
+            const size = header.format.imageSize(width, height);
 
             const data = try allocator.alloc(u8, size);
             errdefer allocator.free(data);
@@ -149,9 +148,8 @@ pub const Zatex = struct {
         const header = ZatexHeader.init(cooked_tex);
         try header.write(writer);
 
-        const bpp = cooked_tex.format.bytesPerPixel();
         for (cooked_tex.mips) |mip| {
-            const expected: usize = @as(usize, mip.width) * @as(usize, mip.height) * bpp;
+            const expected = cooked_tex.format.imageSize(mip.width, mip.height);
             std.debug.assert(mip.data.len == expected);
 
             try writer.writeInt(u32, mip.width, .little);
@@ -178,11 +176,10 @@ fn makeCookedTexture(
     var allocated: usize = 0;
     errdefer for (mips[0..allocated]) |mip| allocator.free(mip.data);
 
-    const bpp = format.bytesPerPixel();
     var w: u32 = width;
     var h: u32 = height;
     for (0..mip_count) |i| {
-        const size: usize = @as(usize, w) * @as(usize, h) * bpp;
+        const size = format.imageSize(w, h);
         const data = try allocator.alloc(u8, size);
         for (data, 0..) |*b, j| b.* = @intCast((i * 37 + j * 13) & 0xff);
         mips[i] = .{ .width = w, .height = h, .data = data };

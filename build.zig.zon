@@ -2,7 +2,7 @@
     .name = .zimp,
     .version = "0.0.0",
     .fingerprint = 0xe2960b9d5a00ef8c, // Changing this has security and trust implications.
-    .minimum_zig_version = "0.16.0-dev.2979+e93834410",
+    .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",

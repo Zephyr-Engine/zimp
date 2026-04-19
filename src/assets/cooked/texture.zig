@@ -4,6 +4,7 @@ const raw_texture = @import("../raw/texture.zig");
 const RawTexture = raw_texture.RawTexture;
 const TextureClass = raw_texture.TextureClass;
 const ColorSpace = raw_texture.ColorSpace;
+const compression = @import("compression/compression.zig");
 
 /// Target texel format for a cooked mip level. Values match the on-disk ZTex
 /// format enum so they can be written directly.
@@ -17,14 +18,41 @@ pub const TexelFormat = enum(u16) {
     bc7 = 12,
     bc6h = 13,
 
-    pub fn bytesPerPixel(self: TexelFormat) usize {
+    pub fn isBlockCompressed(self: TexelFormat) bool {
+        return switch (self) {
+            .rgba8, .rg8, .r8, .rgb16f => false,
+            .bc4, .bc5, .bc7, .bc6h => true,
+        };
+    }
+
+    pub fn blockWidth(self: TexelFormat) u32 {
+        return if (self.isBlockCompressed()) 4 else 1;
+    }
+
+    pub fn blockHeight(self: TexelFormat) u32 {
+        return if (self.isBlockCompressed()) 4 else 1;
+    }
+
+    /// Bytes per block. For non-compressed formats, a "block" is a single texel.
+    pub fn bytesPerBlock(self: TexelFormat) usize {
         return switch (self) {
             .rgba8 => 4,
             .rg8 => 2,
             .r8 => 1,
             .rgb16f => 6,
-            .bc4, .bc5, .bc7, .bc6h => unreachable, // block-compressed formats not yet supported
+            .bc4 => 8,
+            .bc5, .bc7, .bc6h => 16,
         };
+    }
+
+    /// Size in bytes of a mip of the given logical dimensions.
+    /// For block-compressed formats, dimensions are rounded up to the block grid.
+    pub fn imageSize(self: TexelFormat, width: u32, height: u32) usize {
+        const bw = self.blockWidth();
+        const bh = self.blockHeight();
+        const blocks_x = (width + bw - 1) / bw;
+        const blocks_y = (height + bh - 1) / bh;
+        return @as(usize, blocks_x) * @as(usize, blocks_y) * self.bytesPerBlock();
     }
 };
 
@@ -77,12 +105,11 @@ pub const CookedTexture = struct {
 };
 
 fn selectFormat(class: TextureClass) TexelFormat {
-    // TODO: upgrade to block-compressed formats once BC encoders land.
-    // color_srgb/packed → BC7, normal_linear → BC5, single_linear → BC4, hdr_linear → BC6H.
+    // TODO: remaining BC encoders — color_srgb/packed → BC7, normal_linear → BC5, hdr_linear → BC6H.
     return switch (class) {
         .color_srgb => .rgba8,
         .normal_linear => .rg8,
-        .single_linear => .r8,
+        .single_linear => .bc4,
         .packed_linear => .rgba8,
         .hdr_linear => .rgb16f,
     };
@@ -93,7 +120,7 @@ fn selectFormat(class: TextureClass) TexelFormat {
 /// Block compression of the resulting bytes is still a TODO.
 fn cookMip(allocator: std.mem.Allocator, src: *const RawTexture, format: TexelFormat) !CookedMip {
     const pixel_count = @as(usize, src.width) * @as(usize, src.height);
-    const data = try allocator.alloc(u8, pixel_count * format.bytesPerPixel());
+    const data = try allocator.alloc(u8, format.imageSize(src.width, src.height));
     errdefer allocator.free(data);
 
     switch (format) {
@@ -122,7 +149,14 @@ fn cookMip(allocator: std.mem.Allocator, src: *const RawTexture, format: TexelFo
                 std.mem.writeInt(u16, data[i * 6 + 4 ..][0..2], @bitCast(b), .little);
             }
         },
-        .bc4, .bc5, .bc7, .bc6h => unreachable,
+        .bc4 => {
+            const ldr = src.pixels.ldr;
+            const r_channel = try allocator.alloc(u8, pixel_count);
+            defer allocator.free(r_channel);
+            for (0..pixel_count) |i| r_channel[i] = ldr[i * 4];
+            compression.encode(.bc4, r_channel, src.width, src.height, data);
+        },
+        .bc5, .bc7, .bc6h => unreachable,
     }
 
     return .{ .width = src.width, .height = src.height, .data = data };
@@ -167,8 +201,8 @@ test "selectFormat: normal_linear picks rg8" {
     try testing.expectEqual(TexelFormat.rg8, selectFormat(.normal_linear));
 }
 
-test "selectFormat: single_linear picks r8" {
-    try testing.expectEqual(TexelFormat.r8, selectFormat(.single_linear));
+test "selectFormat: single_linear picks bc4" {
+    try testing.expectEqual(TexelFormat.bc4, selectFormat(.single_linear));
 }
 
 test "selectFormat: packed_linear picks rgba8" {
@@ -179,16 +213,36 @@ test "selectFormat: hdr_linear picks rgb16f" {
     try testing.expectEqual(TexelFormat.rgb16f, selectFormat(.hdr_linear));
 }
 
-test "bytesPerPixel: rgba8 = 4" {
-    try testing.expectEqual(@as(usize, 4), TexelFormat.rgba8.bytesPerPixel());
+test "imageSize: rgba8 4x4 = 64" {
+    try testing.expectEqual(@as(usize, 64), TexelFormat.rgba8.imageSize(4, 4));
 }
 
-test "bytesPerPixel: rg8 = 2" {
-    try testing.expectEqual(@as(usize, 2), TexelFormat.rg8.bytesPerPixel());
+test "imageSize: rg8 2x2 = 8" {
+    try testing.expectEqual(@as(usize, 8), TexelFormat.rg8.imageSize(2, 2));
 }
 
-test "bytesPerPixel: r8 = 1" {
-    try testing.expectEqual(@as(usize, 1), TexelFormat.r8.bytesPerPixel());
+test "imageSize: r8 3x5 = 15" {
+    try testing.expectEqual(@as(usize, 15), TexelFormat.r8.imageSize(3, 5));
+}
+
+test "imageSize: bc4 4x4 = 8 (one block)" {
+    try testing.expectEqual(@as(usize, 8), TexelFormat.bc4.imageSize(4, 4));
+}
+
+test "imageSize: bc4 rounds sub-block dims up to a full block" {
+    try testing.expectEqual(@as(usize, 8), TexelFormat.bc4.imageSize(1, 1));
+    try testing.expectEqual(@as(usize, 8), TexelFormat.bc4.imageSize(3, 3));
+    try testing.expectEqual(@as(usize, 16), TexelFormat.bc4.imageSize(5, 3));
+}
+
+test "imageSize: bc7 8x8 = 64 (four 16-byte blocks)" {
+    try testing.expectEqual(@as(usize, 64), TexelFormat.bc7.imageSize(8, 8));
+}
+
+test "isBlockCompressed" {
+    try testing.expect(!TexelFormat.rgba8.isBlockCompressed());
+    try testing.expect(TexelFormat.bc4.isBlockCompressed());
+    try testing.expect(TexelFormat.bc7.isBlockCompressed());
 }
 
 test "cookMip: rgba8 preserves all channels" {
@@ -302,19 +356,21 @@ test "CookedTexture.cook: normal_linear produces rg8 mips" {
     try testing.expect(smallest.data[1] >= 126 and smallest.data[1] <= 130);
 }
 
-test "CookedTexture.cook: single_linear produces r8 mips" {
+test "CookedTexture.cook: single_linear produces bc4 mips" {
     const alloc = testing.allocator;
-    var raw = try makeUniformRaw(alloc, 2, 2, .single_linear, 77);
+    var raw = try makeUniformRaw(alloc, 4, 4, .single_linear, 77);
     defer raw.deinit(alloc);
 
     var cooked = try CookedTexture.cook(alloc, &raw);
     defer cooked.deinit(alloc);
 
-    try testing.expectEqual(TexelFormat.r8, cooked.format);
+    try testing.expectEqual(TexelFormat.bc4, cooked.format);
+    // Each mip is one 4x4 block = 8 bytes (sub-4 mips round up).
     for (cooked.mips) |mip| {
-        try testing.expectEqual(@as(usize, mip.width) * @as(usize, mip.height), mip.data.len);
-        for (mip.data) |byte| {
-            try testing.expectEqual(@as(u8, 77), byte);
-        }
+        try testing.expectEqual(@as(usize, 8), mip.data.len);
+        // Uniform input → endpoints equal the source value, selectors all zero.
+        try testing.expectEqual(@as(u8, 77), mip.data[0]);
+        try testing.expectEqual(@as(u8, 77), mip.data[1]);
+        for (mip.data[2..8]) |b| try testing.expectEqual(@as(u8, 0), b);
     }
 }

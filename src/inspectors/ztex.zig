@@ -39,16 +39,6 @@ fn textureTypeName(t: ztex.TextureType) []const u8 {
     };
 }
 
-fn bytesPerPixelOrNull(f: TexelFormat) ?usize {
-    return switch (f) {
-        .rgba8 => 4,
-        .rg8 => 2,
-        .r8 => 1,
-        .rgb16f => 6,
-        .bc4, .bc5, .bc7, .bc6h => null, // block-compressed; size rules TBD
-    };
-}
-
 fn inspectZtex(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
     const header = try ztex.ZatexHeader.read(reader);
 
@@ -64,20 +54,18 @@ fn inspectZtex(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("  {s: >5}  {s: >8}  {s: >8}  {s: >10}", .{ "level", "width", "height", "size" });
     log.info("  {s}", .{"-" ** 40});
 
-    const bpp_opt = bytesPerPixelOrNull(header.format);
     var total_data_size: u64 = 0;
 
     for (0..header.mip_count) |i| {
         const width = try reader.takeInt(u32, .little);
         const height = try reader.takeInt(u32, .little);
 
+        const size: u64 = @intCast(header.format.imageSize(width, height));
+        total_data_size += size;
+        try reader.discardAll(size);
+
         var size_buf: [16]u8 = undefined;
-        const size_str = if (bpp_opt) |bpp| blk: {
-            const size: u64 = @as(u64, width) * @as(u64, height) * @as(u64, bpp);
-            total_data_size += size;
-            try reader.discardAll(size);
-            break :blk fmt.formatBytes(&size_buf, size);
-        } else "unknown";
+        const size_str = fmt.formatBytes(&size_buf, size);
 
         log.info("  {d: >5}  {d: >8}  {d: >8}  {s: >10}", .{ i, width, height, size_str });
     }
@@ -147,20 +135,12 @@ fn writeTestZtex(writer: *std.Io.Writer, opts: TestZtexOpts) !void {
     try writer.writeInt(u8, @intFromEnum(opts.texture_type), .little);
     try writer.writeInt(u8, @intFromEnum(opts.color_space), .little);
 
-    const bpp: u32 = switch (opts.format) {
-        .rgba8 => 4,
-        .rg8 => 2,
-        .r8 => 1,
-        .rgb16f => 6,
-        .bc4, .bc5, .bc7, .bc6h => unreachable,
-    };
-
     for (opts.mips) |mip| {
         const w = mip[0];
         const h = mip[1];
         try writer.writeInt(u32, w, .little);
         try writer.writeInt(u32, h, .little);
-        const bytes = w * h * bpp;
+        const bytes = opts.format.imageSize(w, h);
         for (0..bytes) |_| try writer.writeInt(u8, 0, .little);
     }
 }

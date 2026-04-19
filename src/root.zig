@@ -28,6 +28,8 @@ test {
     _ = @import("assets/raw/texture.zig");
     _ = @import("assets/cooked/mesh.zig");
     _ = @import("assets/cooked/texture.zig");
+    _ = @import("assets/cooked/compression/compression.zig");
+    _ = @import("assets/cooked/compression/bc4.zig");
     _ = @import("commands/command.zig");
     _ = @import("parsers/gltf/glb_parser.zig");
     _ = @import("parsers/gltf/gltf_json_parser.zig");
