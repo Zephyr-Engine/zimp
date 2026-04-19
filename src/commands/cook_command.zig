@@ -270,11 +270,22 @@ test "CookCommand.parseFromArgs succeeds with valid args" {
     try testing.expect(cmd.output.handle != 0);
 }
 
+test "CookCommand.parseFromArgs succeeds with force arg" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--output", ".", "--force" };
+    const cmd = try CookCommand.parseFromArgs(testing.allocator, testing.io, args);
+    defer cmd.deinit();
+
+    try testing.expect(cmd.force == true);
+    try testing.expect(cmd.source.handle != 0);
+    try testing.expect(cmd.output.handle != 0);
+}
+
 test "CookCommand.parseFromArgs accepts flags in any order" {
     const args: []const [:0]const u8 = &.{ "zimp", "cook", "--output", ".", "--source", "." };
     const cmd = try CookCommand.parseFromArgs(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
+    try testing.expect(cmd.force == false);
     try testing.expect(cmd.source.handle != 0);
     try testing.expect(cmd.output.handle != 0);
 }
