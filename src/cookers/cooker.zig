@@ -28,11 +28,16 @@ pub const Cooker = struct {
 
 const glb_cooker = @import("glb.zig").cooker();
 const obj_cooker = @import("obj.zig").cooker();
+const tex_cooker = @import("tex.zig").cooker();
 
 pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .glb = glb_cooker,
     .gltf = glb_cooker,
     .obj = obj_cooker,
+    .png = tex_cooker,
+    .jpeg = tex_cooker,
+    .jpg = tex_cooker,
+    .hdr = tex_cooker,
     .other = null,
 });
 

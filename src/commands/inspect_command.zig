@@ -42,7 +42,7 @@ pub const InspectCommand = struct {
         var reader = &file_reader.interface;
 
         var magic: [5]u8 = undefined;
-        _ = try reader.readSliceAll(&magic);
+        try reader.readSliceAll(&magic);
 
         const inspector = inspectors.get(&magic) orelse {
             log.err("No inspector found for file with magic '{s}'", .{magic});

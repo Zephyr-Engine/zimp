@@ -46,7 +46,6 @@ pub const AssetScanner = struct {
                     .path = path,
                     .assetType = ext.assetType(),
                 });
-                log.debug("Found {s} file: {s}", .{ ext.string(), path });
             } else if (entry.kind == .directory) {
                 const subdir = try std.Io.Dir.openDir(dir, self.io, entry.name, .{ .iterate = true });
                 const subprefix = if (prefix.len > 0)
@@ -154,7 +153,9 @@ test "AssetScanner.scan produces paths relative to source dir" {
     defer scanner.deinit(&list);
 
     for (list.items) |file| {
-        try testing.expect(std.mem.startsWith(u8, file.path, "meshes/"));
+        const valid = std.mem.startsWith(u8, file.path, "meshes/") or
+            std.mem.startsWith(u8, file.path, "textures/");
+        try testing.expect(valid);
     }
 }
 

@@ -17,6 +17,7 @@ pub fn addCookStep(b: *std.Build, dep: *std.Build.Dependency, options: CookStepO
 }
 
 pub const ZMesh = @import("formats/zmesh.zig").ZMesh;
+pub const Zatex = @import("formats/ztex.zig").Zatex;
 pub const mesh = @import("assets/cooked/mesh.zig");
 
 test {
@@ -24,7 +25,14 @@ test {
     _ = @import("assets/asset_scanner.zig");
     _ = @import("assets/source_file.zig");
     _ = @import("assets/raw/mesh.zig");
+    _ = @import("assets/raw/texture.zig");
     _ = @import("assets/cooked/mesh.zig");
+    _ = @import("assets/cooked/texture.zig");
+    _ = @import("assets/cooked/compression/compression.zig");
+    _ = @import("assets/cooked/compression/bc4.zig");
+    _ = @import("assets/cooked/compression/bc5.zig");
+    _ = @import("assets/cooked/compression/bc7.zig");
+    _ = @import("assets/cooked/compression/bc6h.zig");
     _ = @import("commands/command.zig");
     _ = @import("parsers/gltf/glb_parser.zig");
     _ = @import("parsers/gltf/gltf_json_parser.zig");

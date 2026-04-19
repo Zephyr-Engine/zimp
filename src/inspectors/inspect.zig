@@ -14,11 +14,13 @@ pub const FormatInspector = struct {
 };
 
 const zamesh_inspector = @import("../inspectors/zmesh.zig").inspector();
+const zatex_inspector = @import("../inspectors/ztex.zig").inspector();
 const zcache_inspector = @import("../inspectors/zcache.zig").inspector();
 
 pub const inspector_registry = std.StaticStringMap(FormatInspector).initComptime(.{
     .{ FORMAT_MAGIC.ZMESH, zamesh_inspector },
     .{ FORMAT_MAGIC.ZACHE, zcache_inspector },
+    .{ FORMAT_MAGIC.ZATEX, zatex_inspector },
 });
 
 const testing = std.testing;

@@ -76,12 +76,6 @@ pub const ZMeshHeader = struct {
     }
 
     pub fn read(reader: *std.Io.Reader) !ZMeshHeader {
-        var magic: [5]u8 = undefined;
-        _ = try reader.readSliceAll(&magic);
-        if (!std.mem.eql(u8, &magic, MAGIC)) {
-            return error.InvalidMagic;
-        }
-
         const version = try reader.takeInt(u32, .little);
         if (version != ZMESH_VERSION) {
             return error.UnsupportedVersion;
@@ -167,6 +161,12 @@ pub const ZMesh = struct {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
         var reader = &file_reader.interface;
+
+        var magic: [5]u8 = undefined;
+        try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, MAGIC)) {
+            return error.InvalidMagic;
+        }
 
         const header = try ZMeshHeader.read(reader);
         const vertex_count = header.vertex_count;
@@ -790,7 +790,7 @@ test "ZMeshHeader.read parses magic and version" {
     const header = ZMeshHeader.init(cooked);
     try header.write(&writer);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     const parsed = try ZMeshHeader.read(&reader);
 
     try testing.expectEqualSlices(u8, MAGIC, &parsed.magic);
@@ -805,7 +805,7 @@ test "ZMeshHeader.read parses vertex and index counts" {
     const header = ZMeshHeader.init(cooked);
     try header.write(&writer);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     const parsed = try ZMeshHeader.read(&reader);
 
     try testing.expectEqual(@as(u32, 3), parsed.vertex_count);
@@ -821,7 +821,7 @@ test "ZMeshHeader.read parses format flags" {
     const header = ZMeshHeader.init(cooked);
     try header.write(&writer);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     const parsed = try ZMeshHeader.read(&reader);
 
     try testing.expect(parsed.format_flags.has_normals);
@@ -838,7 +838,7 @@ test "ZMeshHeader.read parses AABB" {
     const header = ZMeshHeader.init(cooked);
     try header.write(&writer);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     const parsed = try ZMeshHeader.read(&reader);
 
     try testing.expectEqual([3]f32{ -1.5, 0, 2.5 }, parsed.aabb.min);
@@ -853,7 +853,7 @@ test "ZMeshHeader.read parses index format" {
     const header = ZMeshHeader.init(cooked);
     try header.write(&writer);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     const parsed = try ZMeshHeader.read(&reader);
 
     try testing.expectEqual(mesh.IndexFormat.u32, parsed.index_format);
@@ -871,7 +871,7 @@ test "ZMeshHeader.read parses submesh count and offset" {
     const header = ZMeshHeader.init(cooked);
     try header.write(&writer);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     const parsed = try ZMeshHeader.read(&reader);
 
     try testing.expectEqual(@as(u16, 2), parsed.submesh_count);
@@ -891,7 +891,7 @@ test "ZMeshHeader.read roundtrips init values" {
     const original = ZMeshHeader.init(cooked);
     try original.write(&writer);
 
-    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
     const parsed = try ZMeshHeader.read(&reader);
 
     try testing.expectEqual(original.vertex_count, parsed.vertex_count);
