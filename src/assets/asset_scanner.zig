@@ -154,7 +154,7 @@ test "AssetScanner.scan produces paths relative to source dir" {
 
     for (list.items) |file| {
         const valid = std.mem.startsWith(u8, file.path, "meshes/") or
-            std.mem.startsWith(u8, file.path, "textures/");
+            std.mem.startsWith(u8, file.path, "textures/") or std.mem.startsWith(u8, file.path, "shaders/");
         try testing.expect(valid);
     }
 }

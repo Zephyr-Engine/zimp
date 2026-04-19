@@ -2,11 +2,13 @@ const std = @import("std");
 
 const asset = @import("asset.zig");
 
-const FNV_PRIME: u64 = 0x00000100000001B3;
-const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+pub const Hash = u64;
 
-pub fn fnv1a(path: []const u8) u64 {
-    var hash = FNV_OFFSET_BASIS;
+const FNV_PRIME: Hash = 0x00000100000001B3;
+const FNV_OFFSET_BASIS: Hash = 0xcbf29ce484222325;
+
+pub fn fnv1a(path: []const u8) Hash {
+    var hash: Hash = FNV_OFFSET_BASIS;
     for (path) |byte| {
         const b: u8 = if (byte == '\\') '/' else byte;
         hash ^= b;
@@ -36,7 +38,7 @@ pub const SourceFile = struct {
         };
     }
 
-    pub fn hash(self: *const SourceFile, dir: std.Io.Dir, io: std.Io) !u64 {
+    pub fn hash(self: *const SourceFile, dir: std.Io.Dir, io: std.Io) !Hash {
         const file = try dir.openFile(io, self.path, .{});
         defer file.close(io);
 
@@ -50,7 +52,7 @@ pub const SourceFile = struct {
         return hr.hasher.final();
     }
 
-    pub fn hashPath(self: *const SourceFile) u64 {
+    pub fn hashPath(self: *const SourceFile) Hash {
         return fnv1a(self.path);
     }
 

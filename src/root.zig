@@ -23,6 +23,7 @@ pub const mesh = @import("assets/cooked/mesh.zig");
 test {
     _ = @import("assets/asset.zig");
     _ = @import("assets/asset_scanner.zig");
+    _ = @import("assets/dependency_graph.zig");
     _ = @import("assets/source_file.zig");
     _ = @import("assets/raw/mesh.zig");
     _ = @import("assets/raw/texture.zig");
@@ -40,6 +41,9 @@ test {
     _ = @import("cookers/cooker.zig");
     _ = @import("cookers/glb.zig");
     _ = @import("cookers/obj.zig");
+    _ = @import("extractors/extractor.zig");
+    _ = @import("extractors/mesh.zig");
+    _ = @import("extractors/shader.zig");
     _ = @import("parsers/obj/obj_parser.zig");
     _ = @import("inspectors/inspect.zig");
     _ = @import("inspectors/zmesh.zig");

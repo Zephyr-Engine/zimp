@@ -4,6 +4,7 @@ const source_file_mod = @import("../assets/source_file.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
 const CacheEntry = @import("entry.zig").CacheEntry;
 const fnv1a = source_file_mod.fnv1a;
+const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
 const log = @import("../logger.zig");
 
@@ -17,7 +18,7 @@ pub const CacheHeader = struct {
     entry_count: u32,
 };
 
-const EntryMap = std.AutoHashMap(u64, u32); // path_hash -> entry index
+const EntryMap = std.AutoHashMap(Hash, u32); // path_hash -> entry index
 
 pub const Cache = struct {
     header: CacheHeader,

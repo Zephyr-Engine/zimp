@@ -2,18 +2,19 @@ const std = @import("std");
 const source_file_mod = @import("../assets/source_file.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
 const fnv1a = source_file_mod.fnv1a;
+const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
 
 pub const FLAG_ERRORED: u16 = 1 << 0;
 
 pub const CacheEntry = struct {
     source_path: []const u8,
-    source_path_hash: u64,
-    content_hash: u64,
+    source_path_hash: Hash,
+    content_hash: Hash,
     source_size: u64,
     source_mtime: i96,
     cooked_path: []const u8,
-    cooked_path_hash: u64,
+    cooked_path_hash: Hash,
     cooked_size: u64,
     cooked_at: i96,
     flags: u16 = 0,
