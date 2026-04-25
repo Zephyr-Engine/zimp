@@ -10,7 +10,7 @@ pub const DependencyExtractor = struct {
         dir: std.Io.Dir,
         io: std.Io,
         allocator: std.mem.Allocator,
-    ) anyerror![]const []const u8,
+    ) anyerror![]const SourceFile,
     asset_type: AssetType,
 
     pub fn extract(
@@ -19,7 +19,7 @@ pub const DependencyExtractor = struct {
         dir: std.Io.Dir,
         io: std.Io,
         allocator: std.mem.Allocator,
-    ) ![]const []const u8 {
+    ) ![]const SourceFile {
         return self.extractFn(source, dir, io, allocator);
     }
 };
@@ -51,7 +51,7 @@ pub fn extractDependencies(
     dir: std.Io.Dir,
     io: std.Io,
     allocator: std.mem.Allocator,
-) ![]const []const u8 {
+) ![]const SourceFile {
     if (extractor_registry.get(source.assetType)) |e| {
         return e.extract(source, dir, io, allocator);
     }
@@ -67,7 +67,7 @@ fn stubExtract(
     _: std.Io.Dir,
     _: std.Io,
     _: std.mem.Allocator,
-) anyerror![]const []const u8 {
+) anyerror![]const SourceFile {
     test_called = true;
     return &.{};
 }
@@ -77,7 +77,7 @@ fn failingExtract(
     _: std.Io.Dir,
     _: std.Io,
     _: std.mem.Allocator,
-) anyerror![]const []const u8 {
+) anyerror![]const SourceFile {
     return error.TestExtractFailed;
 }
 
@@ -145,8 +145,12 @@ test "extractDependencies routes to mesh extractor" {
 }
 
 test "extractDependencies routes to shader extractor" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    const file = try tmp.dir.createFile(testing.io, "a.vert", .{});
+    file.close(testing.io);
     const sf = SourceFile{ .path = "a.vert", .extension = .vert, .assetType = .shader };
-    const deps = try extractDependencies(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator);
+    const deps = try extractDependencies(&sf, tmp.dir, testing.io, testing.allocator);
     defer testing.allocator.free(deps);
     try testing.expectEqual(@as(usize, 0), deps.len);
 }

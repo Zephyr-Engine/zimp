@@ -80,8 +80,8 @@ pub const Extension = enum {
         return asset_map.get(self);
     }
 
-    pub fn processEntry(entry: std.Io.Dir.Entry) Extension {
-        var iter = std.mem.splitScalar(u8, entry.name, '.');
+    pub fn fromName(name: []const u8) Extension {
+        var iter = std.mem.splitScalar(u8, name, '.');
         // ignore filename itself
         _ = iter.next();
 
@@ -91,6 +91,10 @@ pub const Extension = enum {
             }
         }
         return .other;
+    }
+
+    pub fn processEntry(entry: std.Io.Dir.Entry) Extension {
+        return fromName(entry.name);
     }
 };
 

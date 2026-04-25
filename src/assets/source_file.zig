@@ -22,6 +22,15 @@ pub const SourceFile = struct {
     extension: asset.Extension,
     assetType: asset.AssetType,
 
+    pub fn fromPath(path: []const u8) SourceFile {
+        const ext = asset.Extension.fromName(std.fs.path.basename(path));
+        return .{
+            .path = path,
+            .extension = ext,
+            .assetType = ext.assetType(),
+        };
+    }
+
     pub const FileInfo = struct {
         size: u64,
         modified_ns: i96,

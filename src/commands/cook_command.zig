@@ -3,9 +3,7 @@ const std = @import("std");
 const cookers = @import("../cookers/cooker.zig").cooker_registry;
 const extractDependencies = @import("../extractors/extractor.zig").extractDependencies;
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
-const source_file_mod = @import("../assets/source_file.zig");
-const SourceFile = source_file_mod.SourceFile;
-const fnv1a = source_file_mod.fnv1a;
+const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const DepGraph = @import("../assets/dependency_graph.zig").DepGraph;
 const Staleness = @import("../cache/staleness.zig").Staleness;
 const CacheEntry = @import("../cache/entry.zig").CacheEntry;
@@ -140,13 +138,13 @@ pub const CookCommand = struct {
                 continue;
             };
             defer {
-                for (deps) |d| self.allocator.free(d);
+                for (deps) |d| self.allocator.free(d.path);
                 self.allocator.free(deps);
             }
 
             const from = source.hashPath();
-            for (deps) |dep_path| {
-                try dep_graph.addDependency(from, fnv1a(dep_path));
+            for (deps) |dep| {
+                try dep_graph.addDependency(from, dep.hashPath());
             }
         }
     }

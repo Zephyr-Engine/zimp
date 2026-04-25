@@ -12,7 +12,7 @@ fn extractShaderDeps(
     dir: std.Io.Dir,
     io: std.Io,
     allocator: std.mem.Allocator,
-) ![]const []const u8 {
+) ![]const SourceFile {
     const file = try dir.openFile(io, source.path, .{});
     defer file.close(io);
 
@@ -20,9 +20,9 @@ fn extractShaderDeps(
     var fr = file.reader(io, &read_buffer);
     var reader = &fr.interface;
 
-    var deps: std.ArrayList([]const u8) = .empty;
+    var deps: std.ArrayList(SourceFile) = .empty;
     errdefer {
-        for (deps.items) |d| allocator.free(d);
+        for (deps.items) |d| allocator.free(d.path);
         deps.deinit(allocator);
     }
 
@@ -33,7 +33,9 @@ fn extractShaderDeps(
         };
 
         if (parseIncludeFilename(line)) |filename| {
-            try deps.append(allocator, try allocator.dupe(u8, filename));
+            const path = try allocator.dupe(u8, filename);
+            errdefer allocator.free(path);
+            try deps.append(allocator, SourceFile.fromPath(path));
         }
     }
 
@@ -140,11 +142,15 @@ test "extractShaderDeps returns #include paths from a shader file" {
     const sf = SourceFile{ .path = "basic.frag", .extension = .frag, .assetType = .shader };
     const deps = try extractShaderDeps(&sf, tmp.dir, testing.io, testing.allocator);
     defer {
-        for (deps) |d| testing.allocator.free(d);
+        for (deps) |d| testing.allocator.free(d.path);
         testing.allocator.free(deps);
     }
 
     try testing.expectEqual(@as(usize, 2), deps.len);
-    try testing.expectEqualStrings("common.glsl", deps[0]);
-    try testing.expectEqualStrings("angle.glsl", deps[1]);
+    try testing.expectEqualStrings("common.glsl", deps[0].path);
+    try testing.expectEqual(.glsl, deps[0].extension);
+    try testing.expectEqual(.shader, deps[0].assetType);
+    try testing.expectEqualStrings("angle.glsl", deps[1].path);
+    try testing.expectEqual(.glsl, deps[1].extension);
+    try testing.expectEqual(.shader, deps[1].assetType);
 }

@@ -12,7 +12,7 @@ fn extractMeshDeps(
     dir: std.Io.Dir,
     io: std.Io,
     allocator: std.mem.Allocator,
-) ![]const []const u8 {
+) ![]const SourceFile {
     _ = source;
     _ = dir;
     _ = io;
