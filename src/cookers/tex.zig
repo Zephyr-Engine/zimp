@@ -3,6 +3,7 @@ const std = @import("std");
 const Zatex = @import("../formats/ztex.zig").Zatex;
 const RawTexture = @import("../assets/raw/texture.zig").RawTexture;
 const CookedTexture = @import("../assets/cooked/texture.zig").CookedTexture;
+const file_read = @import("../shared/file_read.zig");
 
 const Cooker = @import("cooker.zig").Cooker;
 
@@ -17,10 +18,12 @@ fn cookObj(
     file_path: []const u8,
     writer: *std.Io.Writer,
 ) !void {
-    const file_bytes = try source_dir.readFileAlloc(io, file_path, allocator, .unlimited);
-    defer allocator.free(file_bytes);
+    const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{
+        .chunk_size = 256 * 1024,
+    });
+    defer allocator.free(file_result.bytes);
 
-    const raw = try RawTexture.init(file_path, file_bytes, allocator);
+    const raw = try RawTexture.init(file_path, file_result.bytes, allocator);
     defer raw.deinit(allocator);
 
     var cooked = try CookedTexture.cook(allocator, &raw);

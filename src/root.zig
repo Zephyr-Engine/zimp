@@ -35,6 +35,7 @@ test {
     _ = @import("assets/cooked/compression/bc7.zig");
     _ = @import("assets/cooked/compression/bc6h.zig");
     _ = @import("commands/command.zig");
+    _ = @import("commands/cook_metrics.zig");
     _ = @import("parsers/gltf/glb_parser.zig");
     _ = @import("parsers/gltf/gltf_json_parser.zig");
     _ = @import("parsers/gltf/mesh.zig");
@@ -51,4 +52,5 @@ test {
     _ = @import("inspectors/utils.zig");
     _ = @import("cache/cache.zig");
     _ = @import("cache/entry.zig");
+    _ = @import("shared/file_read.zig");
 }

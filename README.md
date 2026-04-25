@@ -93,6 +93,9 @@ zig build cli
 ```sh
 # Cook an entire directory
 zimp cook --source assets/ --output cooked/
+
+# Emit machine-readable metrics for CI parsing
+zimp cook --source assets/ --output cooked/ --metrics-json
 ```
 
 ### Pack into archive
