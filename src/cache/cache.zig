@@ -99,10 +99,6 @@ pub const Cache = struct {
             }
         }.check;
 
-        if (has_hash_set and source_files.len > 0) {
-            log.debug("Using hash-set based deleted-source pruning for {d} source file(s)", .{source_files.len});
-        }
-
         var removed: u32 = 0;
         var i: usize = 0;
         while (i < self.entries.items.len) {
