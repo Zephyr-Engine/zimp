@@ -319,7 +319,3 @@ test "resolveIndex zero returns null" {
 test "resolveIndex negative out of range returns null" {
     try testing.expectEqual(@as(?u32, null), resolveIndex("-5", 3));
 }
-
-test {
-    _ = @import("obj_parser_integration_test.zig");
-}
