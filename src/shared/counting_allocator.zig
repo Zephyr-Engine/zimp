@@ -93,4 +93,3 @@ test "CountingAllocator tracks current and peak requested bytes" {
     try testing.expectEqual(@as(usize, 96), tracker.current_requested_bytes);
     try testing.expectEqual(@as(usize, 96), tracker.peak_requested_bytes);
 }
-

@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [main]
 
+permissions:
+  contents: read
+  actions: read
+
 jobs:
   build:
     runs-on: blacksmith-4vcpu-ubuntu-2404
@@ -28,3 +32,82 @@ jobs:
 
       - name: Test project
         run: zig build test --summary all
+
+  perf:
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    container: jackpar/zig:0.16.0-dev.2694
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v5
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Run cook benchmark with CI metrics
+        run: |
+          mkdir -p .ci/perf-output
+          zig build run --release=fast -- cook --source examples/assets --output .ci/perf-output --force --metrics-json | tee .ci/cook.log
+
+      - name: Extract metrics JSON
+        run: |
+          python3 scripts/ci/extract_ci_metrics.py \
+            --log-file .ci/cook.log \
+            --output-file .ci/cook-metrics.json
+
+      - name: Check performance regressions (pull requests)
+        if: github.event_name == 'pull_request'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PERF_ACCEPT_BASELINE: ${{ contains(github.event.pull_request.labels.*.name, 'perf-baseline-accept') && '1' || '0' }}
+        run: |
+          EXTRA_FLAGS=""
+          if [ "$PERF_ACCEPT_BASELINE" = "1" ]; then
+            echo "PR has perf-baseline-accept label; regression check is non-blocking for this run."
+            EXTRA_FLAGS="--no-fail-on-regression"
+          fi
+
+          python3 scripts/ci/check_perf_regression.py \
+            --metrics-file .ci/cook-metrics.json \
+            --repo "${{ github.repository }}" \
+            --workflow test.yml \
+            --branch main \
+            --window 10 \
+            --min-samples 5 \
+            --artifact-name cook-metrics-json \
+            --artifact-file cook-metrics.json \
+            --token "$GITHUB_TOKEN" \
+            --current-run-id "${{ github.run_id }}" \
+            --output-report .ci/perf-regression-report.json \
+            $EXTRA_FLAGS
+
+      - name: Check performance regressions (main push, non-blocking)
+        if: github.event_name == 'push'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python3 scripts/ci/check_perf_regression.py \
+            --metrics-file .ci/cook-metrics.json \
+            --repo "${{ github.repository }}" \
+            --workflow test.yml \
+            --branch main \
+            --window 10 \
+            --min-samples 5 \
+            --artifact-name cook-metrics-json \
+            --artifact-file cook-metrics.json \
+            --token "$GITHUB_TOKEN" \
+            --current-run-id "${{ github.run_id }}" \
+            --output-report .ci/perf-regression-report.json \
+            --no-fail-on-regression
+
+      - name: Upload performance metrics artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cook-metrics-json
+          retention-days: 30
+          path: |
+            .ci/cook-metrics.json
+            .ci/perf-regression-report.json

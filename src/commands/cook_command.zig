@@ -82,7 +82,6 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: *const CookCommand, progress: std.Progress.Node) !void {
-        const FastAllocator = std.mem.Allocator;
         const MetricsAllocator = std.heap.DebugAllocator(.{
             .enable_memory_limit = true,
             .thread_safe = false,
@@ -100,8 +99,7 @@ pub const CookCommand = struct {
         }
 
         // Release builds use the global SMP allocator for lower overhead and better throughput.
-        const fast_allocator: FastAllocator = std.heap.smp_allocator;
-        var counting = CountingAllocator.init(fast_allocator);
+        var counting = CountingAllocator.init(std.heap.smp_allocator);
         return self.runWithAllocator(counting.allocator(), &counting, progress);
     }
 
