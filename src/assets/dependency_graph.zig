@@ -1,9 +1,12 @@
 const std = @import("std");
 
-const Hash = @import("source_file.zig").Hash;
+const source_file_mod = @import("source_file.zig");
+const SourceFile = source_file_mod.SourceFile;
+const Hash = source_file_mod.Hash;
 
 const Dependencies = std.ArrayList(Hash);
 const Edges = std.AutoHashMap(Hash, Dependencies);
+const ReverseEdges = std.AutoHashMap(Hash, Dependencies);
 
 pub const DepGraph = struct {
     edges: Edges,
@@ -41,12 +44,12 @@ pub const DepGraph = struct {
         try gop.value_ptr.append(self.allocator, to);
     }
 
-    pub fn getDependencies(self: *const DepGraph, path: Hash) ?Dependencies {
-        return self.edges.get(path);
+    pub fn getDependencies(self: *const DepGraph, source: *const SourceFile) ?Dependencies {
+        return self.edges.get(source.hashPath());
     }
 
-    pub fn dependencyCount(self: *const DepGraph, path: Hash) usize {
-        if (self.edges.get(path)) |entry| {
+    pub fn dependencyCount(self: *const DepGraph, source: *const SourceFile) usize {
+        if (self.edges.get(source.hashPath())) |entry| {
             return entry.items.len;
         }
 
@@ -62,5 +65,26 @@ pub const DepGraph = struct {
         }
 
         return total_len;
+    }
+
+    pub fn buildReverse(self: *const DepGraph, allocator: std.mem.Allocator) ReverseEdges {
+        var reverseMap: ReverseEdges = .init(allocator);
+        errdefer reverseMap.deinit();
+
+        var keyIter = self.edges.keyIterator();
+        while (keyIter.next()) |key| {
+            var reverseValues: Dependencies = .empty;
+            var valueIter = self.edges.valueIterator();
+            while (valueIter.next()) |value| {
+                for (value.items) |dep| {
+                    if (dep == value) {
+                        try reverseValues.append(allocator, key);
+                    }
+                }
+            }
+            if (reverseValues.items.len != 0) {
+                reverseMap.put(key, reverseValues);
+            }
+        }
     }
 };
