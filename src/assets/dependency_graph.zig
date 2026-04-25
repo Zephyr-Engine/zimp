@@ -67,24 +67,132 @@ pub const DepGraph = struct {
         return total_len;
     }
 
-    pub fn buildReverse(self: *const DepGraph, allocator: std.mem.Allocator) ReverseEdges {
+    pub fn buildReverse(self: *const DepGraph, allocator: std.mem.Allocator) !ReverseEdges {
         var reverseMap: ReverseEdges = .init(allocator);
-        errdefer reverseMap.deinit();
+        errdefer {
+            var iter = reverseMap.iterator();
+            while (iter.next()) |entry| entry.value_ptr.deinit(allocator);
+            reverseMap.deinit();
+        }
 
-        var keyIter = self.edges.keyIterator();
-        while (keyIter.next()) |key| {
-            var reverseValues: Dependencies = .empty;
-            var valueIter = self.edges.valueIterator();
-            while (valueIter.next()) |value| {
-                for (value.items) |dep| {
-                    if (dep == value) {
-                        try reverseValues.append(allocator, key);
-                    }
+        var iter = self.edges.iterator();
+        while (iter.next()) |entry| {
+            const from = entry.key_ptr.*;
+            for (entry.value_ptr.items) |to| {
+                const gop = try reverseMap.getOrPut(to);
+                if (!gop.found_existing) {
+                    gop.value_ptr.* = .empty;
                 }
-            }
-            if (reverseValues.items.len != 0) {
-                reverseMap.put(key, reverseValues);
+                try gop.value_ptr.append(allocator, from);
             }
         }
+
+        return reverseMap;
     }
 };
+
+const testing = std.testing;
+
+fn deinitReverseEdges(reverse: *ReverseEdges) void {
+    var iter = reverse.iterator();
+    while (iter.next()) |entry| entry.value_ptr.deinit(testing.allocator);
+    reverse.deinit();
+}
+
+test "DepGraph.buildReverse empty graph produces empty map" {
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    var reverse = try graph.buildReverse(testing.allocator);
+    defer deinitReverseEdges(&reverse);
+
+    try testing.expectEqual(0, reverse.count());
+}
+
+test "DepGraph.buildReverse single edge A->B produces B->[A]" {
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    try graph.addDependency(1, 2);
+
+    var reverse = try graph.buildReverse(testing.allocator);
+    defer deinitReverseEdges(&reverse);
+
+    const deps = reverse.get(2) orelse return error.MissingKey;
+    try testing.expectEqual(1, deps.items.len);
+    try testing.expectEqual(@as(Hash, 1), deps.items[0]);
+}
+
+test "DepGraph.buildReverse A->[B,C] produces B->[A] and C->[A]" {
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    try graph.addDependency(1, 2);
+    try graph.addDependency(1, 3);
+
+    var reverse = try graph.buildReverse(testing.allocator);
+    defer deinitReverseEdges(&reverse);
+
+    const deps_b = reverse.get(2) orelse return error.MissingKey;
+    try testing.expectEqual(1, deps_b.items.len);
+    try testing.expectEqual(@as(Hash, 1), deps_b.items[0]);
+
+    const deps_c = reverse.get(3) orelse return error.MissingKey;
+    try testing.expectEqual(1, deps_c.items.len);
+    try testing.expectEqual(@as(Hash, 1), deps_c.items[0]);
+}
+
+test "DepGraph.buildReverse A->B and C->B produces B with both A and C as dependents" {
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    try graph.addDependency(1, 2);
+    try graph.addDependency(3, 2);
+
+    var reverse = try graph.buildReverse(testing.allocator);
+    defer deinitReverseEdges(&reverse);
+
+    const deps = reverse.get(2) orelse return error.MissingKey;
+    try testing.expectEqual(2, deps.items.len);
+
+    var has_1 = false;
+    var has_3 = false;
+    for (deps.items) |d| {
+        if (d == 1) has_1 = true;
+        if (d == 3) has_3 = true;
+    }
+    try testing.expect(has_1);
+    try testing.expect(has_3);
+}
+
+test "DepGraph.buildReverse chain A->B->C produces B->[A] and C->[B]" {
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    try graph.addDependency(1, 2);
+    try graph.addDependency(2, 3);
+
+    var reverse = try graph.buildReverse(testing.allocator);
+    defer deinitReverseEdges(&reverse);
+
+    const deps_b = reverse.get(2) orelse return error.MissingKey;
+    try testing.expectEqual(1, deps_b.items.len);
+    try testing.expectEqual(@as(Hash, 1), deps_b.items[0]);
+
+    const deps_c = reverse.get(3) orelse return error.MissingKey;
+    try testing.expectEqual(1, deps_c.items.len);
+    try testing.expectEqual(@as(Hash, 2), deps_c.items[0]);
+}
+
+test "DepGraph.buildReverse source-only node does not appear as a key" {
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    try graph.addDependency(1, 2);
+
+    var reverse = try graph.buildReverse(testing.allocator);
+    defer deinitReverseEdges(&reverse);
+
+    try testing.expect(reverse.get(1) == null);
+    try testing.expect(reverse.get(2) != null);
+}
