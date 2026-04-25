@@ -75,7 +75,7 @@ jobs:
       - name: Run cook benchmark with CI metrics
         run: |
           mkdir -p .ci/perf-output
-          zig build run --release=fast -- cook --source examples/assets --output .ci/perf-output --force --metrics-json | tee .ci/cook.log
+          zig build run -Doptimize=ReleaseFast -- cook --source examples/assets --output .ci/perf-output --force --metrics-json 2>&1 | tee .ci/cook.log
 
       - name: Extract metrics JSON
         run: |
