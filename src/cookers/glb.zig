@@ -6,6 +6,7 @@ const GLBFile = @import("../parsers/gltf/glb_parser.zig").GLBFile;
 const Gltf = @import("../parsers/gltf/gltf_json_parser.zig").Gltf;
 const GltfMesh = @import("../parsers/gltf/mesh.zig").GltfMesh;
 const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
+const file_read = @import("../shared/file_read.zig");
 
 pub fn cooker() Cooker {
     return .{ .cookFn = cookGlb, .asset_type = .mesh };
@@ -18,10 +19,12 @@ fn cookGlb(
     file_path: []const u8,
     writer: *std.Io.Writer,
 ) !void {
-    const file_bytes = try source_dir.readFileAlloc(io, file_path, allocator, .unlimited);
-    defer allocator.free(file_bytes);
+    const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{
+        .chunk_size = 256 * 1024,
+    });
+    defer allocator.free(file_result.bytes);
 
-    const glb_file = try GLBFile.parse(allocator, file_bytes);
+    const glb_file = try GLBFile.parse(allocator, file_result.bytes);
     defer allocator.destroy(glb_file);
 
     var gltf = try Gltf.parse(glb_file.json, allocator);

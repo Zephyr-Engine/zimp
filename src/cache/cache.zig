@@ -68,19 +68,42 @@ pub const Cache = struct {
     }
 
     pub fn pruneDeleted(self: *Cache, allocator: std.mem.Allocator, source_files: []const SourceFile) u32 {
+        var source_hashes: std.AutoHashMap(Hash, void) = .init(allocator);
+        defer source_hashes.deinit();
+
+        const has_hash_set = blk: {
+            source_hashes.ensureTotalCapacity(@intCast(source_files.len)) catch break :blk false;
+            for (source_files) |sf| {
+                source_hashes.putAssumeCapacity(sf.hashPath(), {});
+            }
+            break :blk true;
+        };
+
+        const sourceExists = struct {
+            fn check(
+                file_hash_set_enabled: bool,
+                file_hashes: *const std.AutoHashMap(Hash, void),
+                source_list: []const SourceFile,
+                source_hash: Hash,
+            ) bool {
+                if (file_hash_set_enabled) {
+                    return file_hashes.contains(source_hash);
+                }
+
+                for (source_list) |sf| {
+                    if (sf.hashPath() == source_hash) {
+                        return true;
+                    }
+                }
+                return false;
+            }
+        }.check;
+
         var removed: u32 = 0;
         var i: usize = 0;
         while (i < self.entries.items.len) {
             const entry = self.entries.items[i];
-            var found = false;
-            for (source_files) |sf| {
-                if (sf.hashPath() == entry.source_path_hash) {
-                    found = true;
-                    break;
-                }
-            }
-
-            if (!found) {
+            if (!sourceExists(has_hash_set, &source_hashes, source_files, entry.source_path_hash)) {
                 log.debug("Source file not found, removing cooked file {s}", .{entry.cooked_path});
                 allocator.free(entry.source_path);
                 allocator.free(entry.cooked_path);

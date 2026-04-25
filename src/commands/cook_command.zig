@@ -1,21 +1,17 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
-const cookers = @import("../cookers/cooker.zig").cooker_registry;
-const extractDependencies = @import("../extractors/extractor.zig").extractDependencies;
-const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
-const source_file_mod = @import("../assets/source_file.zig");
-const SourceFile = source_file_mod.SourceFile;
-const Hash = source_file_mod.Hash;
-const DepGraph = @import("../assets/dependency_graph.zig").DepGraph;
-const Staleness = @import("../cache/staleness.zig").Staleness;
-const CacheEntry = @import("../cache/entry.zig").CacheEntry;
-const Cache = @import("../cache/cache.zig").Cache;
+const cook_pipeline = @import("cook/pipeline.zig");
+const CookContext = @import("cook/context.zig").CookContext;
+const cook_metrics = @import("cook_metrics.zig");
+const CountingAllocator = @import("../shared/counting_allocator.zig").CountingAllocator;
 const log = @import("../logger.zig");
 
 pub const CookError = error{
     NotEnoughArguments,
     SourceDirNotFound,
     OutputDirNotFound,
+    MissingFlagValue,
 };
 
 pub const CookCommand = struct {
@@ -25,6 +21,7 @@ pub const CookCommand = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     force: bool = false,
+    emit_ci_metrics_json: bool = false,
 
     pub fn parseFromArgs(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) CookError!CookCommand {
         const cwd = std.Io.Dir.cwd();
@@ -43,12 +40,20 @@ pub const CookCommand = struct {
         var i: usize = 2;
         while (i < args.len) {
             if (std.mem.eql(u8, "--source", args[i])) {
+                if (i + 1 >= args.len) {
+                    log.err("cook: missing value for --source", .{});
+                    return CookError.MissingFlagValue;
+                }
                 command.source = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
                     log.err("cook: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.SourceDirNotFound;
                 };
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
+                if (i + 1 >= args.len) {
+                    log.err("cook: missing value for --output", .{});
+                    return CookError.MissingFlagValue;
+                }
                 command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
                     log.err("cook: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
                     return CookError.OutputDirNotFound;
@@ -57,6 +62,8 @@ pub const CookCommand = struct {
                 i += 1;
             } else if (std.mem.eql(u8, "--force", args[i])) {
                 command.force = true;
+            } else if (std.mem.eql(u8, "--metrics-json", args[i])) {
+                command.emit_ci_metrics_json = true;
             }
 
             i += 1;
@@ -66,211 +73,55 @@ pub const CookCommand = struct {
     }
 
     pub fn run(self: *const CookCommand, progress: std.Progress.Node) !void {
-        var cache = blk: {
-            if (self.force) {
-                break :blk try Cache.init(self.allocator, self.source, self.output_path);
-            }
+        const MetricsAllocator = std.heap.DebugAllocator(.{
+            .enable_memory_limit = true,
+            .thread_safe = false,
+            .safety = false,
+        });
 
-            break :blk Cache.readFromDir(self.allocator, self.io, self.source, self.output_path) catch |err| {
-                switch (err) {
-                    error.OutputDirChanged => log.debug("Output directory changed, rebuilding cache", .{}),
-                    error.StaleVersion => log.debug("Outdated cache version found, rebuilding entire cache", .{}),
-                    error.UnsupportedVersion => log.debug("Corrupt cache found, rebuilding entire cache", .{}),
-                    error.FileNotFound => log.debug("No existing cache found, starting fresh", .{}),
-                    else => log.debug("Failed to read cache ({s}), starting fresh", .{@errorName(err)}),
-                }
-                break :blk try Cache.init(self.allocator, self.source, self.output_path);
+        if (builtin.mode == .Debug) {
+            var debug_allocator: MetricsAllocator = .{
+                .backing_allocator = self.allocator,
             };
-        };
-        defer cache.deinit(self.allocator);
+            defer _ = debug_allocator.deinit();
 
-        const source_scanner = AssetScanner.init(self.allocator, self.io, self.source);
-        var list = try source_scanner.scan();
-
-        defer source_scanner.deinit(&list);
-
-        const pruned = cache.pruneDeleted(self.allocator, list.items);
-        if (pruned > 0) {
-            log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
+            var counting = CountingAllocator.init(debug_allocator.allocator());
+            return self.runWithAllocator(counting.allocator(), &counting, progress);
         }
 
-        var dep_graph = DepGraph.init(self.allocator);
-        defer dep_graph.deinit();
-        try self.buildDependencyGraph(&dep_graph, list.items);
-        log.debug("Built dependency graph: {d} edge(s) across {d} source file(s)", .{
-            dep_graph.totalDependencyCount(),
-            list.items.len,
-        });
-
-        const total_start = std.Io.Clock.Timestamp.now(self.io, .awake);
-
-        const cook_levels = try dep_graph.cookLevels(list.items);
-        defer DepGraph.freeLevels(self.allocator, cook_levels);
-
-        var reverse = try dep_graph.buildReverse(self.allocator);
-        defer {
-            var rev_iter = reverse.iterator();
-            while (rev_iter.next()) |entry| {
-                entry.value_ptr.deinit(self.allocator);
-            }
-            reverse.deinit();
-        }
-
-        var force_recook: std.AutoHashMap(Hash, void) = .init(self.allocator);
-        defer force_recook.deinit();
-
-        const cook_node = progress.start("Cooking assets", list.items.len);
-        defer cook_node.end();
-
-        var cache_count: u32 = 0;
-
-        // TODO: parallelize entries within each level with zob; levels themselves must run sequentially
-        for (cook_levels) |level| {
-            for (level) |entry| {
-                const force = force_recook.contains(entry.hashPath());
-                const result = try self.processAsset(&cache, entry, cook_node, force);
-                if (result == .cached or result == .hash_match) {
-                    cache_count += 1;
-                }
-                if (result == .cooked) {
-                    if (reverse.get(entry.hashPath())) |dependents| {
-                        for (dependents.items) |dep_hash| {
-                            try force_recook.put(dep_hash, {});
-                        }
-                    }
-                }
-            }
-        }
-
-        const total_end = std.Io.Clock.Timestamp.now(self.io, .awake);
-        const total_elapsed_ns: u64 = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
-        var total_duration_buf: [32]u8 = undefined;
-        log.info("Cooked {d} assets in {s}({d} cached)", .{
-            list.items.len,
-            fmtDuration(total_elapsed_ns, &total_duration_buf),
-            cache_count,
-        });
-
-        try cache.write(self.io);
+        // Release builds use the global SMP allocator for lower overhead and better throughput.
+        var counting = CountingAllocator.init(std.heap.smp_allocator);
+        return self.runWithAllocator(counting.allocator(), &counting, progress);
     }
 
-    fn buildDependencyGraph(
+    fn runWithAllocator(
         self: *const CookCommand,
-        dep_graph: *DepGraph,
-        source_files: []const SourceFile,
+        allocator: std.mem.Allocator,
+        counting: *CountingAllocator,
+        progress: std.Progress.Node,
     ) !void {
-        for (source_files) |source| {
-            const deps = extractDependencies(&source, self.source, self.io, self.allocator) catch |err| {
-                log.warn("Failed to extract dependencies for '{s}': {s}", .{ source.path, @errorName(err) });
-                continue;
-            };
-            defer {
-                for (deps) |d| self.allocator.free(d.path);
-                self.allocator.free(deps);
-            }
-
-            const from = source.hashPath();
-            for (deps) |dep| {
-                try dep_graph.addDependency(from, dep.hashPath());
-            }
-        }
-    }
-
-    const ProcessResult = enum { cached, hash_match, cooked, skipped, errored };
-
-    fn processAsset(self: *const CookCommand, cache: *Cache, entry: SourceFile, cook_node: std.Progress.Node, force_recook: bool) !ProcessResult {
-        const asset_node = cook_node.start(entry.path, 0);
-
-        const start = std.Io.Clock.Timestamp.now(self.io, .awake);
-        if (force_recook) {
-            log.debug("{s} dependency changed, force recooking", .{entry.path});
-        } else if (cache.lookupEntryMut(entry)) |cache_entry| {
-            const staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
-            if (staleness == .cached) {
-                if (self.outputFileExists(cache_entry.cooked_path)) {
-                    log.debug("{s} is cached, not cooking", .{entry.path});
-                    return .cached;
-                }
-                log.debug("{s} cached but output file missing, recooking", .{entry.path});
-            }
-
-            if (staleness == .hash_match) {
-                if (self.outputFileExists(cache_entry.cooked_path)) {
-                    const info = try entry.getFileInfo(self.source, self.io);
-                    cache_entry.source_mtime = info.modified_ns;
-                    log.debug("{s} hash match, updated mtime", .{entry.path});
-                    return .hash_match;
-                }
-                log.debug("{s} hash match but output file missing, recooking", .{entry.path});
-            }
-
-            if (staleness == .errored) {
-                log.debug("{s} previously errored, retrying", .{entry.path});
-            } else {
-                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness) });
-            }
-        }
-
-        const cooked = entry.createCookedFile(self.allocator, self.io, self.output) catch |err| {
-            log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
-            return .errored;
-        };
-        defer self.allocator.free(cooked.path);
-        defer cooked.file.close(self.io);
-
-        var buf: [8192]u8 = undefined;
-        var file_writer = cooked.file.writer(self.io, &buf);
-
-        const cook_failed = blk: {
-            if (cookers.get(entry.extension)) |cooker| {
-                cooker.cook(self.allocator, self.io, self.source, entry.path, &file_writer.interface) catch |err| {
-                    log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
-                    break :blk true;
-                };
-            } else {
-                log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ entry.extension.string(), entry.path });
-            }
-            break :blk false;
+        const context: CookContext = .{
+            .io = self.io,
+            .source = self.source,
+            .output = self.output,
+            .output_path = self.output_path,
+            .force = self.force,
         };
 
-        if (cook_failed) {
-            const errored_entry = CacheEntry.createErrored(self.allocator, self.io, self.source, entry) catch |err| {
-                log.err("Failed to create errored cache entry for '{s}': {s}", .{ entry.path, @errorName(err) });
-                return .errored;
-            };
+        const metrics = try cook_pipeline.run(allocator, counting, &context, progress);
 
-            try cache.upsertEntry(self.allocator, entry, errored_entry);
-            return .errored;
+        var total_duration_buf: [32]u8 = undefined;
+        log.info("Cooked {d} assets in {s} ({d} cooked, {d} cached, {d} errored)", .{
+            metrics.assets_total,
+            fmtDuration(metrics.total_ns, &total_duration_buf),
+            metrics.assets_cooked,
+            metrics.assets_cached,
+            metrics.assets_errored,
+        });
+        cook_metrics.logSummary(&metrics);
+        if (self.emit_ci_metrics_json) {
+            try cook_metrics.emitCiJson(allocator, &metrics);
         }
-
-        try file_writer.flush();
-
-        const cooked_stat = try cooked.file.stat(self.io);
-
-        const end = std.Io.Clock.Timestamp.now(self.io, .awake);
-        const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
-        var duration_buf: [32]u8 = undefined;
-        log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
-
-        try cache.upsertEntry(
-            self.allocator,
-            entry,
-            try CacheEntry.create(self.allocator, self.io, self.source, entry, cooked.path, cooked_stat.size),
-        );
-
-        asset_node.end();
-        return .cooked;
-    }
-
-    fn outputFileExists(self: *const CookCommand, cooked_path: []const u8) bool {
-        if (cooked_path.len == 0) {
-            return false;
-        }
-
-        const file = self.output.openFile(self.io, cooked_path, .{}) catch return false;
-        file.close(self.io);
-
-        return true;
     }
 
     pub fn deinit(self: *const CookCommand) void {

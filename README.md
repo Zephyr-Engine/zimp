@@ -93,6 +93,9 @@ zig build cli
 ```sh
 # Cook an entire directory
 zimp cook --source assets/ --output cooked/
+
+# Emit machine-readable metrics for CI parsing
+zimp cook --source assets/ --output cooked/ --metrics-json
 ```
 
 ### Pack into archive
@@ -116,6 +119,24 @@ zimp inspect cooked/player.zamesh
 ```sh
 zig build test --summary all
 ```
+
+## CI performance regression checks
+
+CI runs a `cook` benchmark and extracts the `CI_METRICS_JSON` payload into an artifact (`cook-metrics-json`).
+On pull requests, CI fetches the last 10 successful `main` artifacts, computes a median baseline per timing metric, and fails if current timings exceed:
+
+- `total`: baseline + 15% (+10ms absolute tolerance)
+- `cook`: baseline + 15% (+10ms absolute tolerance)
+- `scan`, `dependency_graph`, `cache_write`: baseline + 20% (+10ms absolute tolerance)
+
+This is a standard low-noise guard pattern: rolling-window baseline + median + percentage threshold.
+You can tune the window and thresholds in `.github/workflows/test.yml` via `scripts/ci/check_perf_regression.py` flags.
+
+To accept a new slower/faster baseline on a specific PR without disabling checks globally, add the PR label:
+
+- `perf-baseline-accept`
+
+When that label is present, CI still computes and reports regressions but does not fail the PR on perf deltas.
 
 ## Cooked formats
 

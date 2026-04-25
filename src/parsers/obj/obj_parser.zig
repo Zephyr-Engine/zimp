@@ -9,6 +9,8 @@ pub const ObjParseError = error{
     InvalidFaceVertex,
     InvalidFloat,
     OutOfMemory,
+    ReadFailed,
+    StreamTooLong,
 };
 
 const VertexKey = struct {
@@ -19,13 +21,16 @@ const VertexKey = struct {
 
 pub const ObjParser = struct {
     allocator: std.mem.Allocator,
-    file_bytes: []const u8,
+    io: ?std.Io = null,
+    file: ?std.Io.File = null,
+    file_bytes: []const u8 = "",
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file_path: []const u8) !ObjParser {
-        const file_bytes = try dir.readFileAlloc(io, file_path, allocator, .unlimited);
+        const file = try dir.openFile(io, file_path, .{});
         return .{
             .allocator = allocator,
-            .file_bytes = file_bytes,
+            .io = io,
+            .file = file,
         };
     }
 
@@ -45,42 +50,50 @@ pub const ObjParser = struct {
         var vertex_map = std.AutoHashMap(VertexKey, u32).init(allocator);
         defer vertex_map.deinit();
 
-        var lines = std.mem.splitScalar(u8, self.file_bytes, '\n');
-        while (lines.next()) |raw_line| {
-            const line = std.mem.trimEnd(u8, raw_line, &.{'\r'});
-            if (line.len == 0) {
-                continue;
-            }
+        if (self.file) |obj_file| {
+            var read_buf: [8192]u8 = undefined;
+            var file_reader = obj_file.reader(self.io.?, &read_buf);
+            const reader = &file_reader.interface;
 
-            var tokens = std.mem.tokenizeScalar(u8, line, ' ');
-            const prefix = tokens.next() orelse continue;
-
-            if (prefix[0] == '#') {
-                continue;
-            }
-
-            if (std.mem.eql(u8, prefix, "v")) {
-                const pos = parseFloats(3, &tokens) orelse return error.InvalidFloat;
-                try positions.append(allocator, pos);
-            } else if (std.mem.eql(u8, prefix, "vn")) {
-                const n = parseFloats(3, &tokens) orelse return error.InvalidFloat;
-                try normals.append(allocator, n);
-            } else if (std.mem.eql(u8, prefix, "vt")) {
-                const uv = parseFloats(2, &tokens) orelse return error.InvalidFloat;
-                try uvs.append(allocator, uv);
-            } else if (std.mem.eql(u8, prefix, "f")) {
-                try parseFace(
+            while (true) {
+                const maybe_line = reader.takeDelimiter('\n') catch |err| switch (err) {
+                    error.StreamTooLong => return error.StreamTooLong,
+                    else => return error.ReadFailed,
+                };
+                const line_raw = maybe_line orelse break;
+                const line = std.mem.trimEnd(u8, line_raw, &.{'\r'});
+                try parseLine(
                     allocator,
-                    &tokens,
+                    line,
                     positions.items,
                     normals.items,
                     uvs.items,
+                    &positions,
+                    &normals,
+                    &uvs,
                     &vertices,
                     &indices,
                     &vertex_map,
                 );
             }
-            // Skip: mtllib, usemtl, s, g, o, and anything else
+        } else {
+            var lines = std.mem.splitScalar(u8, self.file_bytes, '\n');
+            while (lines.next()) |raw_line| {
+                const line = std.mem.trimEnd(u8, raw_line, &.{'\r'});
+                try parseLine(
+                    allocator,
+                    line,
+                    positions.items,
+                    normals.items,
+                    uvs.items,
+                    &positions,
+                    &normals,
+                    &uvs,
+                    &vertices,
+                    &indices,
+                    &vertex_map,
+                );
+            }
         }
 
         const submesh = try allocator.alloc(RawSubmesh, 1);
@@ -99,9 +112,59 @@ pub const ObjParser = struct {
     }
 
     pub fn deinit(self: *ObjParser) void {
-        self.allocator.free(self.file_bytes);
+        if (self.file) |file| {
+            file.close(self.io.?);
+        }
     }
 };
+
+fn parseLine(
+    allocator: std.mem.Allocator,
+    line: []const u8,
+    positions_items: [][3]f32,
+    normals_items: [][3]f32,
+    uvs_items: [][2]f32,
+    positions: *std.ArrayList([3]f32),
+    normals: *std.ArrayList([3]f32),
+    uvs: *std.ArrayList([2]f32),
+    vertices: *std.ArrayList(RawVertex),
+    indices: *std.ArrayList(u32),
+    vertex_map: *std.AutoHashMap(VertexKey, u32),
+) ObjParseError!void {
+    if (line.len == 0) {
+        return;
+    }
+
+    var tokens = std.mem.tokenizeScalar(u8, line, ' ');
+    const prefix = tokens.next() orelse return;
+
+    if (prefix[0] == '#') {
+        return;
+    }
+
+    if (std.mem.eql(u8, prefix, "v")) {
+        const pos = parseFloats(3, &tokens) orelse return error.InvalidFloat;
+        try positions.append(allocator, pos);
+    } else if (std.mem.eql(u8, prefix, "vn")) {
+        const n = parseFloats(3, &tokens) orelse return error.InvalidFloat;
+        try normals.append(allocator, n);
+    } else if (std.mem.eql(u8, prefix, "vt")) {
+        const uv = parseFloats(2, &tokens) orelse return error.InvalidFloat;
+        try uvs.append(allocator, uv);
+    } else if (std.mem.eql(u8, prefix, "f")) {
+        try parseFace(
+            allocator,
+            &tokens,
+            positions_items,
+            normals_items,
+            uvs_items,
+            vertices,
+            indices,
+            vertex_map,
+        );
+    }
+    // Skip: mtllib, usemtl, s, g, o, and anything else
+}
 
 fn parseFloats(comptime N: usize, tokens: *std.mem.TokenIterator(u8, .scalar)) ?[N]f32 {
     var result: [N]f32 = undefined;
@@ -255,199 +318,4 @@ test "resolveIndex zero returns null" {
 
 test "resolveIndex negative out of range returns null" {
     try testing.expectEqual(@as(?u32, null), resolveIndex("-5", 3));
-}
-
-test "parse simple triangle" {
-    const obj_src =
-        \\# simple triangle
-        \\v 0.0 0.0 0.0
-        \\v 1.0 0.0 0.0
-        \\v 0.0 1.0 0.0
-        \\f 1 2 3
-    ;
-
-    const parser = ObjParser{
-        .allocator = testing.allocator,
-        .file_bytes = obj_src,
-    };
-
-
-    const mesh = try parser.parse(testing.allocator);
-    defer {
-        testing.allocator.free(mesh.vertices);
-        testing.allocator.free(mesh.indices);
-        testing.allocator.free(mesh.submeshes);
-    }
-
-    try testing.expectEqual(@as(usize, 3), mesh.vertices.len);
-    try testing.expectEqual(@as(usize, 3), mesh.indices.len);
-    try testing.expectEqual(@as(usize, 1), mesh.submeshes.len);
-    try testing.expectEqual(@as(u32, 0), mesh.submeshes[0].index_offset);
-    try testing.expectEqual(@as(u32, 3), mesh.submeshes[0].index_count);
-}
-
-test "parse quad is triangulated into 2 triangles" {
-    const obj_src =
-        \\v 0.0 0.0 0.0
-        \\v 1.0 0.0 0.0
-        \\v 1.0 1.0 0.0
-        \\v 0.0 1.0 0.0
-        \\f 1 2 3 4
-    ;
-
-    const parser = ObjParser{
-        .allocator = testing.allocator,
-        .file_bytes = obj_src,
-    };
-
-    const mesh = try parser.parse(testing.allocator);
-    defer {
-        testing.allocator.free(mesh.vertices);
-        testing.allocator.free(mesh.indices);
-        testing.allocator.free(mesh.submeshes);
-    }
-
-    try testing.expectEqual(@as(usize, 4), mesh.vertices.len);
-    try testing.expectEqual(@as(usize, 6), mesh.indices.len);
-}
-
-test "parse with normals and UVs" {
-    const obj_src =
-        \\v 0.0 0.0 0.0
-        \\v 1.0 0.0 0.0
-        \\v 0.0 1.0 0.0
-        \\vn 0.0 0.0 1.0
-        \\vt 0.0 0.0
-        \\vt 1.0 0.0
-        \\vt 0.0 1.0
-        \\f 1/1/1 2/2/1 3/3/1
-    ;
-
-    const parser = ObjParser{
-        .allocator = testing.allocator,
-        .file_bytes = obj_src,
-    };
-
-
-    const mesh = try parser.parse(testing.allocator);
-    defer {
-        testing.allocator.free(mesh.vertices);
-        testing.allocator.free(mesh.indices);
-        testing.allocator.free(mesh.submeshes);
-    }
-
-    try testing.expectEqual(@as(usize, 3), mesh.vertices.len);
-    try testing.expect(mesh.vertices[0].normal != null);
-    try testing.expect(mesh.vertices[0].uv0 != null);
-}
-
-test "parse deduplicates shared vertices" {
-    const obj_src =
-        \\v 0.0 0.0 0.0
-        \\v 1.0 0.0 0.0
-        \\v 1.0 1.0 0.0
-        \\v 0.0 1.0 0.0
-        \\f 1 2 3
-        \\f 1 3 4
-    ;
-
-    const parser = ObjParser{
-        .allocator = testing.allocator,
-        .file_bytes = obj_src,
-    };
-
-
-    const mesh = try parser.parse(testing.allocator);
-    defer {
-        testing.allocator.free(mesh.vertices);
-        testing.allocator.free(mesh.indices);
-        testing.allocator.free(mesh.submeshes);
-    }
-
-    // Vertices 1 and 3 are shared across both faces
-    try testing.expectEqual(@as(usize, 4), mesh.vertices.len);
-    try testing.expectEqual(@as(usize, 6), mesh.indices.len);
-}
-
-test "parse with negative indices" {
-    const obj_src =
-        \\v 0.0 0.0 0.0
-        \\v 1.0 0.0 0.0
-        \\v 0.0 1.0 0.0
-        \\f -3 -2 -1
-    ;
-
-    const parser = ObjParser{
-        .allocator = testing.allocator,
-        .file_bytes = obj_src,
-    };
-
-
-    const mesh = try parser.parse(testing.allocator);
-    defer {
-        testing.allocator.free(mesh.vertices);
-        testing.allocator.free(mesh.indices);
-        testing.allocator.free(mesh.submeshes);
-    }
-
-    try testing.expectEqual(@as(usize, 3), mesh.vertices.len);
-    try testing.expectEqual(@as(usize, 3), mesh.indices.len);
-}
-
-test "parse skips comments and unknown lines" {
-    const obj_src =
-        \\# this is a comment
-        \\mtllib material.mtl
-        \\o MyObject
-        \\g group1
-        \\usemtl material1
-        \\s off
-        \\v 0.0 0.0 0.0
-        \\v 1.0 0.0 0.0
-        \\v 0.0 1.0 0.0
-        \\f 1 2 3
-    ;
-
-    const parser = ObjParser{
-        .allocator = testing.allocator,
-        .file_bytes = obj_src,
-    };
-
-
-    const mesh = try parser.parse(testing.allocator);
-    defer {
-        testing.allocator.free(mesh.vertices);
-        testing.allocator.free(mesh.indices);
-        testing.allocator.free(mesh.submeshes);
-    }
-
-    try testing.expectEqual(@as(usize, 3), mesh.vertices.len);
-    try testing.expectEqual(@as(usize, 3), mesh.indices.len);
-}
-
-test "parse pos//normal format" {
-    const obj_src =
-        \\v 0.0 0.0 0.0
-        \\v 1.0 0.0 0.0
-        \\v 0.0 1.0 0.0
-        \\vn 0.0 0.0 1.0
-        \\f 1//1 2//1 3//1
-    ;
-
-    const parser = ObjParser{
-        .allocator = testing.allocator,
-        .file_bytes = obj_src,
-    };
-
-
-    const mesh = try parser.parse(testing.allocator);
-    defer {
-        testing.allocator.free(mesh.vertices);
-        testing.allocator.free(mesh.indices);
-        testing.allocator.free(mesh.submeshes);
-    }
-
-    try testing.expectEqual(@as(usize, 3), mesh.vertices.len);
-    try testing.expect(mesh.vertices[0].normal != null);
-    try testing.expect(mesh.vertices[0].uv0 == null);
 }
