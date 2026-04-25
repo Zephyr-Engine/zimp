@@ -1,8 +1,12 @@
 const std = @import("std");
 
 const cookers = @import("../cookers/cooker.zig").cooker_registry;
+const extractDependencies = @import("../extractors/extractor.zig").extractDependencies;
 const AssetScanner = @import("../assets/asset_scanner.zig").AssetScanner;
-const SourceFile = @import("../assets/source_file.zig").SourceFile;
+const source_file_mod = @import("../assets/source_file.zig");
+const SourceFile = source_file_mod.SourceFile;
+const Hash = source_file_mod.Hash;
+const DepGraph = @import("../assets/dependency_graph.zig").DepGraph;
 const Staleness = @import("../cache/staleness.zig").Staleness;
 const CacheEntry = @import("../cache/entry.zig").CacheEntry;
 const Cache = @import("../cache/cache.zig").Cache;
@@ -90,18 +94,51 @@ pub const CookCommand = struct {
             log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
         }
 
+        var dep_graph = DepGraph.init(self.allocator);
+        defer dep_graph.deinit();
+        try self.buildDependencyGraph(&dep_graph, list.items);
+        log.debug("Built dependency graph: {d} edge(s) across {d} source file(s)", .{
+            dep_graph.totalDependencyCount(),
+            list.items.len,
+        });
+
         const total_start = std.Io.Clock.Timestamp.now(self.io, .awake);
+
+        const cook_levels = try dep_graph.cookLevels(list.items);
+        defer DepGraph.freeLevels(self.allocator, cook_levels);
+
+        var reverse = try dep_graph.buildReverse(self.allocator);
+        defer {
+            var rev_iter = reverse.iterator();
+            while (rev_iter.next()) |entry| {
+                entry.value_ptr.deinit(self.allocator);
+            }
+            reverse.deinit();
+        }
+
+        var force_recook: std.AutoHashMap(Hash, void) = .init(self.allocator);
+        defer force_recook.deinit();
 
         const cook_node = progress.start("Cooking assets", list.items.len);
         defer cook_node.end();
 
         var cache_count: u32 = 0;
 
-        // TODO: parallelize this with zob
-        for (list.items) |entry| {
-            const result = try self.processAsset(&cache, entry, cook_node);
-            if (result == .cached or result == .hash_match) {
-                cache_count += 1;
+        // TODO: parallelize entries within each level with zob; levels themselves must run sequentially
+        for (cook_levels) |level| {
+            for (level) |entry| {
+                const force = force_recook.contains(entry.hashPath());
+                const result = try self.processAsset(&cache, entry, cook_node, force);
+                if (result == .cached or result == .hash_match) {
+                    cache_count += 1;
+                }
+                if (result == .cooked) {
+                    if (reverse.get(entry.hashPath())) |dependents| {
+                        for (dependents.items) |dep_hash| {
+                            try force_recook.put(dep_hash, {});
+                        }
+                    }
+                }
             }
         }
 
@@ -117,15 +154,38 @@ pub const CookCommand = struct {
         try cache.write(self.io);
     }
 
+    fn buildDependencyGraph(
+        self: *const CookCommand,
+        dep_graph: *DepGraph,
+        source_files: []const SourceFile,
+    ) !void {
+        for (source_files) |source| {
+            const deps = extractDependencies(&source, self.source, self.io, self.allocator) catch |err| {
+                log.warn("Failed to extract dependencies for '{s}': {s}", .{ source.path, @errorName(err) });
+                continue;
+            };
+            defer {
+                for (deps) |d| self.allocator.free(d.path);
+                self.allocator.free(deps);
+            }
+
+            const from = source.hashPath();
+            for (deps) |dep| {
+                try dep_graph.addDependency(from, dep.hashPath());
+            }
+        }
+    }
+
     const ProcessResult = enum { cached, hash_match, cooked, skipped, errored };
 
-    fn processAsset(self: *const CookCommand, cache: *Cache, entry: SourceFile, cook_node: std.Progress.Node) !ProcessResult {
+    fn processAsset(self: *const CookCommand, cache: *Cache, entry: SourceFile, cook_node: std.Progress.Node, force_recook: bool) !ProcessResult {
         const asset_node = cook_node.start(entry.path, 0);
 
         const start = std.Io.Clock.Timestamp.now(self.io, .awake);
-        var staleness: ?Staleness = null;
-        if (cache.lookupEntryMut(entry)) |cache_entry| {
-            staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
+        if (force_recook) {
+            log.debug("{s} dependency changed, force recooking", .{entry.path});
+        } else if (cache.lookupEntryMut(entry)) |cache_entry| {
+            const staleness = try Staleness.check(self.io, self.source, cache_entry, &entry);
             if (staleness == .cached) {
                 if (self.outputFileExists(cache_entry.cooked_path)) {
                     log.debug("{s} is cached, not cooking", .{entry.path});
@@ -147,7 +207,7 @@ pub const CookCommand = struct {
             if (staleness == .errored) {
                 log.debug("{s} previously errored, retrying", .{entry.path});
             } else {
-                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness.?) });
+                log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness) });
             }
         }
 

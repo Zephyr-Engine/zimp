@@ -3,12 +3,14 @@ const std = @import("std");
 pub const AssetType = enum {
     mesh,
     texture,
+    shader,
     unknown,
 
     pub fn cookedExtension(self: AssetType) []const u8 {
         return switch (self) {
             .mesh => "zmesh",
             .texture => "ztex",
+            .shader => "zshdr",
             .unknown => "",
         };
     }
@@ -22,6 +24,10 @@ const asset_map = std.EnumArray(Extension, AssetType).init(.{
     .jpg = .texture,
     .jpeg = .texture,
     .hdr = .texture,
+    .vert = .shader,
+    .frag = .shader,
+    .comp = .shader,
+    .glsl = .shader,
     .other = .unknown,
 });
 
@@ -33,6 +39,10 @@ const extension_map = std.StaticStringMap(Extension).initComptime(.{
     .{ "jpg", .jpg },
     .{ "jpeg", .jpeg },
     .{ "hdr", .hdr },
+    .{ "vert", .vert },
+    .{ "frag", .frag },
+    .{ "comp", .comp },
+    .{ "glsl", .glsl },
 });
 
 pub const Extension = enum {
@@ -43,6 +53,10 @@ pub const Extension = enum {
     jpg,
     jpeg,
     hdr,
+    vert,
+    frag,
+    comp,
+    glsl,
     other,
 
     pub fn string(self: Extension) []const u8 {
@@ -54,6 +68,10 @@ pub const Extension = enum {
             .jpg => "jpg",
             .jpeg => "jpeg",
             .hdr => "hdr",
+            .vert => "vert",
+            .frag => "frag",
+            .comp => "comp",
+            .glsl => "glsl",
             .other => "other",
         };
     }
@@ -62,8 +80,8 @@ pub const Extension = enum {
         return asset_map.get(self);
     }
 
-    pub fn processEntry(entry: std.Io.Dir.Entry) Extension {
-        var iter = std.mem.splitScalar(u8, entry.name, '.');
+    pub fn fromName(name: []const u8) Extension {
+        var iter = std.mem.splitScalar(u8, name, '.');
         // ignore filename itself
         _ = iter.next();
 
@@ -73,6 +91,10 @@ pub const Extension = enum {
             }
         }
         return .other;
+    }
+
+    pub fn processEntry(entry: std.Io.Dir.Entry) Extension {
+        return fromName(entry.name);
     }
 };
 

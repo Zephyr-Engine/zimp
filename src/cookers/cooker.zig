@@ -29,6 +29,7 @@ pub const Cooker = struct {
 const glb_cooker = @import("glb.zig").cooker();
 const obj_cooker = @import("obj.zig").cooker();
 const tex_cooker = @import("tex.zig").cooker();
+const shader_cooker = @import("shader.zig").cooker();
 
 pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .glb = glb_cooker,
@@ -38,6 +39,10 @@ pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .jpeg = tex_cooker,
     .jpg = tex_cooker,
     .hdr = tex_cooker,
+    .vert = shader_cooker,
+    .frag = shader_cooker,
+    .comp = shader_cooker,
+    .glsl = shader_cooker,
     .other = null,
 });
 
