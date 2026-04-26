@@ -3,7 +3,12 @@
     .version = "0.0.0",
     .fingerprint = 0xe2960b9d5a00ef8c, // Changing this has security and trust implications.
     .minimum_zig_version = "0.16.0",
-    .dependencies = .{},
+    .dependencies = .{
+        .zob = .{
+            .url = "git+https://github.com/Zephyr-Engine/zob#5b578d7d533fae9f8ba559f79ad6fd18190c5979",
+            .hash = "zob-1.1.0-qYajyI-vAACic_tymTCZQK-z_X2AHSScToGPjYea9FmT",
+        },
+    },
     .paths = .{
         "build.zig",
         "build.zig.zon",

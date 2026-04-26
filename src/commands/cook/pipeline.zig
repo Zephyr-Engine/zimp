@@ -36,7 +36,7 @@ pub fn run(
         &plan.reverse,
         counting,
     );
-    try executor.run(progress);
+    try executor.run(ctx.io, progress);
 
     const cache_write_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     try cache_session.persist(ctx.io);
