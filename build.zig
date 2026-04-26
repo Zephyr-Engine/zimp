@@ -8,9 +8,18 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
+    const zob_dep = b.dependency("zob", .{
+        .target = target,
+        .optimize = optimize,
+    });
+    const zob_mod = zob_dep.module("zob");
+
     const mod = b.addModule("zimp", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
+        .imports = &.{
+            .{ .name = "zob", .module = zob_mod },
+        },
     });
 
     mod.addIncludePath(b.path("external/image"));
@@ -32,6 +41,7 @@ pub fn build(b: *std.Build) void {
         }),
     });
     exe.root_module.addIncludePath(b.path("external/image"));
+    exe.root_module.addImport("zob", zob_mod);
 
     b.installArtifact(exe);
 
