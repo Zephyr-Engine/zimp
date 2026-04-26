@@ -50,12 +50,22 @@ pub const Cache = struct {
     }
 
     pub fn pushCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry) !void {
+        const idx = self.entries.items.len;
         try self.entries.append(allocator, entry);
+        errdefer {
+            const removed = self.entries.pop().?;
+            allocator.free(removed.source_path);
+            allocator.free(removed.cooked_path);
+        }
+        try self.entry_map.put(entry.source_path_hash, @intCast(idx));
         self.header.entry_count += 1;
     }
 
     pub fn overWriteCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry, idx: u32) !void {
-        try self.entries.insert(allocator, idx, entry);
+        const old = self.entries.items[idx];
+        allocator.free(old.source_path);
+        allocator.free(old.cooked_path);
+        self.entries.items[idx] = entry;
     }
 
     pub fn lookupEntryMut(self: *Cache, source_file: SourceFile) ?*CacheEntry {
@@ -315,6 +325,47 @@ pub const Cache = struct {
         };
     }
 };
+
+test "upsertEntry replaces existing entry without growing cache" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var cache = try Cache.init(testing.allocator, tmp.dir, "out");
+    defer cache.deinit(testing.allocator);
+
+    const source = SourceFile{ .path = "a.glsl", .extension = .glsl, .assetType = .shader };
+    const first = CacheEntry{
+        .source_path = try testing.allocator.dupe(u8, "a.glsl"),
+        .source_path_hash = source.hashPath(),
+        .content_hash = 1,
+        .source_size = 1,
+        .source_mtime = 1,
+        .cooked_path = try testing.allocator.dupe(u8, "old.zshdr"),
+        .cooked_path_hash = fnv1a("old.zshdr"),
+        .cooked_size = 1,
+        .cooked_at = 1,
+        .asset_type = .shader,
+    };
+    try cache.upsertEntry(testing.allocator, source, first);
+
+    const second = CacheEntry{
+        .source_path = try testing.allocator.dupe(u8, "a.glsl"),
+        .source_path_hash = source.hashPath(),
+        .content_hash = 2,
+        .source_size = 2,
+        .source_mtime = 2,
+        .cooked_path = try testing.allocator.dupe(u8, ""),
+        .cooked_path_hash = 0,
+        .cooked_size = 0,
+        .cooked_at = 2,
+        .asset_type = .shader,
+    };
+    try cache.upsertEntry(testing.allocator, source, second);
+
+    try testing.expectEqual(@as(usize, 1), cache.entries.items.len);
+    try testing.expectEqual(@as(u64, 2), cache.entries.items[0].content_hash);
+    try testing.expectEqualStrings("", cache.entries.items[0].cooked_path);
+}
 
 const testing = std.testing;
 

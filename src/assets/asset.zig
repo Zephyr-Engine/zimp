@@ -81,14 +81,9 @@ pub const Extension = enum {
     }
 
     pub fn fromName(name: []const u8) Extension {
-        var iter = std.mem.splitScalar(u8, name, '.');
-        // ignore filename itself
-        _ = iter.next();
-
-        if (iter.next()) |ext| {
-            if (extension_map.get(ext)) |ex| {
-                return ex;
-            }
+        const dotted_ext = std.fs.path.extension(name);
+        if (dotted_ext.len > 1) {
+            if (extension_map.get(dotted_ext[1..])) |ex| return ex;
         }
         return .other;
     }
@@ -112,6 +107,10 @@ test "Extension.assetType maps gltf to mesh" {
     try testing.expectEqual(.mesh, Extension.gltf.assetType());
 }
 
+test "Extension.assetType maps glsl to shader" {
+    try testing.expectEqual(.shader, Extension.glsl.assetType());
+}
+
 test "Extension.assetType maps other to unknown" {
     try testing.expectEqual(.unknown, Extension.other.assetType());
 }
@@ -124,6 +123,11 @@ test "Extension.processEntry returns gltf for .gltf file" {
 test "Extension.processEntry returns png for .png file" {
     const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = "image.png", .kind = .file };
     try testing.expectEqual(.png, Extension.processEntry(entry));
+}
+
+test "Extension.processEntry uses final extension for multi-dot names" {
+    const entry: std.Io.Dir.Entry = .{ .inode = 0, .name = "basic.mobile.frag", .kind = .file };
+    try testing.expectEqual(.frag, Extension.processEntry(entry));
 }
 
 test "Extension.processEntry returns other for unknown extension" {

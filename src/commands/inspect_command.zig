@@ -59,6 +59,8 @@ pub const InspectCommand = struct {
 
 const testing = std.testing;
 const writeTestZmeshFile = @import("../formats/zmesh.zig").writeTestZmeshFile;
+const zshdr = @import("../formats/zshdr.zig");
+const CookedShader = @import("../assets/cooked/shader.zig").CookedShader;
 
 test "InspectCommand.parseFromArgs errors with NotEnoughArguments when no file provided" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect" };
@@ -118,6 +120,47 @@ test "InspectCommand.run succeeds for valid zmesh file" {
     try cmd.run();
 }
 
+test "InspectCommand.run succeeds for valid zshdr file" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const variant_names = try dupeStringList(testing.allocator, &.{"SKINNED"});
+    const includes = try dupeStringList(testing.allocator, &.{});
+    const permutations = try testing.allocator.alloc(CookedShader.Permutation, 2);
+    permutations[0] = .{
+        .key = .base,
+        .source = try testing.allocator.dupe(u8, "#version 330 core\nvoid main() {}\n"),
+    };
+    permutations[1] = .{
+        .key = zshdr.VariantKey.base.with(0),
+        .source = try testing.allocator.dupe(u8, "#version 330 core\n#define SKINNED\nvoid main() {}\n"),
+    };
+
+    var cooked = CookedShader{
+        .stage = .vertex,
+        .variant_names = variant_names,
+        .includes = includes,
+        .permutations = permutations,
+    };
+    defer cooked.deinit(testing.allocator);
+
+    const file = try tmp.dir.createFile(testing.io, "test.zshdr", .{});
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(testing.io, &buf);
+    try zshdr.write(&writer.interface, cooked);
+    try writer.flush();
+    file.close(testing.io);
+
+    const inspect_file = try tmp.dir.openFile(testing.io, "test.zshdr", .{});
+    const cmd: InspectCommand = .{
+        .allocator = testing.allocator,
+        .file = inspect_file,
+        .io = testing.io,
+    };
+    defer cmd.deinit();
+    try cmd.run();
+}
+
 test "InspectCommand.parseFromArgs errors with NotEnoughArguments for single arg" {
     const args: []const [:0]const u8 = &.{"zimp"};
     const result = InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
@@ -128,4 +171,19 @@ test "InspectCommand.deinit cleans up without error" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
     const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     cmd.deinit();
+}
+
+fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, strings.len);
+    errdefer allocator.free(out);
+
+    var loaded: usize = 0;
+    errdefer for (out[0..loaded]) |item| allocator.free(item);
+
+    for (strings, 0..) |value, i| {
+        out[i] = try allocator.dupe(u8, value);
+        loaded += 1;
+    }
+
+    return out;
 }

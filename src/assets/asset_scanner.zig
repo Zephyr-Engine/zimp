@@ -147,6 +147,16 @@ test "AssetScanner.scan skips non-matching extensions" {
     }
 }
 
+test "AssetScanner.scan discovers shader includes and shader stages" {
+    const scanner = testScanner();
+    var list = try scanner.scan();
+    defer scanner.deinit(&list);
+
+    try testing.expect(containsPath(list, "shaders/common.glsl"));
+    try testing.expect(containsPath(list, "shaders/basic.vert"));
+    try testing.expect(containsPath(list, "shaders/basic.frag"));
+}
+
 test "AssetScanner.scan produces paths relative to source dir" {
     const scanner = testScanner();
     var list = try scanner.scan();
