@@ -16,11 +16,13 @@ pub const FormatInspector = struct {
 const zamesh_inspector = @import("../inspectors/zmesh.zig").inspector();
 const zatex_inspector = @import("../inspectors/ztex.zig").inspector();
 const zcache_inspector = @import("../inspectors/zcache.zig").inspector();
+const zshdr_inspector = @import("../inspectors/zshdr.zig").inspector();
 
 pub const inspector_registry = std.StaticStringMap(FormatInspector).initComptime(.{
     .{ FORMAT_MAGIC.ZMESH, zamesh_inspector },
     .{ FORMAT_MAGIC.ZACHE, zcache_inspector },
     .{ FORMAT_MAGIC.ZATEX, zatex_inspector },
+    .{ FORMAT_MAGIC.ZSHDR, zshdr_inspector },
 });
 
 const testing = std.testing;
@@ -62,6 +64,10 @@ test "inspector_registry contains ZMESH magic" {
     try testing.expect(inspector_registry.get(FORMAT_MAGIC.ZMESH) != null);
 }
 
+test "inspector_registry contains ZSHDR magic" {
+    try testing.expect(inspector_registry.get(FORMAT_MAGIC.ZSHDR) != null);
+}
+
 test "inspector_registry returns null for unknown magic" {
     try testing.expectEqual(@as(?FormatInspector, null), inspector_registry.get("NOPE!"));
 }
@@ -69,4 +75,9 @@ test "inspector_registry returns null for unknown magic" {
 test "inspector_registry maps ZMESH to zamesh_inspector" {
     const found = inspector_registry.get(FORMAT_MAGIC.ZMESH).?;
     try testing.expectEqual(zamesh_inspector.inspectFn, found.inspectFn);
+}
+
+test "inspector_registry maps ZSHDR to zshdr_inspector" {
+    const found = inspector_registry.get(FORMAT_MAGIC.ZSHDR).?;
+    try testing.expectEqual(zshdr_inspector.inspectFn, found.inspectFn);
 }

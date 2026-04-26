@@ -13,6 +13,11 @@ pub const Cooker = struct {
         writer: *std.Io.Writer,
     ) anyerror!void,
     asset_type: AssetType,
+    outputPathFn: ?*const fn (
+        allocator: std.mem.Allocator,
+        file_path: []const u8,
+        asset_type: AssetType,
+    ) anyerror![]u8 = null,
 
     pub fn cook(
         self: Cooker,
@@ -24,7 +29,25 @@ pub const Cooker = struct {
     ) !void {
         return self.cookFn(allocator, io, source_dir, file_path, writer);
     }
+
+    pub fn outputPath(
+        self: Cooker,
+        allocator: std.mem.Allocator,
+        file_path: []const u8,
+    ) ![]u8 {
+        if (self.outputPathFn) |path_fn| {
+            return path_fn(allocator, file_path, self.asset_type);
+        }
+        return defaultOutputPath(allocator, file_path, self.asset_type);
+    }
 };
+
+fn defaultOutputPath(allocator: std.mem.Allocator, file_path: []const u8, asset_type: AssetType) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.{s}", .{
+        std.fs.path.stem(file_path),
+        asset_type.cookedExtension(),
+    });
+}
 
 const glb_cooker = @import("glb.zig").cooker();
 const obj_cooker = @import("obj.zig").cooker();
@@ -42,7 +65,7 @@ pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .vert = shader_cooker,
     .frag = shader_cooker,
     .comp = shader_cooker,
-    .glsl = shader_cooker,
+    .glsl = null,
     .other = null,
 });
 
@@ -104,6 +127,26 @@ test "cooker_registry contains gltf" {
 
 test "cooker_registry returns null for unknown extension" {
     try testing.expectEqual(@as(?Cooker, null), cooker_registry.get(.other));
+}
+
+test "cooker_registry skips glsl shader includes" {
+    try testing.expectEqual(@as(?Cooker, null), cooker_registry.get(.glsl));
+}
+
+test "shader cooker output path preserves shader stage extension" {
+    const c = cooker_registry.get(.vert).?;
+    const path = try c.outputPath(testing.allocator, "shaders/basic.vert");
+    defer testing.allocator.free(path);
+
+    try testing.expectEqualStrings("basic.vert.zshdr", path);
+}
+
+test "default cooker output path uses source stem" {
+    const c = cooker_registry.get(.glb).?;
+    const path = try c.outputPath(testing.allocator, "meshes/triangle.glb");
+    defer testing.allocator.free(path);
+
+    try testing.expectEqualStrings("triangle.zmesh", path);
 }
 
 test "cooker_registry maps glb and gltf to same cooker" {

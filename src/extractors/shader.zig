@@ -2,6 +2,12 @@ const std = @import("std");
 
 const DependencyExtractor = @import("extractor.zig").DependencyExtractor;
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
+const shader_source = @import("../assets/raw/shader.zig");
+const file_read = @import("../shared/file_read.zig");
+
+const parseIncludeFilename = shader_source.parseIncludeFilename;
+const resolveIncludePath = shader_source.resolveIncludePath;
+const normalizePath = shader_source.normalizePath;
 
 pub fn extractor() DependencyExtractor {
     return .{ .extractFn = extractShaderDeps, .asset_type = .shader };
@@ -13,12 +19,10 @@ fn extractShaderDeps(
     io: std.Io,
     allocator: std.mem.Allocator,
 ) ![]const SourceFile {
-    const file = try dir.openFile(io, source.path, .{});
-    defer file.close(io);
-
-    var read_buffer: [4096]u8 = undefined;
-    var fr = file.reader(io, &read_buffer);
-    var reader = &fr.interface;
+    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path, .{
+        .chunk_size = 256 * 1024,
+    });
+    defer allocator.free(file_result.bytes);
 
     var deps: std.ArrayList(SourceFile) = .empty;
     errdefer {
@@ -26,12 +30,8 @@ fn extractShaderDeps(
         deps.deinit(allocator);
     }
 
-    while (true) {
-        const line = reader.takeDelimiterInclusive('\n') catch |err| switch (err) {
-            error.EndOfStream => break,
-            else => return err,
-        };
-
+    var lines = std.mem.splitScalar(u8, file_result.bytes, '\n');
+    while (lines.next()) |line| {
         if (parseIncludeFilename(line)) |filename| {
             const path = try resolveIncludePath(allocator, source.path, filename);
             errdefer allocator.free(path);
@@ -40,58 +40,6 @@ fn extractShaderDeps(
     }
 
     return deps.toOwnedSlice(allocator);
-}
-
-fn parseIncludeFilename(line: []const u8) ?[]const u8 {
-    const trimmed = std.mem.trim(u8, line, " \t");
-    if (std.mem.startsWith(u8, trimmed, "//")) {
-        return null;
-    }
-    if (!std.mem.startsWith(u8, trimmed, "#include")) {
-        return null;
-    }
-
-    const after_directive = std.mem.trim(u8, trimmed["#include".len..], " \t");
-    if (after_directive.len < 2) {
-        return null;
-    }
-
-    const close_char: u8 = switch (after_directive[0]) {
-        '"' => '"',
-        '<' => '>',
-        else => return null,
-    };
-
-    const rest = after_directive[1..];
-    const end = std.mem.indexOfScalar(u8, rest, close_char) orelse return null;
-    if (end == 0) {
-        return null;
-    }
-
-    return rest[0..end];
-}
-
-fn resolveIncludePath(allocator: std.mem.Allocator, shader_path: []const u8, include: []const u8) ![]u8 {
-    const dir = std.fs.path.dirname(shader_path) orelse return allocator.dupe(u8, include);
-    const joined = try std.fs.path.join(allocator, &.{ dir, include });
-    defer allocator.free(joined);
-    return normalizePath(allocator, joined);
-}
-
-fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var parts: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer parts.deinit(allocator);
-
-    var it = std.mem.splitScalar(u8, path, '/');
-    while (it.next()) |part| {
-        if (std.mem.eql(u8, part, "..")) {
-            if (parts.items.len > 0) parts.items.len -= 1;
-        } else if (part.len > 0 and !std.mem.eql(u8, part, ".")) {
-            try parts.append(allocator, part);
-        }
-    }
-
-    return std.mem.join(allocator, "/", parts.items);
 }
 
 const testing = std.testing;

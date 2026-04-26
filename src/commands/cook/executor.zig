@@ -13,7 +13,7 @@ const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
 const DependentsMap = @import("planner.zig").DependentsMap;
 
-pub const ProcessResult = enum { cached, hash_match, cooked, skipped, errored };
+pub const ProcessResult = enum { cached, hash_match, cooked, dependency_changed, skipped, errored };
 
 const AssetDecision = struct {
     action: Action = .cook,
@@ -72,7 +72,7 @@ pub const Executor = struct {
 
                 self.recordResult(result);
 
-                if (result == .cooked) {
+                if (result == .cooked or result == .dependency_changed) {
                     try self.enqueueDependents(entry.hashPath(), &force_recook);
                 }
 
@@ -100,6 +100,7 @@ pub const Executor = struct {
                 self.metrics.assets_hash_match += 1;
             },
             .cooked => self.metrics.assets_cooked += 1,
+            .dependency_changed => {},
             .errored => self.metrics.assets_errored += 1,
             .skipped => {},
         }
@@ -117,6 +118,10 @@ pub const Executor = struct {
         const asset_node = cook_node.start(entry.path, 0);
         defer asset_node.end();
 
+        if (cookers.get(entry.extension) == null) {
+            return self.processDependencyOnly(entry, force_recook);
+        }
+
         const start = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
         const decision = try self.decideAssetAction(entry, force_recook);
 
@@ -131,6 +136,53 @@ pub const Executor = struct {
             },
             .cook => self.cookAndCache(entry, decision.source_size, start),
         };
+    }
+
+    fn processDependencyOnly(self: *Executor, entry: SourceFile, force_recook: bool) !ProcessResult {
+        const info = try entry.getFileInfo(self.ctx.source, self.ctx.io);
+
+        if (force_recook) {
+            try self.cacheDependencyOnly(entry, info.size);
+            log.debug("{s} dependency changed, propagating to dependents", .{entry.path});
+            return .dependency_changed;
+        }
+
+        if (self.cache.lookupEntryMut(entry)) |cache_entry| {
+            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &entry);
+            if (staleness == .stale_content or staleness == .hash_match) {
+                self.metrics.source_bytes_hashed += info.size;
+            }
+
+            switch (staleness) {
+                .cached => {
+                    log.debug("{s} is dependency-only and cached", .{entry.path});
+                    return .skipped;
+                },
+                .hash_match => {
+                    cache_entry.source_mtime = info.modified_ns;
+                    log.debug("{s} dependency-only hash match, updated mtime", .{entry.path});
+                    return .skipped;
+                },
+                else => {
+                    log.debug("{s} dependency-only source changed, propagating to dependents", .{entry.path});
+                    try self.cacheDependencyOnly(entry, info.size);
+                    return .dependency_changed;
+                },
+            }
+        }
+
+        try self.cacheDependencyOnly(entry, info.size);
+        log.debug("{s} dependency-only source first seen, propagating to dependents", .{entry.path});
+        return .dependency_changed;
+    }
+
+    fn cacheDependencyOnly(self: *Executor, entry: SourceFile, source_size: u64) !void {
+        self.metrics.source_bytes_hashed += source_size;
+        try self.cache.upsertEntry(
+            self.allocator,
+            entry,
+            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, "", 0),
+        );
     }
 
     fn decideAssetAction(self: *Executor, entry: SourceFile, force_recook: bool) !AssetDecision {
@@ -186,25 +238,31 @@ pub const Executor = struct {
             source_size = info.size;
         }
 
-        const cooked = entry.createCookedFile(self.allocator, self.ctx.io, self.ctx.output) catch |err| {
+        const cooker = cookers.get(entry.extension) orelse {
+            log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ entry.extension.string(), entry.path });
+            return .skipped;
+        };
+
+        const cooked_path = cooker.outputPath(self.allocator, entry.path) catch |err| {
+            log.err("Failed to compute output path for '{s}': {s}", .{ entry.path, @errorName(err) });
+            return .errored;
+        };
+        defer self.allocator.free(cooked_path);
+
+        const cooked_file = self.ctx.output.createFile(self.ctx.io, cooked_path, .{}) catch |err| {
             log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
             return .errored;
         };
-        defer self.allocator.free(cooked.path);
-        defer cooked.file.close(self.ctx.io);
+        defer cooked_file.close(self.ctx.io);
 
         var buf: [8192]u8 = undefined;
-        var file_writer = cooked.file.writer(self.ctx.io, &buf);
+        var file_writer = cooked_file.writer(self.ctx.io, &buf);
 
         const cook_failed = blk: {
-            if (cookers.get(entry.extension)) |cooker| {
-                cooker.cook(self.allocator, self.ctx.io, self.ctx.source, entry.path, &file_writer.interface) catch |err| {
-                    log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
-                    break :blk true;
-                };
-            } else {
-                log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ entry.extension.string(), entry.path });
-            }
+            cooker.cook(self.allocator, self.ctx.io, self.ctx.source, entry.path, &file_writer.interface) catch |err| {
+                log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
+                break :blk true;
+            };
             break :blk false;
         };
 
@@ -223,7 +281,7 @@ pub const Executor = struct {
 
         try file_writer.flush();
 
-        const cooked_stat = try cooked.file.stat(self.ctx.io);
+        const cooked_stat = try cooked_file.stat(self.ctx.io);
 
         const end = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
         const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
@@ -238,7 +296,7 @@ pub const Executor = struct {
         try self.cache.upsertEntry(
             self.allocator,
             entry,
-            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, cooked.path, cooked_stat.size),
+            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, cooked_path, cooked_stat.size),
         );
 
         return .cooked;

@@ -71,9 +71,9 @@ pub const SourceFile = struct {
     };
 
     pub fn createCookedFile(self: *const SourceFile, allocator: std.mem.Allocator, io: std.Io, output_dir: std.Io.Dir) !CookedFile {
-        const stem = std.fs.path.stem(self.path);
+        const name = std.fs.path.stem(self.path);
         const ext = self.assetType.cookedExtension();
-        const filename = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ stem, ext });
+        const filename = try std.fmt.allocPrint(allocator, "{s}.{s}", .{ name, ext });
         errdefer allocator.free(filename);
         return .{
             .file = try output_dir.createFile(io, filename, .{}),
