@@ -104,16 +104,23 @@ pub const GltfAccessor = struct {
     min: ?[]f64 = null,
     max: ?[]f64 = null,
 
-    pub fn readAccessorSlice(self: *const GltfAccessor, comptime T: type, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, bin: []const u8) GltfAccessorError![]align(1) const T {
-        const bytes = try self.readAccessor(allocator, buffer_views, bin);
+    pub fn readAccessorSlice(self: *const GltfAccessor, comptime T: type, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, buffers: []const []const u8) GltfAccessorError![]align(1) const T {
+        const bytes = try self.readAccessor(allocator, buffer_views, buffers);
         return std.mem.bytesAsSlice(T, bytes);
     }
 
-    pub fn readAccessor(self: *const GltfAccessor, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, bin: []const u8) GltfAccessorError![]const u8 {
+    pub fn readAccessor(self: *const GltfAccessor, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, buffers: []const []const u8) GltfAccessorError![]const u8 {
         const buffer_view_value = self.bufferView orelse return &.{};
+        if (buffer_view_value >= buffer_views.len) {
+            return GltfAccessorError.OutOfBounds;
+        }
         const buffer_view = buffer_views[buffer_view_value];
+        if (buffer_view.buffer >= buffers.len) {
+            return GltfAccessorError.OutOfBounds;
+        }
+        const bin = buffers[buffer_view.buffer];
 
-        const start = self.byteOffset + buffer_view.byteOffset;
+        const start: usize = self.byteOffset + buffer_view.byteOffset;
         const component_size = self.componentType.size();
         const num_components = self.type.componentCount();
         const element_size = component_size * num_components;

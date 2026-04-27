@@ -50,14 +50,16 @@ fn defaultOutputPath(allocator: std.mem.Allocator, file_path: []const u8, asset_
 }
 
 const glb_cooker = @import("glb.zig").cooker();
+const gltf_cooker = @import("gltf.zig").cooker();
 const obj_cooker = @import("obj.zig").cooker();
 const tex_cooker = @import("tex.zig").cooker();
 const shader_cooker = @import("shader.zig").cooker();
 
 pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .glb = glb_cooker,
-    .gltf = glb_cooker,
+    .gltf = gltf_cooker,
     .obj = obj_cooker,
+    .bin = null,
     .png = tex_cooker,
     .jpeg = tex_cooker,
     .jpg = tex_cooker,
@@ -149,8 +151,8 @@ test "default cooker output path uses source stem" {
     try testing.expectEqualStrings("triangle.zmesh", path);
 }
 
-test "cooker_registry maps glb and gltf to same cooker" {
+test "cooker_registry maps glb and gltf to different cookers" {
     const glb = cooker_registry.get(.glb).?;
     const gltf = cooker_registry.get(.gltf).?;
-    try testing.expectEqual(glb.cookFn, gltf.cookFn);
+    try testing.expect(glb.cookFn != gltf.cookFn);
 }

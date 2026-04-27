@@ -18,7 +18,7 @@ pub const GltfMesh = struct {
     allocator: std.mem.Allocator,
     raw: mesh.RawMesh,
 
-    pub fn buildMesh(allocator: std.mem.Allocator, gltf: *const GltfJson, mesh_index: usize, bin: []const u8) BuildMeshError!GltfMesh {
+    pub fn buildMesh(allocator: std.mem.Allocator, gltf: *const GltfJson, mesh_index: usize, buffers: []const []const u8) BuildMeshError!GltfMesh {
         const json_mesh = gltf.meshes[mesh_index];
         const primitives = json_mesh.primitives;
 
@@ -53,8 +53,8 @@ pub const GltfMesh = struct {
         var vertex_offset: u32 = 0;
         var index_offset: u32 = 0;
         for (primitives, 0..) |prim, prim_idx| {
-            const count = try processVertices(allocator, gltf, bin, prim, vertices, vertex_offset);
-            try processIndices(allocator, gltf, bin, prim, indices, index_offset, vertex_offset);
+            const count = try processVertices(allocator, gltf, buffers, prim, vertices, vertex_offset);
+            try processIndices(allocator, gltf, buffers, prim, indices, index_offset, vertex_offset);
 
             const prim_index_count: u32 = if (prim.indices) |idx| gltf.accessors[idx].count else 0;
             submeshes[prim_idx] = .{
@@ -90,16 +90,16 @@ pub const GltfMesh = struct {
     }
 };
 
-fn processVertices(allocator: std.mem.Allocator, gltf: *const GltfJson, bin: []const u8, prim: GltfPrimitive, vertices: []mesh.RawVertex, offset: u32) BuildMeshError!u32 {
+fn processVertices(allocator: std.mem.Allocator, gltf: *const GltfJson, buffers: []const []const u8, prim: GltfPrimitive, vertices: []mesh.RawVertex, offset: u32) BuildMeshError!u32 {
     const pos_accessor = &gltf.accessors[prim.attributes.POSITION.?];
-    const positions = try pos_accessor.readAccessorSlice([3]f32, allocator, gltf.bufferViews, bin);
+    const positions = try pos_accessor.readAccessorSlice([3]f32, allocator, gltf.bufferViews, buffers);
 
-    const normals = try readAttr([3]f32, prim.attributes.NORMAL, allocator, gltf, bin);
-    const tangents = try readAttr([4]f32, prim.attributes.TANGENT, allocator, gltf, bin);
-    const uv0s = try readAttr([2]f32, prim.attributes.TEXCOORD_0, allocator, gltf, bin);
-    const uv1s = try readAttr([2]f32, prim.attributes.TEXCOORD_1, allocator, gltf, bin);
-    const joints = try readAttr([4]u16, prim.attributes.JOINTS_0, allocator, gltf, bin);
-    const weights = try readAttr([4]f32, prim.attributes.WEIGHTS_0, allocator, gltf, bin);
+    const normals = try readAttr([3]f32, prim.attributes.NORMAL, allocator, gltf, buffers);
+    const tangents = try readAttr([4]f32, prim.attributes.TANGENT, allocator, gltf, buffers);
+    const uv0s = try readAttr([2]f32, prim.attributes.TEXCOORD_0, allocator, gltf, buffers);
+    const uv1s = try readAttr([2]f32, prim.attributes.TEXCOORD_1, allocator, gltf, buffers);
+    const joints = try readAttr([4]u16, prim.attributes.JOINTS_0, allocator, gltf, buffers);
+    const weights = try readAttr([4]f32, prim.attributes.WEIGHTS_0, allocator, gltf, buffers);
 
     for (0..pos_accessor.count) |i| {
         vertices[offset + i] = .{
@@ -116,10 +116,10 @@ fn processVertices(allocator: std.mem.Allocator, gltf: *const GltfJson, bin: []c
     return pos_accessor.count;
 }
 
-fn processIndices(allocator: std.mem.Allocator, gltf: *const GltfJson, bin: []const u8, prim: GltfPrimitive, indices: []u32, offset: u32, vertex_offset: u32) BuildMeshError!void {
+fn processIndices(allocator: std.mem.Allocator, gltf: *const GltfJson, buffers: []const []const u8, prim: GltfPrimitive, indices: []u32, offset: u32, vertex_offset: u32) BuildMeshError!void {
     const indices_index = prim.indices orelse return;
     const idx_accessor = &gltf.accessors[indices_index];
-    const idx_bytes = try idx_accessor.readAccessor(allocator, gltf.bufferViews, bin);
+    const idx_bytes = try idx_accessor.readAccessor(allocator, gltf.bufferViews, buffers);
 
     switch (idx_accessor.componentType) {
         .UNSIGNED_BYTE => {
@@ -143,9 +143,9 @@ fn processIndices(allocator: std.mem.Allocator, gltf: *const GltfJson, bin: []co
     }
 }
 
-fn readAttr(comptime T: type, attr_index: ?u32, allocator: std.mem.Allocator, gltf: *const GltfJson, bin: []const u8) BuildMeshError!?[]align(1) const T {
+fn readAttr(comptime T: type, attr_index: ?u32, allocator: std.mem.Allocator, gltf: *const GltfJson, buffers: []const []const u8) BuildMeshError!?[]align(1) const T {
     const idx = attr_index orelse return null;
-    return try gltf.accessors[idx].readAccessorSlice(T, allocator, gltf.bufferViews, bin);
+    return try gltf.accessors[idx].readAccessorSlice(T, allocator, gltf.bufferViews, buffers);
 }
 
 fn optionalIndex(slice: anytype, i: usize) ?std.meta.Elem(@TypeOf(slice.?)) {
@@ -159,6 +159,11 @@ const GltfAttributes = gltf_parser.GltfAttributes;
 
 fn toBytes(comptime T: type, comptime data: []const T) *const [@sizeOf(T) * data.len]u8 {
     return @ptrCast(data);
+}
+
+fn buildTestMesh(allocator: std.mem.Allocator, gltf: *const GltfJson, mesh_index: usize, bin: []const u8) BuildMeshError!GltfMesh {
+    const buffers = [_][]const u8{bin};
+    return GltfMesh.buildMesh(allocator, gltf, mesh_index, &buffers);
 }
 
 // Triangle: 3 vertices with positions only, 3 u16 indices
@@ -214,7 +219,7 @@ test "build triangle with positions only" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqual(3, result.raw.vertices.len);
@@ -247,7 +252,7 @@ test "build triangle with normals and uvs" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqual([3]f32{ 0.0, 0.0, 1.0 }, result.raw.vertices[0].normal.?);
@@ -271,7 +276,7 @@ test "build mesh without indices" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqual(3, result.raw.vertices.len);
@@ -294,7 +299,7 @@ test "submesh is populated correctly" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqual(1, result.raw.submeshes.len);
@@ -317,7 +322,7 @@ test "submesh defaults material to 0" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqual(0, result.raw.submeshes[0].material_index);
@@ -342,7 +347,7 @@ test "multi-primitive mesh rebases indices" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqual(6, result.raw.vertices.len);
@@ -391,7 +396,7 @@ test "u32 index type" {
         .bufferViews = &bvs,
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, bin_u32);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, bin_u32);
     defer result.deinit();
 
     try testing.expectEqual(3, result.raw.indices.len);
@@ -422,12 +427,42 @@ test "u8 index type" {
         .bufferViews = &bvs,
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, bin_u8);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, bin_u8);
     defer result.deinit();
 
     try testing.expectEqual(3, result.raw.indices.len);
     try testing.expectEqual(0, result.raw.indices[0]);
     try testing.expectEqual(2, result.raw.indices[2]);
+}
+
+test "accessors read from bufferView buffer index" {
+    const index_buffer = toBytes(u16, &triangle_indices_u16);
+    var bvs = [_]GltfBufferView{
+        .{ .buffer = 0, .byteOffset = 0, .byteLength = 36 },
+        .{ .buffer = 1, .byteOffset = 0, .byteLength = 6 },
+    };
+    var accs = [_]GltfAccessor{
+        .{ .bufferView = 0, .componentType = .FLOAT, .count = 3, .type = .VEC3 },
+        .{ .bufferView = 1, .componentType = .UNSIGNED_SHORT, .count = 3, .type = .SCALAR },
+    };
+    var primitives = [_]GltfPrimitive{.{
+        .attributes = .{ .POSITION = 0 },
+        .indices = 1,
+    }};
+    var meshes = [_]gltf_parser.GltfMesh{.{ .primitives = &primitives }};
+    const gltf = GltfJson{
+        .meshes = &meshes,
+        .accessors = &accs,
+        .bufferViews = &bvs,
+    };
+    const buffers = [_][]const u8{ toBytes([3]f32, &triangle_positions), index_buffer };
+
+    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, &buffers);
+    defer result.deinit();
+
+    try testing.expectEqual(@as(usize, 3), result.raw.indices.len);
+    try testing.expectEqual(@as(u32, 0), result.raw.indices[0]);
+    try testing.expectEqual(@as(u32, 2), result.raw.indices[2]);
 }
 
 test "error on missing position attribute" {
@@ -442,7 +477,7 @@ test "error on missing position attribute" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    try testing.expectError(BuildMeshError.MissingPositionAttribute, GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin));
+    try testing.expectError(BuildMeshError.MissingPositionAttribute, buildTestMesh(testing.allocator, &gltf, 0, triangle_bin));
 }
 
 test "error on unsupported primitive mode" {
@@ -457,7 +492,7 @@ test "error on unsupported primitive mode" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    try testing.expectError(BuildMeshError.UnsupportedPrimitiveMode, GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin));
+    try testing.expectError(BuildMeshError.UnsupportedPrimitiveMode, buildTestMesh(testing.allocator, &gltf, 0, triangle_bin));
 }
 
 test "error on invalid index count" {
@@ -484,7 +519,7 @@ test "error on invalid index count" {
         .bufferViews = &bvs,
     };
 
-    try testing.expectError(BuildMeshError.InvalidIndexCount, GltfMesh.buildMesh(testing.allocator, &gltf, 0, bin_bad));
+    try testing.expectError(BuildMeshError.InvalidIndexCount, buildTestMesh(testing.allocator, &gltf, 0, bin_bad));
 }
 
 test "mesh name is preserved" {
@@ -501,7 +536,7 @@ test "mesh name is preserved" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqualStrings("MyMesh", result.raw.name.?);
@@ -520,7 +555,7 @@ test "mesh name null when absent" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     defer result.deinit();
 
     try testing.expectEqual(null, result.raw.name);
@@ -540,7 +575,7 @@ test "deinit frees all memory" {
         .bufferViews = @constCast(&triangle_buffer_views),
     };
 
-    var result = try GltfMesh.buildMesh(testing.allocator, &gltf, 0, triangle_bin);
+    var result = try buildTestMesh(testing.allocator, &gltf, 0, triangle_bin);
     result.deinit();
     // testing.allocator will detect leaks if deinit missed anything
 }

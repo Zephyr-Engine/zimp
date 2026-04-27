@@ -46,9 +46,11 @@ test {
     _ = @import("commands/cook_metrics.zig");
     _ = @import("parsers/gltf/glb_parser.zig");
     _ = @import("parsers/gltf/gltf_json_parser.zig");
+    _ = @import("parsers/gltf/document.zig");
     _ = @import("parsers/gltf/mesh.zig");
     _ = @import("cookers/cooker.zig");
     _ = @import("cookers/glb.zig");
+    _ = @import("cookers/gltf.zig");
     _ = @import("cookers/obj.zig");
     _ = @import("cookers/shader.zig");
     _ = @import("extractors/extractor.zig");

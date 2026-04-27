@@ -30,8 +30,9 @@ fn cookGlb(
     var gltf = try Gltf.parse(glb_file.json, allocator);
     defer gltf.deinit();
 
+    const buffers = [_][]const u8{glb_file.bin};
     for (0..gltf.value.meshes.len) |i| {
-        var gltf_mesh = try GltfMesh.buildMesh(allocator, &gltf.value, i, glb_file.bin);
+        var gltf_mesh = try GltfMesh.buildMesh(allocator, &gltf.value, i, &buffers);
         defer gltf_mesh.deinit();
 
         var cooked_mesh = try CookedMesh.cook(allocator, &gltf_mesh.raw);
