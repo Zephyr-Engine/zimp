@@ -21,7 +21,7 @@ pub fn run(
     defer cache_session.deinit(allocator);
     cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
 
-    var plan = try planner.build(allocator, ctx, &metrics);
+    var plan = try planner.build(allocator, ctx, &cache_session.cache, &metrics);
     defer plan.deinit(allocator);
     cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
 

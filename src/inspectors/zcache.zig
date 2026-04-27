@@ -90,6 +90,26 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     }
 
     log.info("", .{});
+    log.info("Dependency graph:", .{});
+    log.info("  Rows:  {d}", .{c.dependency_graph.rows.items.len});
+    log.info("  Edges: {d}", .{c.dependency_graph.totalEdgeCount()});
+
+    if (c.dependency_graph.rows.items.len > 0) {
+        for (c.dependency_graph.rows.items) |row| {
+            log.info("  {s}", .{row.source_path});
+
+            if (row.dependencies.items.len == 0) {
+                log.info("    (no dependencies)", .{});
+                continue;
+            }
+
+            for (row.dependencies.items) |dep| {
+                log.info("    -> {s}", .{dep.path});
+            }
+        }
+    }
+
+    log.info("", .{});
     log.info("Summary:", .{});
 
     var buf1: [16]u8 = undefined;
@@ -163,6 +183,7 @@ test "Cache.read accepts zero entries" {
     try writer.writeInt(u32, 0, .little);
     try writer.writeInt(u16, 1, .little); // output_dir_path len
     try writer.writeAll("."); // output_dir_path
+    try writer.writeInt(u32, 0, .little); // dependency_row_count
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
     var c = try cache.Cache.read(testing.allocator, &reader);
@@ -197,6 +218,7 @@ test "Cache.read parses entry fields correctly" {
     const cooked_path = "triangle.zmesh";
     try writer.writeInt(u16, cooked_path.len, .little);
     try writer.writeAll(cooked_path);
+    try writer.writeInt(u32, 0, .little); // dependency_row_count
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
     var c = try cache.Cache.read(testing.allocator, &reader);
@@ -250,4 +272,6 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
         try writer.writeInt(u16, cooked_path.len, .little);
         try writer.writeAll(cooked_path);
     }
+
+    try writer.writeInt(u32, 0, .little); // dependency_row_count
 }

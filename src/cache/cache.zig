@@ -3,12 +3,16 @@ const std = @import("std");
 const source_file_mod = @import("../assets/source_file.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
 const CacheEntry = @import("entry.zig").CacheEntry;
+const dep_graph_mod = @import("cache_dep_graph.zig");
+const CacheDepGraph = dep_graph_mod.CacheDepGraph;
+const DependencyRef = dep_graph_mod.DependencyRef;
+const DependencyRow = dep_graph_mod.DependencyRow;
 const fnv1a = source_file_mod.fnv1a;
 const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
 const log = @import("../logger.zig");
 
-pub const VERSION = 2;
+pub const VERSION = 3;
 pub const MAGIC = "ZACHE";
 
 pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32); // magic + version + entry_count
@@ -24,6 +28,7 @@ pub const Cache = struct {
     header: CacheHeader,
     entries: std.ArrayList(CacheEntry),
     entry_map: EntryMap,
+    dependency_graph: CacheDepGraph,
     source_dir: std.Io.Dir,
     output_dir_path: []const u8 = "",
 
@@ -33,6 +38,7 @@ pub const Cache = struct {
                 .entry_count = 0,
             },
             .entry_map = .init(allocator),
+            .dependency_graph = CacheDepGraph.init(allocator),
             .entries = .empty,
             .source_dir = source_dir,
             .output_dir_path = try allocator.dupe(u8, output_dir_path),
@@ -46,6 +52,7 @@ pub const Cache = struct {
         }
         self.entries.deinit(allocator);
         self.entry_map.deinit();
+        self.dependency_graph.deinit(allocator);
         allocator.free(self.output_dir_path);
     }
 
@@ -137,6 +144,26 @@ pub const Cache = struct {
         return removed;
     }
 
+    pub fn pruneDeletedDependencyRows(self: *Cache, allocator: std.mem.Allocator, source_files: []const SourceFile) u32 {
+        return self.dependency_graph.pruneDeleted(allocator, source_files);
+    }
+
+    pub fn lookupDependencyRow(self: *const Cache, source_file: SourceFile) ?*const DependencyRow {
+        return self.dependency_graph.get(source_file);
+    }
+
+    pub fn upsertDependencyRow(
+        self: *Cache,
+        allocator: std.mem.Allocator,
+        source_file: SourceFile,
+        info: SourceFile.FileInfo,
+        dependencies: []const SourceFile,
+    ) !void {
+        var row = try DependencyRow.create(allocator, source_file, info, dependencies);
+        errdefer row.deinit(allocator);
+        try self.dependency_graph.upsert(allocator, row);
+    }
+
     pub fn getIdx(self: *const Cache, source_file: SourceFile) ?u32 {
         const path_hash = source_file.hashPath();
         return self.entry_map.get(path_hash);
@@ -178,6 +205,19 @@ pub const Cache = struct {
             try io_writer.writeAll(entry.source_path);
             try io_writer.writeInt(u16, @intCast(entry.cooked_path.len), .little);
             try io_writer.writeAll(entry.cooked_path);
+        }
+
+        try io_writer.writeInt(u32, @intCast(self.dependency_graph.rows.items.len), .little);
+        for (self.dependency_graph.rows.items) |row| {
+            try io_writer.writeInt(u64, row.source_path_hash, .little);
+            try io_writer.writeInt(u64, row.source_size, .little);
+            try io_writer.writeInt(i96, row.source_mtime, .little);
+            try writeString(io_writer, row.source_path);
+            try io_writer.writeInt(u32, @intCast(row.dependencies.items.len), .little);
+            for (row.dependencies.items) |dep| {
+                try io_writer.writeInt(u64, dep.path_hash, .little);
+                try writeString(io_writer, dep.path);
+            }
         }
 
         try io_writer.flush();
@@ -268,6 +308,8 @@ pub const Cache = struct {
             }
             entries.deinit(allocator);
         }
+        var dependency_graph = CacheDepGraph.init(allocator);
+        errdefer dependency_graph.deinit(allocator);
 
         try entries.ensureTotalCapacity(allocator, entry_count);
 
@@ -307,6 +349,46 @@ pub const Cache = struct {
             });
         }
 
+        const dependency_row_count = try reader.takeInt(u32, .little);
+        try dependency_graph.rows.ensureTotalCapacity(allocator, dependency_row_count);
+        try dependency_graph.row_map.ensureTotalCapacity(@intCast(dependency_row_count));
+
+        for (0..dependency_row_count) |_| {
+            const source_path_hash = try reader.takeInt(u64, .little);
+            const source_size = try reader.takeInt(u64, .little);
+            const source_mtime = try reader.takeInt(i96, .little);
+            const source_path = try readString(allocator, reader);
+            errdefer allocator.free(source_path);
+
+            const dependency_count = try reader.takeInt(u32, .little);
+            var dependencies: std.ArrayList(DependencyRef) = .empty;
+            errdefer {
+                for (dependencies.items) |dep| allocator.free(dep.path);
+                dependencies.deinit(allocator);
+            }
+            try dependencies.ensureTotalCapacity(allocator, dependency_count);
+
+            for (0..dependency_count) |_| {
+                const path_hash = try reader.takeInt(u64, .little);
+                const path = try readString(allocator, reader);
+                errdefer allocator.free(path);
+                dependencies.appendAssumeCapacity(.{
+                    .path = path,
+                    .path_hash = path_hash,
+                });
+            }
+
+            const idx = dependency_graph.rows.items.len;
+            dependency_graph.rows.appendAssumeCapacity(.{
+                .source_path = source_path,
+                .source_path_hash = source_path_hash,
+                .source_size = source_size,
+                .source_mtime = source_mtime,
+                .dependencies = dependencies,
+            });
+            dependency_graph.row_map.putAssumeCapacity(source_path_hash, @intCast(idx));
+        }
+
         var entry_map: EntryMap = .init(allocator);
         try entry_map.ensureTotalCapacity(@intCast(entry_count));
         for (entries.items, 0..) |entry, i| {
@@ -319,12 +401,26 @@ pub const Cache = struct {
                 .entry_count = entry_count,
             },
             .entry_map = entry_map,
+            .dependency_graph = dependency_graph,
             .entries = entries,
             .source_dir = .cwd(),
             .output_dir_path = output_dir_path,
         };
     }
 };
+
+fn writeString(writer: *std.Io.Writer, value: []const u8) !void {
+    try writer.writeInt(u16, @intCast(value.len), .little);
+    try writer.writeAll(value);
+}
+
+fn readString(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
+    const len = try reader.takeInt(u16, .little);
+    const value = try allocator.alloc(u8, len);
+    errdefer allocator.free(value);
+    try reader.readSliceAll(value);
+    return value;
+}
 
 test "upsertEntry replaces existing entry without growing cache" {
     var tmp = testing.tmpDir(.{});
@@ -388,10 +484,19 @@ fn makeTestEntry(allocator: std.mem.Allocator, source_path: []const u8, cooked_p
 }
 
 fn writeTestCache(writer: *std.Io.Writer, entries: []const CacheEntry) !void {
-    try writeTestCacheWithOutputDir(writer, entries, ".");
+    try writeTestCacheWithOutputDirAndDependencies(writer, entries, ".", &.{});
 }
 
 fn writeTestCacheWithOutputDir(writer: *std.Io.Writer, entries: []const CacheEntry, output_dir_path: []const u8) !void {
+    try writeTestCacheWithOutputDirAndDependencies(writer, entries, output_dir_path, &.{});
+}
+
+fn writeTestCacheWithOutputDirAndDependencies(
+    writer: *std.Io.Writer,
+    entries: []const CacheEntry,
+    output_dir_path: []const u8,
+    dependency_rows: []const DependencyRow,
+) !void {
     try writer.writeAll(MAGIC);
     try writer.writeInt(u16, VERSION, .little);
     try writer.writeInt(u32, @intCast(entries.len), .little);
@@ -412,6 +517,21 @@ fn writeTestCacheWithOutputDir(writer: *std.Io.Writer, entries: []const CacheEnt
         try writer.writeAll(entry.source_path);
         try writer.writeInt(u16, @intCast(entry.cooked_path.len), .little);
         try writer.writeAll(entry.cooked_path);
+    }
+
+    try writer.writeInt(u32, @intCast(dependency_rows.len), .little);
+    for (dependency_rows) |row| {
+        try writer.writeInt(u64, row.source_path_hash, .little);
+        try writer.writeInt(u64, row.source_size, .little);
+        try writer.writeInt(i96, row.source_mtime, .little);
+        try writer.writeInt(u16, @intCast(row.source_path.len), .little);
+        try writer.writeAll(row.source_path);
+        try writer.writeInt(u32, @intCast(row.dependencies.items.len), .little);
+        for (row.dependencies.items) |dep| {
+            try writer.writeInt(u64, dep.path_hash, .little);
+            try writer.writeInt(u16, @intCast(dep.path.len), .little);
+            try writer.writeAll(dep.path);
+        }
     }
 }
 
@@ -678,6 +798,77 @@ test "read parses multiple entries" {
     try testing.expectEqualStrings("b.gltf", c.entries.items[1].source_path);
     try testing.expectEqual(AssetType.mesh, c.entries.items[0].asset_type);
     try testing.expectEqual(AssetType.unknown, c.entries.items[1].asset_type);
+}
+
+test "read parses dependency graph rows" {
+    const source = SourceFile.fromPath("shaders/main.frag");
+    const deps = [_]SourceFile{
+        SourceFile.fromPath("shaders/common.glsl"),
+        SourceFile.fromPath("shared/light.glsl"),
+    };
+
+    var row = try DependencyRow.create(testing.allocator, source, .{
+        .size = 123,
+        .modified_ns = 456,
+    }, &deps);
+    defer row.deinit(testing.allocator);
+
+    var buf: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try writeTestCacheWithOutputDirAndDependencies(&writer, &.{}, ".", &.{row});
+
+    var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
+    var c = try Cache.read(testing.allocator, &reader);
+    defer c.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 1), c.dependency_graph.rows.items.len);
+    try testing.expectEqual(@as(usize, 2), c.dependency_graph.totalEdgeCount());
+
+    const parsed = c.lookupDependencyRow(source) orelse return error.MissingDependencyRow;
+    try testing.expectEqualStrings("shaders/main.frag", parsed.source_path);
+    try testing.expectEqual(@as(u64, 123), parsed.source_size);
+    try testing.expectEqual(@as(i96, 456), parsed.source_mtime);
+    try testing.expectEqualStrings("shaders/common.glsl", parsed.dependencies.items[0].path);
+    try testing.expectEqual(deps[0].hashPath(), parsed.dependencies.items[0].path_hash);
+    try testing.expectEqualStrings("shared/light.glsl", parsed.dependencies.items[1].path);
+}
+
+test "upsertDependencyRow replaces existing dependency graph row" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const source = SourceFile.fromPath("main.frag");
+    const dep_a = [_]SourceFile{SourceFile.fromPath("a.glsl")};
+    const dep_b = [_]SourceFile{SourceFile.fromPath("b.glsl")};
+
+    try c.upsertDependencyRow(testing.allocator, source, .{
+        .size = 10,
+        .modified_ns = 20,
+    }, &dep_a);
+    try c.upsertDependencyRow(testing.allocator, source, .{
+        .size = 30,
+        .modified_ns = 40,
+    }, &dep_b);
+
+    try testing.expectEqual(@as(usize, 1), c.dependency_graph.rows.items.len);
+    const row = c.lookupDependencyRow(source) orelse return error.MissingDependencyRow;
+    try testing.expect(row.isFresh(.{ .size = 30, .modified_ns = 40 }));
+    try testing.expectEqualStrings("b.glsl", row.dependencies.items[0].path);
+}
+
+test "pruneDeletedDependencyRows removes rows for deleted sources" {
+    var c = try Cache.init(testing.allocator, .cwd(), ".");
+    defer c.deinit(testing.allocator);
+
+    const keep = SourceFile.fromPath("keep.frag");
+    const remove = SourceFile.fromPath("remove.frag");
+    try c.upsertDependencyRow(testing.allocator, keep, .{ .size = 1, .modified_ns = 1 }, &.{});
+    try c.upsertDependencyRow(testing.allocator, remove, .{ .size = 1, .modified_ns = 1 }, &.{});
+
+    const removed = c.pruneDeletedDependencyRows(testing.allocator, &.{keep});
+    try testing.expectEqual(@as(u32, 1), removed);
+    try testing.expect(c.lookupDependencyRow(keep) != null);
+    try testing.expect(c.lookupDependencyRow(remove) == null);
 }
 
 test "read accepts zero entries" {
