@@ -91,20 +91,23 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Dependency graph:", .{});
-    log.info("  Rows:  {d}", .{c.dependency_graph.rows.items.len});
-    log.info("  Edges: {d}", .{c.dependency_graph.totalEdgeCount()});
+    log.info("  {d} source(s), {d} edge(s)", .{
+        c.dependency_graph.rows.items.len,
+        c.dependency_graph.totalEdgeCount(),
+    });
 
     if (c.dependency_graph.rows.items.len > 0) {
-        for (c.dependency_graph.rows.items) |row| {
-            log.info("  {s}", .{row.source_path});
+        log.info("  .zcache", .{});
+        for (c.dependency_graph.rows.items, 0..) |row, row_idx| {
+            const row_is_last = row_idx + 1 == c.dependency_graph.rows.items.len;
+            const row_connector = if (row_is_last) "└──" else "├──";
+            const child_prefix = if (row_is_last) "    " else "│   ";
 
-            if (row.dependencies.items.len == 0) {
-                log.info("    (no dependencies)", .{});
-                continue;
-            }
+            log.info("  {s} {s}", .{ row_connector, row.source_path });
 
-            for (row.dependencies.items) |dep| {
-                log.info("    -> {s}", .{dep.path});
+            for (row.dependencies.items, 0..) |dep, dep_idx| {
+                const dep_connector = if (dep_idx + 1 == row.dependencies.items.len) "└──" else "├──";
+                log.info("  {s}{s} {s}", .{ child_prefix, dep_connector, dep.path });
             }
         }
     }
