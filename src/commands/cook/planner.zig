@@ -5,6 +5,7 @@ const AssetScanner = @import("../../assets/asset_scanner.zig").AssetScanner;
 const SourceFile = @import("../../assets/source_file.zig").SourceFile;
 const Hash = @import("../../assets/source_file.zig").Hash;
 const DepGraph = @import("../../assets/dependency_graph.zig").DepGraph;
+const Cache = @import("../../cache/cache.zig").Cache;
 const CookMetrics = @import("../cook_metrics.zig").CookMetrics;
 const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
@@ -33,7 +34,7 @@ pub const CookPlan = struct {
     }
 };
 
-pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, metrics: *CookMetrics) !CookPlan {
+pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cache, metrics: *CookMetrics) !CookPlan {
     const scan_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     const scanner = AssetScanner.init(allocator, ctx.io, ctx.source);
     var source_files = try scanner.scan();
@@ -52,7 +53,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, metrics: *Co
     var dep_graph = DepGraph.init(allocator);
     defer dep_graph.deinit();
 
-    try buildDependencyGraph(allocator, ctx, &dep_graph, source_files.items);
+    try buildDependencyGraph(allocator, ctx, cache, &dep_graph, source_files.items);
 
     const dep_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     metrics.dependency_graph_ns = @intCast(dep_start.durationTo(dep_end).raw.nanoseconds);
@@ -78,10 +79,26 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, metrics: *Co
 fn buildDependencyGraph(
     allocator: std.mem.Allocator,
     ctx: *const CookContext,
+    cache: *Cache,
     dep_graph: *DepGraph,
     source_files: []const SourceFile,
 ) !void {
     for (source_files) |source| {
+        const info = source.getFileInfo(ctx.source, ctx.io) catch |err| {
+            log.warn("Failed to stat '{s}' while building dependency graph: {s}", .{ source.path, @errorName(err) });
+            continue;
+        };
+
+        if (cache.lookupDependencyRow(source)) |row| {
+            if (row.isFresh(info)) {
+                const from = source.hashPath();
+                for (row.dependencies.items) |dep| {
+                    try dep_graph.addDependency(from, dep.path_hash);
+                }
+                continue;
+            }
+        }
+
         const deps = extractDependencies(&source, ctx.source, ctx.io, allocator) catch |err| {
             log.warn("Failed to extract dependencies for '{s}': {s}", .{ source.path, @errorName(err) });
             continue;
@@ -95,6 +112,8 @@ fn buildDependencyGraph(
         for (deps) |dep| {
             try dep_graph.addDependency(from, dep.hashPath());
         }
+
+        try cache.upsertDependencyRow(allocator, source, info, deps);
     }
 }
 
@@ -104,4 +123,90 @@ fn deinitReverse(allocator: std.mem.Allocator, reverse: *DependentsMap) void {
         entry.value_ptr.deinit(allocator);
     }
     reverse.deinit();
+}
+
+const testing = std.testing;
+
+fn writeTestFile(dir: std.Io.Dir, path: []const u8, bytes: []const u8) !void {
+    const file = try dir.createFile(testing.io, path, .{});
+    var buf: [4096]u8 = undefined;
+    var writer = file.writer(testing.io, &buf);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
+    file.close(testing.io);
+}
+
+test "buildDependencyGraph reuses fresh cached dependency rows" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTestFile(tmp.dir, "main.frag", "void main() {}\n");
+
+    const source = SourceFile.fromPath("main.frag");
+    const dep = SourceFile.fromPath("common.glsl");
+    const info = try source.getFileInfo(tmp.dir, testing.io);
+
+    var cache = try Cache.init(testing.allocator, tmp.dir, ".");
+    defer cache.deinit(testing.allocator);
+    try cache.upsertDependencyRow(testing.allocator, source, info, &.{dep});
+
+    const ctx = CookContext{
+        .io = testing.io,
+        .source = tmp.dir,
+        .output = tmp.dir,
+        .output_path = ".",
+        .force = false,
+    };
+
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{source});
+
+    try testing.expectEqual(@as(usize, 1), graph.dependencyCount(&source));
+    const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
+    try testing.expectEqual(dep.hashPath(), deps.items[0]);
+}
+
+test "buildDependencyGraph refreshes stale cached dependency rows" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTestFile(tmp.dir, "main.frag",
+        \\#include "new.glsl"
+        \\void main() {}
+        \\
+    );
+
+    const source = SourceFile.fromPath("main.frag");
+    const old_dep = SourceFile.fromPath("old.glsl");
+    const info = try source.getFileInfo(tmp.dir, testing.io);
+
+    var cache = try Cache.init(testing.allocator, tmp.dir, ".");
+    defer cache.deinit(testing.allocator);
+    try cache.upsertDependencyRow(testing.allocator, source, .{
+        .size = info.size + 1,
+        .modified_ns = info.modified_ns,
+    }, &.{old_dep});
+
+    const ctx = CookContext{
+        .io = testing.io,
+        .source = tmp.dir,
+        .output = tmp.dir,
+        .output_path = ".",
+        .force = false,
+    };
+
+    var graph = DepGraph.init(testing.allocator);
+    defer graph.deinit();
+
+    try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{source});
+
+    const row = cache.lookupDependencyRow(source) orelse return error.MissingDependencyRow;
+    try testing.expect(row.isFresh(info));
+    try testing.expectEqual(@as(usize, 1), row.dependencies.items.len);
+    try testing.expectEqualStrings("new.glsl", row.dependencies.items[0].path);
+
+    const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
+    try testing.expectEqual(SourceFile.fromPath("new.glsl").hashPath(), deps.items[0]);
 }

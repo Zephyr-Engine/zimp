@@ -38,6 +38,11 @@ pub const CacheSession = struct {
         if (pruned > 0) {
             log.debug("Removed {d} deleted source file(s) from cache", .{pruned});
         }
+
+        const pruned_deps = self.cache.pruneDeletedDependencyRows(allocator, source_files);
+        if (pruned_deps > 0) {
+            log.debug("Removed {d} deleted dependency graph row(s) from cache", .{pruned_deps});
+        }
     }
 
     pub fn persist(self: *CacheSession, io: std.Io) !void {

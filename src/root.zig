@@ -63,6 +63,7 @@ test {
     _ = @import("inspectors/zcache.zig");
     _ = @import("inspectors/utils.zig");
     _ = @import("cache/cache.zig");
+    _ = @import("cache/cache_dep_graph.zig");
     _ = @import("cache/entry.zig");
     _ = @import("shared/file_read.zig");
 }

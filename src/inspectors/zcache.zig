@@ -90,6 +90,29 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     }
 
     log.info("", .{});
+    log.info("Dependency graph:", .{});
+    log.info("  {d} source(s), {d} edge(s)", .{
+        c.dependency_graph.rows.items.len,
+        c.dependency_graph.totalEdgeCount(),
+    });
+
+    if (c.dependency_graph.rows.items.len > 0) {
+        log.info("  .zcache", .{});
+        for (c.dependency_graph.rows.items, 0..) |row, row_idx| {
+            const row_is_last = row_idx + 1 == c.dependency_graph.rows.items.len;
+            const row_connector = if (row_is_last) "└──" else "├──";
+            const child_prefix = if (row_is_last) "    " else "│   ";
+
+            log.info("  {s} {s}", .{ row_connector, row.source_path });
+
+            for (row.dependencies.items, 0..) |dep, dep_idx| {
+                const dep_connector = if (dep_idx + 1 == row.dependencies.items.len) "└──" else "├──";
+                log.info("  {s}{s} {s}", .{ child_prefix, dep_connector, dep.path });
+            }
+        }
+    }
+
+    log.info("", .{});
     log.info("Summary:", .{});
 
     var buf1: [16]u8 = undefined;
@@ -163,6 +186,7 @@ test "Cache.read accepts zero entries" {
     try writer.writeInt(u32, 0, .little);
     try writer.writeInt(u16, 1, .little); // output_dir_path len
     try writer.writeAll("."); // output_dir_path
+    try writer.writeInt(u32, 0, .little); // dependency_row_count
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
     var c = try cache.Cache.read(testing.allocator, &reader);
@@ -197,6 +221,7 @@ test "Cache.read parses entry fields correctly" {
     const cooked_path = "triangle.zmesh";
     try writer.writeInt(u16, cooked_path.len, .little);
     try writer.writeAll(cooked_path);
+    try writer.writeInt(u32, 0, .little); // dependency_row_count
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
     var c = try cache.Cache.read(testing.allocator, &reader);
@@ -250,4 +275,6 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
         try writer.writeInt(u16, cooked_path.len, .little);
         try writer.writeAll(cooked_path);
     }
+
+    try writer.writeInt(u32, 0, .little); // dependency_row_count
 }
