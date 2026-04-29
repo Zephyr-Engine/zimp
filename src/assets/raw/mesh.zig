@@ -116,13 +116,73 @@ pub const RawMesh = struct {
     name: ?[]const u8,
 
     pub fn optimize(self: *RawMesh, allocator: std.mem.Allocator) !void {
+        try self.removeDegenerateTriangles(allocator);
+        try self.removeUnusedVertices(allocator);
         try self.deduplicateVertices(allocator);
+        try self.removeDegenerateTriangles(allocator);
+        try self.removeUnusedVertices(allocator);
         try self.optimizeVertexCache(allocator);
+        try self.optimizeVertexFetch(allocator);
+    }
+
+    fn removeDegenerateTriangles(self: *RawMesh, allocator: std.mem.Allocator) !void {
+        if (self.indices.len == 0) {
+            return;
+        }
+
+        if (self.submeshes.len == 0) {
+            if (self.indices.len % 3 != 0) {
+                return;
+            }
+        } else {
+            for (self.submeshes) |submesh| {
+                const offset: usize = submesh.index_offset;
+                const count: usize = submesh.index_count;
+                if (offset > self.indices.len or count > self.indices.len - offset) {
+                    return error.InvalidSubmeshRange;
+                }
+                if (count % 3 != 0) {
+                    return;
+                }
+            }
+        }
+
+        const cleaned = try allocator.alloc(u32, self.indices.len);
+        errdefer allocator.free(cleaned);
+
+        const original_len = self.indices.len;
+        var cleaned_len: usize = 0;
+
+        if (self.submeshes.len == 0) {
+            cleaned_len = try copyValidTriangles(self.vertices, self.indices, cleaned, 0, self.indices.len);
+        } else {
+            for (self.submeshes) |*submesh| {
+                const offset: usize = submesh.index_offset;
+                const count: usize = submesh.index_count;
+                const new_offset = cleaned_len;
+                const kept_count = try copyValidTriangles(self.vertices, self.indices, cleaned[cleaned_len..], offset, count);
+                submesh.index_offset = @intCast(new_offset);
+                submesh.index_count = @intCast(kept_count);
+                cleaned_len += kept_count;
+            }
+        }
+
+        if (cleaned_len == original_len) {
+            allocator.free(cleaned);
+            return;
+        }
+
+        const new_indices = try allocator.dupe(u32, cleaned[0..cleaned_len]);
+        allocator.free(cleaned);
+        allocator.free(self.indices);
+        self.indices = new_indices;
+
+        log.debug("[Optimizing Mesh] Removed {d} degenerate triangle indices", .{original_len - cleaned_len});
     }
 
     // Forsyth Algorithm
     fn optimizeVertexCache(self: *RawMesh, allocator: std.mem.Allocator) !void {
-        if (self.indices.len < 6) {
+        if (self.indices.len < 6 or self.indices.len % 3 != 0) {
             return;
         }
 
@@ -137,6 +197,9 @@ pub const RawMesh = struct {
                 const count: usize = submesh.index_count;
                 if (offset > self.indices.len or count > self.indices.len - offset) {
                     return error.InvalidSubmeshRange;
+                }
+                if (count % 3 != 0) {
+                    return;
                 }
                 try optimizeVertexCacheRange(allocator, self.vertices.len, self.indices, optimized, offset, count);
             }
@@ -197,6 +260,99 @@ pub const RawMesh = struct {
 
         log.debug("[Optimizing Mesh] Deduplicated {d} -> {d} vertices", .{ original_len, self.vertices.len });
     }
+
+    fn removeUnusedVertices(self: *RawMesh, allocator: std.mem.Allocator) !void {
+        if (self.vertices.len == 0) {
+            return;
+        }
+
+        var used = try allocator.alloc(bool, self.vertices.len);
+        defer allocator.free(used);
+        @memset(used, false);
+
+        for (self.indices) |index| {
+            if (index >= self.vertices.len) {
+                return error.InvalidMeshIndex;
+            }
+            used[index] = true;
+        }
+
+        var used_count: usize = 0;
+        for (used) |is_used| {
+            if (is_used) {
+                used_count += 1;
+            }
+        }
+
+        if (used_count == self.vertices.len) {
+            return;
+        }
+
+        const remap = try allocator.alloc(u32, self.vertices.len);
+        defer allocator.free(remap);
+
+        const compacted = try allocator.alloc(RawVertex, used_count);
+        errdefer allocator.free(compacted);
+
+        var next_vertex: u32 = 0;
+        for (self.vertices, used, 0..) |vertex, is_used, old_index| {
+            if (is_used) {
+                remap[old_index] = next_vertex;
+                compacted[next_vertex] = vertex;
+                next_vertex += 1;
+            }
+        }
+
+        for (self.indices) |*index| {
+            index.* = remap[index.*];
+        }
+
+        const original_len = self.vertices.len;
+        allocator.free(self.vertices);
+        self.vertices = compacted;
+
+        log.debug("[Optimizing Mesh] Removed {d} unused vertices", .{original_len - self.vertices.len});
+    }
+
+    fn optimizeVertexFetch(self: *RawMesh, allocator: std.mem.Allocator) !void {
+        if (self.vertices.len == 0 or self.indices.len == 0) {
+            return;
+        }
+
+        const unset = std.math.maxInt(u32);
+        var remap = try allocator.alloc(u32, self.vertices.len);
+        defer allocator.free(remap);
+        @memset(remap, unset);
+
+        const reordered = try allocator.alloc(RawVertex, self.vertices.len);
+        errdefer allocator.free(reordered);
+
+        var next_vertex: u32 = 0;
+        for (self.indices) |*index| {
+            if (index.* >= self.vertices.len) {
+                return error.InvalidMeshIndex;
+            }
+
+            const old_index = index.*;
+            if (remap[old_index] == unset) {
+                remap[old_index] = next_vertex;
+                reordered[next_vertex] = self.vertices[old_index];
+                next_vertex += 1;
+            }
+            index.* = remap[old_index];
+        }
+
+        for (self.vertices, 0..) |vertex, old_index| {
+            if (remap[old_index] == unset) {
+                remap[old_index] = next_vertex;
+                reordered[next_vertex] = vertex;
+                next_vertex += 1;
+            }
+        }
+
+        allocator.free(self.vertices);
+        self.vertices = reordered;
+    }
 };
 
 const forsyth_cache_size = 32;
@@ -204,6 +360,68 @@ const forsyth_last_triangle_score: f32 = 0.75;
 const forsyth_cache_decay_power: f32 = 1.5;
 const forsyth_valence_boost_scale: f32 = 2.0;
 const forsyth_valence_boost_power: f32 = 0.5;
+const degenerate_triangle_area_epsilon_sq: f32 = 1.0e-20;
+
+fn copyValidTriangles(
+    vertices: []const RawVertex,
+    source_indices: []const u32,
+    dest_indices: []u32,
+    index_offset: usize,
+    index_count: usize,
+) !usize {
+    if (index_count % 3 != 0) {
+        return error.InvalidTriangleIndexBuffer;
+    }
+
+    var written: usize = 0;
+    var triangle_start = index_offset;
+    while (triangle_start < index_offset + index_count) : (triangle_start += 3) {
+        const a = source_indices[triangle_start + 0];
+        const b = source_indices[triangle_start + 1];
+        const c = source_indices[triangle_start + 2];
+        if (a >= vertices.len or b >= vertices.len or c >= vertices.len) {
+            return error.InvalidMeshIndex;
+        }
+        if (isDegenerateTriangle(vertices, a, b, c)) {
+            continue;
+        }
+
+        dest_indices[written + 0] = a;
+        dest_indices[written + 1] = b;
+        dest_indices[written + 2] = c;
+        written += 3;
+    }
+
+    return written;
+}
+
+fn isDegenerateTriangle(vertices: []const RawVertex, a: u32, b: u32, c: u32) bool {
+    if (a == b or b == c or c == a) {
+        return true;
+    }
+
+    const p0 = vertices[a].position;
+    const p1 = vertices[b].position;
+    const p2 = vertices[c].position;
+
+    const e0 = [3]f32{
+        p1[0] - p0[0],
+        p1[1] - p0[1],
+        p1[2] - p0[2],
+    };
+    const e1 = [3]f32{
+        p2[0] - p0[0],
+        p2[1] - p0[1],
+        p2[2] - p0[2],
+    };
+    const cross = [3]f32{
+        e0[1] * e1[2] - e0[2] * e1[1],
+        e0[2] * e1[0] - e0[0] * e1[2],
+        e0[0] * e1[1] - e0[1] * e1[0],
+    };
+    const area_sq = cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2];
+    return area_sq <= degenerate_triangle_area_epsilon_sq;
+}
 
 fn optimizeVertexCacheRange(
     allocator: std.mem.Allocator,
@@ -548,6 +766,103 @@ fn expectSameTriangles(allocator: std.mem.Allocator, expected: []const u32, actu
 
         try std.testing.expect(found);
     }
+}
+
+test "removeDegenerateTriangles drops repeated and zero-area triangles and updates submeshes" {
+    const allocator = std.testing.allocator;
+
+    const vertices = try allocator.dupe(RawVertex, &.{
+        makeVertex(0, 0, 0),
+        makeVertex(1, 0, 0),
+        makeVertex(0, 1, 0),
+        makeVertex(2, 0, 0),
+    });
+    const indices = try allocator.dupe(u32, &.{
+        0, 1, 2, 0, 0, 1,
+        0, 1, 3, 2, 1, 3,
+    });
+    const submeshes = try allocator.dupe(RawSubmesh, &.{
+        .{ .index_offset = 0, .index_count = 6, .material_index = 0 },
+        .{ .index_offset = 6, .index_count = 6, .material_index = 1 },
+    });
+
+    var mesh = RawMesh{
+        .vertices = vertices,
+        .indices = indices,
+        .submeshes = submeshes,
+        .name = null,
+    };
+
+    try mesh.removeDegenerateTriangles(allocator);
+    defer allocator.free(mesh.vertices);
+    defer allocator.free(mesh.indices);
+    defer allocator.free(mesh.submeshes);
+
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 2, 2, 1, 3 }, mesh.indices);
+    try std.testing.expectEqual(@as(u32, 0), mesh.submeshes[0].index_offset);
+    try std.testing.expectEqual(@as(u32, 3), mesh.submeshes[0].index_count);
+    try std.testing.expectEqual(@as(u32, 3), mesh.submeshes[1].index_offset);
+    try std.testing.expectEqual(@as(u32, 3), mesh.submeshes[1].index_count);
+}
+
+test "removeUnusedVertices compacts vertices in original order and remaps indices" {
+    const allocator = std.testing.allocator;
+
+    const vertices = try allocator.dupe(RawVertex, &.{
+        makeVertex(0, 0, 0),
+        makeVertex(1, 0, 0),
+        makeVertex(2, 0, 0),
+        makeVertex(3, 0, 0),
+        makeVertex(4, 0, 0),
+    });
+    const indices = try allocator.dupe(u32, &.{ 4, 2, 4 });
+
+    var mesh = RawMesh{
+        .vertices = vertices,
+        .indices = indices,
+        .submeshes = &.{},
+        .name = null,
+    };
+
+    try mesh.removeUnusedVertices(allocator);
+    defer allocator.free(mesh.vertices);
+    defer allocator.free(mesh.indices);
+
+    try std.testing.expectEqual(@as(usize, 2), mesh.vertices.len);
+    try std.testing.expectEqual([3]f32{ 2, 0, 0 }, mesh.vertices[0].position);
+    try std.testing.expectEqual([3]f32{ 4, 0, 0 }, mesh.vertices[1].position);
+    try std.testing.expectEqualSlices(u32, &.{ 1, 0, 1 }, mesh.indices);
+}
+
+test "optimizeVertexFetch orders referenced vertices by first index use" {
+    const allocator = std.testing.allocator;
+
+    const vertices = try allocator.dupe(RawVertex, &.{
+        makeVertex(0, 0, 0),
+        makeVertex(1, 0, 0),
+        makeVertex(2, 0, 0),
+        makeVertex(3, 0, 0),
+        makeVertex(4, 0, 0),
+    });
+    const indices = try allocator.dupe(u32, &.{ 3, 1, 4, 3, 1, 2 });
+
+    var mesh = RawMesh{
+        .vertices = vertices,
+        .indices = indices,
+        .submeshes = &.{},
+        .name = null,
+    };
+
+    try mesh.optimizeVertexFetch(allocator);
+    defer allocator.free(mesh.vertices);
+    defer allocator.free(mesh.indices);
+
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 2, 0, 1, 3 }, mesh.indices);
+    try std.testing.expectEqual([3]f32{ 3, 0, 0 }, mesh.vertices[0].position);
+    try std.testing.expectEqual([3]f32{ 1, 0, 0 }, mesh.vertices[1].position);
+    try std.testing.expectEqual([3]f32{ 4, 0, 0 }, mesh.vertices[2].position);
+    try std.testing.expectEqual([3]f32{ 2, 0, 0 }, mesh.vertices[3].position);
+    try std.testing.expectEqual([3]f32{ 0, 0, 0 }, mesh.vertices[4].position);
 }
 
 test "vertex cache optimization preserves triangles and reduces misses on shuffled grid" {
