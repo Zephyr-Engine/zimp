@@ -19,6 +19,7 @@ pub fn addCookStep(b: *std.Build, dep: *std.Build.Dependency, options: CookStepO
 pub const ZMesh = @import("formats/zmesh.zig").ZMesh;
 pub const Zatex = @import("formats/ztex.zig").Zatex;
 pub const ZShader = @import("formats/zshdr.zig").ZShader;
+pub const Zamat = @import("formats/zamat.zig").Zamat;
 pub const mesh = @import("assets/cooked/mesh.zig");
 
 const asset = @import("assets/asset.zig");
@@ -33,10 +34,13 @@ test {
     _ = @import("assets/raw/mesh.zig");
     _ = @import("assets/raw/texture.zig");
     _ = @import("assets/raw/shader.zig");
+    _ = @import("assets/raw/material.zig");
     _ = @import("assets/cooked/mesh.zig");
     _ = @import("assets/cooked/texture.zig");
     _ = @import("assets/cooked/shader.zig");
+    _ = @import("assets/cooked/material.zig");
     _ = @import("formats/zshdr.zig");
+    _ = @import("formats/zamat.zig");
     _ = @import("assets/cooked/compression/compression.zig");
     _ = @import("assets/cooked/compression/bc4.zig");
     _ = @import("assets/cooked/compression/bc5.zig");
@@ -53,13 +57,16 @@ test {
     _ = @import("cookers/gltf.zig");
     _ = @import("cookers/obj.zig");
     _ = @import("cookers/shader.zig");
+    _ = @import("cookers/material.zig");
     _ = @import("extractors/extractor.zig");
     _ = @import("extractors/mesh.zig");
     _ = @import("extractors/shader.zig");
+    _ = @import("extractors/material.zig");
     _ = @import("parsers/obj/obj_parser.zig");
     _ = @import("inspectors/inspect.zig");
     _ = @import("inspectors/zmesh.zig");
     _ = @import("inspectors/zshdr.zig");
+    _ = @import("inspectors/zamat.zig");
     _ = @import("inspectors/zcache.zig");
     _ = @import("inspectors/utils.zig");
     _ = @import("cache/cache.zig");
