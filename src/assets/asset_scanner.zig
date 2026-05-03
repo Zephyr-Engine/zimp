@@ -166,7 +166,8 @@ test "AssetScanner.scan produces paths relative to source dir" {
         const valid = std.mem.startsWith(u8, file.path, "meshes/") or
             std.mem.startsWith(u8, file.path, "textures/") or
             std.mem.startsWith(u8, file.path, "shaders/") or
-            std.mem.startsWith(u8, file.path, "materials/");
+            std.mem.startsWith(u8, file.path, "materials/") or
+            std.mem.startsWith(u8, file.path, "generated/");
         try testing.expect(valid);
     }
 }

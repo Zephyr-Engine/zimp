@@ -52,6 +52,7 @@ test {
     _ = @import("parsers/gltf/gltf_json_parser.zig");
     _ = @import("parsers/gltf/document.zig");
     _ = @import("parsers/gltf/mesh.zig");
+    _ = @import("parsers/gltf/material_generator.zig");
     _ = @import("cookers/cooker.zig");
     _ = @import("cookers/glb.zig");
     _ = @import("cookers/gltf.zig");

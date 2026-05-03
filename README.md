@@ -200,7 +200,7 @@ Preprocessed GLSL with `#include` resolution and `#ifdef` variant expansion. On 
 
 Source: `.zamat` (TOML text)
 
-Binary material definitions referencing cooked shaders and textures by path hash, with inline parameter blocks packed for shader uniform upload. Materials cook after their referenced `.vert`/`.frag` shader stages and textures via the dependency graph.
+Binary material definitions referencing cooked shaders and textures by path hash, with inline parameter blocks packed for shader uniform upload. The material writer only hashes referenced paths and does not need cooked shader or texture outputs, but the dependency graph still records those logical edges so cache invalidation cascades correctly.
 
 ```toml
 [material]
@@ -218,6 +218,8 @@ u_emissive_strength = 0.0
 ```
 
 `[material]` holds metadata. `shader` is a base path that resolves to `<shader>.vert` and `<shader>.frag`; `alpha_mode` defaults to `solid` and may be `solid`, `alpha_test`, or `alpha_blend`. `[textures]` maps engine slot names to source texture paths; standard slots are `albedo`, `normal`, `roughness`, `metallic`, `ao`, `emissive`, `roughness_metallic`, and `orm`. `[params]` maps exact shader uniform names to scalar, boolean, vec2, vec3, or vec4 literals.
+
+When `.glb` or `.gltf` files contain materials, zimp auto-generates material source files under `generated/materials/` and embedded image files under `generated/textures/`, then rescans so they cook in the same run. Hand-written files in `materials/` with the same generated filename take priority and are never overwritten. GLTF PBR fields map to standard slots and uniforms: base color texture to `albedo`, metallic-roughness texture to `roughness_metallic`, normal to `normal`, occlusion to `ao`, emissive texture to `emissive`, and factors to `u_base_color`, `u_metallic`, `u_roughness`, and `u_emissive`.
 
 ### Audio (`.zasnd`, `.zastream`)
 
