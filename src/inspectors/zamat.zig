@@ -58,13 +58,16 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Params:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: <8}  {s: >8}  {s: >8}  {s}", .{ "index", "name_hash", "type", "offset", "size", "value" });
+    log.info("  {s: >5}  {s: <24}  {s: <8}  {s: >8}  {s: >8}  {s}", .{ "index", "name", "type", "offset", "size", "value" });
     log.info("  {s}", .{"-" ** 78});
 
     var param_data_len: usize = 0;
+    var param_name_len: usize = 0;
     for (0..header.param_count) |i| {
         entries[i] = .{
-            .name_hash = try reader.takeInt(u64, .little),
+            .name = undefined,
+            .name_offset = try reader.takeInt(u16, .little),
+            .name_len = try reader.takeInt(u16, .little),
             .param_type = @enumFromInt(try reader.takeInt(u16, .little)),
             .data_offset = try reader.takeInt(u16, .little),
             .data_size = try reader.takeInt(u16, .little),
@@ -73,6 +76,8 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
         const end = @as(usize, entries[i].data_offset) + entries[i].data_size;
         if (end > param_data_len) param_data_len = end;
+        const name_end = @as(usize, entries[i].name_offset) + entries[i].name_len;
+        if (name_end > param_name_len) param_name_len = name_end;
     }
 
     var param_data_buf: [4096]u8 = undefined;
@@ -80,12 +85,18 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     const param_data = param_data_buf[0..param_data_len];
     try reader.readSliceAll(param_data);
 
+    var param_name_buf: [4096]u8 = undefined;
+    if (param_name_len > param_name_buf.len) return error.ParamNamesTooLarge;
+    const param_names = param_name_buf[0..param_name_len];
+    try reader.readSliceAll(param_names);
+
     for (0..header.param_count) |i| {
-        const entry = entries[i];
+        var entry = entries[i];
+        entry.name = param_names[entry.name_offset..][0..entry.name_len];
         var value_buf: [96]u8 = undefined;
-        log.info("  {d: >5}  0x{x:0>16}  {s: <8}  {d: >8}  {d: >8}  {s}", .{
+        log.info("  {d: >5}  {s: <24}  {s: <8}  {d: >8}  {d: >8}  {s}", .{
             i,
-            entry.name_hash,
+            entry.name,
             paramTypeName(entry.param_type),
             entry.data_offset,
             entry.data_size,
@@ -98,15 +109,17 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     var texture_buf: [16]u8 = undefined;
     var param_buf: [16]u8 = undefined;
     var data_buf: [16]u8 = undefined;
+    var name_buf: [16]u8 = undefined;
     var total_buf: [16]u8 = undefined;
     const texture_table_size = @as(u64, @intCast(header.texture_slot_count)) * zamat.TEXTURE_SLOT_ENTRY_SIZE;
     const param_table_size = @as(u64, @intCast(header.param_count)) * zamat.PARAM_ENTRY_SIZE;
-    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + param_data_len;
+    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + param_data_len + param_name_len;
     log.info("File Size Summary:", .{});
     log.info("  Header:         {s: >10}", .{fmt.formatBytes(&header_buf, zamat.HEADER_SIZE)});
     log.info("  Texture table:  {s: >10}", .{fmt.formatBytes(&texture_buf, texture_table_size)});
     log.info("  Param table:    {s: >10}", .{fmt.formatBytes(&param_buf, param_table_size)});
     log.info("  Param data:     {s: >10}", .{fmt.formatBytes(&data_buf, param_data_len)});
+    log.info("  Param names:    {s: >10}", .{fmt.formatBytes(&name_buf, param_name_len)});
     log.info("  Total:          {s: >10}", .{fmt.formatBytes(&total_buf, total_file_size)});
 }
 

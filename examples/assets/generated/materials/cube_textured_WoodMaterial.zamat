@@ -1,0 +1,15 @@
+# Auto-generated from meshes/cube_textured.glb - WoodMaterial
+[material]
+shader = "shaders/basic"
+alpha_mode = "solid"
+
+[textures]
+albedo = "generated/textures/cube_textured_albedo.png"
+roughness_metallic = "generated/textures/cube_textured_roughness.png"
+normal = "generated/textures/cube_textured_normal.png"
+
+[params]
+u_base_color = [1, 1, 1, 1]
+u_metallic = 0.000000
+u_roughness = 1.000000
+u_emissive = [0, 0, 0]

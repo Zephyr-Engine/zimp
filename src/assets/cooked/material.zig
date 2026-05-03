@@ -45,7 +45,9 @@ pub const TextureSlotEntry = struct {
 };
 
 pub const ParamEntry = struct {
-    name_hash: Hash,
+    name: []const u8,
+    name_offset: u16,
+    name_len: u16,
     param_type: ParamType,
     data_offset: u16,
     data_size: u16,
@@ -54,10 +56,12 @@ pub const ParamEntry = struct {
 pub const ParamBuildResult = struct {
     entries: []ParamEntry,
     data: []u8,
+    names: []u8,
 
     pub fn deinit(self: *ParamBuildResult, allocator: std.mem.Allocator) void {
         allocator.free(self.entries);
         allocator.free(self.data);
+        allocator.free(self.names);
     }
 };
 
@@ -67,6 +71,7 @@ pub const CookedMaterial = struct {
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
+    param_names: []u8,
 
     pub fn cook(allocator: std.mem.Allocator, source: *const raw_material.MaterialSource) !CookedMaterial {
         const texture_slots = try allocator.alloc(TextureSlotEntry, source.textures.len);
@@ -89,6 +94,7 @@ pub const CookedMaterial = struct {
             .texture_slots = texture_slots,
             .param_entries = params.entries,
             .param_data = params.data,
+            .param_names = params.names,
         };
     }
 
@@ -96,6 +102,7 @@ pub const CookedMaterial = struct {
         allocator.free(self.texture_slots);
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
+        allocator.free(self.param_names);
     }
 };
 
@@ -105,26 +112,46 @@ pub fn buildParamDataBlock(params: []const raw_material.ParamValue, allocator: s
 
     var data: std.ArrayList(u8) = .empty;
     errdefer data.deinit(allocator);
+    var names: std.ArrayList(u8) = .empty;
+    errdefer names.deinit(allocator);
 
     for (params) |param| {
         if (data.items.len > std.math.maxInt(u16)) return error.ParamDataTooLarge;
+        if (names.items.len > std.math.maxInt(u16)) return error.ParamNamesTooLarge;
+        if (param.name.len > std.math.maxInt(u16)) return error.ParamNameTooLarge;
         const data_offset: u16 = @intCast(data.items.len);
+        const name_offset: u16 = @intCast(names.items.len);
+        try names.appendSlice(allocator, param.name);
         const before = data.items.len;
         const param_type = try appendParamBytes(&data, allocator, param.value);
         const size = data.items.len - before;
         if (size > std.math.maxInt(u16)) return error.ParamDataTooLarge;
 
         entries.appendAssumeCapacity(.{
-            .name_hash = source_file.fnv1a(param.name),
+            .name = names.items[name_offset..][0..param.name.len],
+            .name_offset = name_offset,
+            .name_len = @intCast(param.name.len),
             .param_type = param_type,
             .data_offset = data_offset,
             .data_size = @intCast(size),
         });
     }
 
+    const owned_entries = try entries.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_entries);
+    const owned_data = try data.toOwnedSlice(allocator);
+    errdefer allocator.free(owned_data);
+    const owned_names = try names.toOwnedSlice(allocator);
+
+    for (owned_entries) |*entry| {
+        const start: usize = entry.name_offset;
+        entry.name = owned_names[start..][0..entry.name_len];
+    }
+
     return .{
-        .entries = try entries.toOwnedSlice(allocator),
-        .data = try data.toOwnedSlice(allocator),
+        .entries = owned_entries,
+        .data = owned_data,
+        .names = owned_names,
     };
 }
 

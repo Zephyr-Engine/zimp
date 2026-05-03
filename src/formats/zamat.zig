@@ -15,15 +15,16 @@ pub const ParamType = cooked_material.ParamType;
 pub const CookedMaterial = cooked_material.CookedMaterial;
 
 pub const TEXTURE_SLOT_ENTRY_SIZE: u32 = @sizeOf(u64) // slot_name_hash
-+ @sizeOf(u64) // texture_path_hash
-+ @sizeOf(u16) // slot_index
-+ @sizeOf(u16); // padding
+    + @sizeOf(u64) // texture_path_hash
+    + @sizeOf(u16) // slot_index
+    + @sizeOf(u16); // padding
 
-pub const PARAM_ENTRY_SIZE: u32 = @sizeOf(u64) // name_hash
-+ @sizeOf(u16) // param_type
-+ @sizeOf(u16) // data_offset
-+ @sizeOf(u16) // data_size
-+ @sizeOf(u16); // padding
+pub const PARAM_ENTRY_SIZE: u32 = @sizeOf(u16) // name_offset
+    + @sizeOf(u16) // name_size
+    + @sizeOf(u16) // param_type
+    + @sizeOf(u16) // data_offset
+    + @sizeOf(u16) // data_size
+    + @sizeOf(u16); // padding
 
 pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u32) // version
@@ -113,6 +114,7 @@ pub const Zamat = struct {
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
+    param_names: []u8,
 
     pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Zamat {
         var magic: [MAGIC.len]u8 = undefined;
@@ -127,20 +129,38 @@ pub const Zamat = struct {
 
         var param_data: std.ArrayList(u8) = .empty;
         errdefer param_data.deinit(allocator);
+        var param_names: std.ArrayList(u8) = .empty;
+        errdefer param_names.deinit(allocator);
         for (param_entries) |entry| {
             const end = @as(usize, entry.data_offset) + entry.data_size;
             if (end > param_data.items.len) {
                 try param_data.resize(allocator, end);
             }
+            const name_end = @as(usize, entry.name_offset) + entry.name_len;
+            if (name_end > param_names.items.len) {
+                try param_names.resize(allocator, name_end);
+            }
         }
         try reader.readSliceAll(param_data.items);
+        try reader.readSliceAll(param_names.items);
+
+        const owned_param_data = try param_data.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_param_data);
+        const owned_param_names = try param_names.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_param_names);
+
+        for (param_entries) |*entry| {
+            const start: usize = entry.name_offset;
+            entry.name = owned_param_names[start..][0..entry.name_len];
+        }
 
         return .{
             .shader_path_hash = header.shader_path_hash,
             .alpha_mode = header.alpha_mode,
             .texture_slots = texture_slots,
             .param_entries = param_entries,
-            .param_data = try param_data.toOwnedSlice(allocator),
+            .param_data = owned_param_data,
+            .param_names = owned_param_names,
         };
     }
 
@@ -148,6 +168,7 @@ pub const Zamat = struct {
         allocator.free(self.texture_slots);
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
+        allocator.free(self.param_names);
     }
 };
 
@@ -157,6 +178,7 @@ pub const Material = struct {
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
+    param_names: []u8,
     file_bytes: []u8,
     allocator: std.mem.Allocator,
 
@@ -164,6 +186,7 @@ pub const Material = struct {
         self.allocator.free(self.texture_slots);
         self.allocator.free(self.param_entries);
         self.allocator.free(self.param_data);
+        self.allocator.free(self.param_names);
         self.allocator.free(self.file_bytes);
     }
 };
@@ -184,6 +207,7 @@ pub fn loadMaterial(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, p
         .texture_slots = z.texture_slots,
         .param_entries = z.param_entries,
         .param_data = z.param_data,
+        .param_names = z.param_names,
         .file_bytes = file_result.bytes,
         .allocator = allocator,
     };
@@ -201,7 +225,8 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
     }
 
     for (material.param_entries) |entry| {
-        try writer.writeInt(u64, entry.name_hash, .little);
+        try writer.writeInt(u16, entry.name_offset, .little);
+        try writer.writeInt(u16, entry.name_len, .little);
         try writer.writeInt(u16, @intFromEnum(entry.param_type), .little);
         try writer.writeInt(u16, entry.data_offset, .little);
         try writer.writeInt(u16, entry.data_size, .little);
@@ -209,6 +234,7 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
     }
 
     try writer.writeAll(material.param_data);
+    try writer.writeAll(material.param_names);
 }
 
 pub fn writeZamat(writer: *std.Io.Writer, material_source: raw_material.MaterialSource, allocator: std.mem.Allocator) !void {
@@ -239,11 +265,17 @@ fn readParamEntries(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
 
     for (entries) |*entry| {
         entry.* = .{
-            .name_hash = try reader.takeInt(u64, .little),
-            .param_type = @enumFromInt(try reader.takeInt(u16, .little)),
-            .data_offset = try reader.takeInt(u16, .little),
-            .data_size = try reader.takeInt(u16, .little),
+            .name = undefined,
+            .name_offset = try reader.takeInt(u16, .little),
+            .name_len = undefined,
+            .param_type = undefined,
+            .data_offset = undefined,
+            .data_size = undefined,
         };
+        entry.name_len = try reader.takeInt(u16, .little);
+        entry.param_type = @enumFromInt(try reader.takeInt(u16, .little));
+        entry.data_offset = try reader.takeInt(u16, .little);
+        entry.data_size = try reader.takeInt(u16, .little);
         _ = try reader.takeInt(u16, .little);
     }
 
@@ -278,7 +310,7 @@ test "Zamat write lays out offsets and size" {
     var writer = std.Io.Writer.fixed(&buf);
     try write(&writer, cooked);
 
-    try testing.expectEqual(@as(usize, HEADER_SIZE + 2 * TEXTURE_SLOT_ENTRY_SIZE + 3 * PARAM_ENTRY_SIZE + 28), writer.end);
+    try testing.expectEqual(@as(usize, HEADER_SIZE + 2 * TEXTURE_SLOT_ENTRY_SIZE + 3 * PARAM_ENTRY_SIZE + 28 + 35), writer.end);
     try testing.expectEqualSlices(u8, MAGIC, buf[0..MAGIC.len]);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
@@ -316,6 +348,8 @@ test "Zamat write and read round trips" {
     try testing.expectEqual(fnv1a("albedo"), loaded.texture_slots[0].slot_name_hash);
     try testing.expectEqual(fnv1a("textures/test_albedo.png"), loaded.texture_slots[0].texture_path_hash);
     try testing.expectEqual(@as(usize, 2), loaded.param_entries.len);
+    try testing.expectEqualStrings("u_enabled", loaded.param_entries[0].name);
+    try testing.expectEqualStrings("u_mode", loaded.param_entries[1].name);
     try testing.expectEqual(@as(usize, 8), loaded.param_data.len);
     try testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, loaded.param_data[0..4], .little));
     try testing.expectEqual(@as(i32, 2), std.mem.readInt(i32, loaded.param_data[4..8], .little));
