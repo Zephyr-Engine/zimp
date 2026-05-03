@@ -185,6 +185,8 @@ pub const GltfMaterial = struct {
     name: ?[]const u8 = null,
     pbrMetallicRoughness: ?GltfPbr = null,
     normalTexture: ?GltfTextureInfo = null,
+    occlusionTexture: ?GltfTextureInfo = null,
+    emissiveTexture: ?GltfTextureInfo = null,
     emissiveFactor: ?[3]f32 = null,
     alphaMode: ?[]const u8 = null,
 };
@@ -435,6 +437,8 @@ test "parse materials with pbr" {
         \\    "metallicRoughnessTexture":{"index":2}
         \\  },
         \\  "normalTexture":{"index":1,"scale":1.0},
+        \\  "occlusionTexture":{"index":3},
+        \\  "emissiveTexture":{"index":4},
         \\  "emissiveFactor":[0.0,0.0,0.0],
         \\  "alphaMode":"OPAQUE"
         \\}]}
@@ -458,6 +462,8 @@ test "parse materials with pbr" {
     try testing.expectEqual(1, normal.index);
     try testing.expectEqual(@as(f32, 1.0), normal.scale.?);
     try testing.expectEqual(0, normal.texCoord);
+    try testing.expectEqual(3, mat.occlusionTexture.?.index);
+    try testing.expectEqual(4, mat.emissiveTexture.?.index);
 }
 
 test "parse material with pbr defaults" {
@@ -484,6 +490,8 @@ test "parse material with no pbr" {
     try testing.expectEqualStrings("Simple", mat.name.?);
     try testing.expectEqual(null, mat.pbrMetallicRoughness);
     try testing.expectEqual(null, mat.normalTexture);
+    try testing.expectEqual(null, mat.occlusionTexture);
+    try testing.expectEqual(null, mat.emissiveTexture);
     try testing.expectEqual(null, mat.emissiveFactor);
     try testing.expectEqual(null, mat.alphaMode);
 }

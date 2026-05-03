@@ -202,12 +202,18 @@ test "CookCommand.parseFromArgs accepts flags in any order" {
 }
 
 test "CookCommand.run executes without error" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
+    var source_tmp = testing.tmpDir(.{});
+    defer source_tmp.cleanup();
+    var output_tmp = testing.tmpDir(.{});
+    defer output_tmp.cleanup();
+    const source_dir = try std.Io.Dir.openDir(source_tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer source_dir.close(testing.io);
+    const output_dir = try std.Io.Dir.openDir(output_tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer output_dir.close(testing.io);
 
     const cmd: CookCommand = .{
-        .source = std.Io.Dir.openDir(std.Io.Dir.cwd(), testing.io, "examples/assets", .{ .iterate = true }) catch unreachable,
-        .output = tmp.dir,
+        .source = source_dir,
+        .output = output_dir,
         .io = testing.io,
         .allocator = testing.allocator,
     };
