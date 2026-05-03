@@ -42,6 +42,9 @@ pub const TextureSlotEntry = struct {
     slot_name_hash: Hash,
     texture_path_hash: Hash,
     slot_index: u16,
+    cooked_path: []const u8,
+    cooked_path_offset: u16,
+    cooked_path_len: u16,
 };
 
 pub const ParamEntry = struct {
@@ -67,34 +70,79 @@ pub const ParamBuildResult = struct {
 
 pub const CookedMaterial = struct {
     shader_path_hash: Hash,
+    vertex_shader_path: []const u8,
+    vertex_shader_path_offset: u16,
+    vertex_shader_path_len: u16,
+    fragment_shader_path: []const u8,
+    fragment_shader_path_offset: u16,
+    fragment_shader_path_len: u16,
     alpha_mode: AlphaMode,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
     param_names: []u8,
+    runtime_paths: []u8,
 
     pub fn cook(allocator: std.mem.Allocator, source: *const raw_material.MaterialSource) !CookedMaterial {
         const texture_slots = try allocator.alloc(TextureSlotEntry, source.textures.len);
         errdefer allocator.free(texture_slots);
+        var runtime_paths: std.ArrayList(u8) = .empty;
+        errdefer runtime_paths.deinit(allocator);
+
+        const vertex_source_path = try std.fmt.allocPrint(allocator, "{s}.vert", .{source.shader_path});
+        defer allocator.free(vertex_source_path);
+        const fragment_source_path = try std.fmt.allocPrint(allocator, "{s}.frag", .{source.shader_path});
+        defer allocator.free(fragment_source_path);
+
+        const vertex_shader_path = try shaderCookedPath(allocator, vertex_source_path);
+        defer allocator.free(vertex_shader_path);
+        const fragment_shader_path = try shaderCookedPath(allocator, fragment_source_path);
+        defer allocator.free(fragment_shader_path);
+
+        const vertex_shader_path_offset = try appendRuntimePath(&runtime_paths, allocator, vertex_shader_path);
+        const fragment_shader_path_offset = try appendRuntimePath(&runtime_paths, allocator, fragment_shader_path);
 
         for (source.textures, texture_slots) |slot, *entry| {
+            const cooked_texture_path = try textureCookedPath(allocator, slot.texture_path);
+            defer allocator.free(cooked_texture_path);
+            const cooked_path_offset = try appendRuntimePath(&runtime_paths, allocator, cooked_texture_path);
             entry.* = .{
                 .slot_name_hash = source_file.fnv1a(slot.slot_name),
                 .texture_path_hash = source_file.fnv1a(slot.texture_path),
                 .slot_index = if (slotNameToIndex(slot.slot_name)) |idx| @intFromEnum(idx) else std.math.maxInt(u16),
+                .cooked_path = runtime_paths.items[cooked_path_offset..][0..cooked_texture_path.len],
+                .cooked_path_offset = cooked_path_offset,
+                .cooked_path_len = @intCast(cooked_texture_path.len),
             };
         }
 
         var params = try buildParamDataBlock(source.params, allocator);
         errdefer params.deinit(allocator);
 
+        const owned_runtime_paths = try runtime_paths.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_runtime_paths);
+
+        const vertex_start: usize = vertex_shader_path_offset;
+        const fragment_start: usize = fragment_shader_path_offset;
+        for (texture_slots) |*entry| {
+            const start: usize = entry.cooked_path_offset;
+            entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
+        }
+
         return .{
             .shader_path_hash = source_file.fnv1a(source.shader_path),
+            .vertex_shader_path = owned_runtime_paths[vertex_start..][0..vertex_shader_path.len],
+            .vertex_shader_path_offset = vertex_shader_path_offset,
+            .vertex_shader_path_len = @intCast(vertex_shader_path.len),
+            .fragment_shader_path = owned_runtime_paths[fragment_start..][0..fragment_shader_path.len],
+            .fragment_shader_path_offset = fragment_shader_path_offset,
+            .fragment_shader_path_len = @intCast(fragment_shader_path.len),
             .alpha_mode = source.alpha_mode,
             .texture_slots = texture_slots,
             .param_entries = params.entries,
             .param_data = params.data,
             .param_names = params.names,
+            .runtime_paths = owned_runtime_paths,
         };
     }
 
@@ -103,8 +151,25 @@ pub const CookedMaterial = struct {
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
         allocator.free(self.param_names);
+        allocator.free(self.runtime_paths);
     }
 };
+
+fn shaderCookedPath(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.zshdr", .{std.fs.path.basename(source_path)});
+}
+
+fn textureCookedPath(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
+    return std.fmt.allocPrint(allocator, "{s}.ztex", .{std.fs.path.stem(source_path)});
+}
+
+fn appendRuntimePath(list: *std.ArrayList(u8), allocator: std.mem.Allocator, path: []const u8) !u16 {
+    if (list.items.len > std.math.maxInt(u16)) return error.RuntimePathsTooLarge;
+    if (path.len > std.math.maxInt(u16)) return error.RuntimePathTooLarge;
+    const offset: u16 = @intCast(list.items.len);
+    try list.appendSlice(allocator, path);
+    return offset;
+}
 
 pub fn buildParamDataBlock(params: []const raw_material.ParamValue, allocator: std.mem.Allocator) !ParamBuildResult {
     var entries = try std.ArrayList(ParamEntry).initCapacity(allocator, params.len);

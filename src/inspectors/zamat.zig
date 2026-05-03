@@ -36,21 +36,24 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("  Textures:    {d}", .{header.texture_slot_count});
     log.info("  Params:      {d}", .{header.param_count});
 
-    log.info("", .{});
-    log.info("Texture Slots:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >10}", .{ "index", "slot_hash", "texture_hash", "slot_unit" });
-    log.info("  {s}", .{"-" ** 61});
+    var texture_entries: [32]zamat.TextureSlotEntry = undefined;
+    if (header.texture_slot_count > texture_entries.len) return error.TooManyTextureSlots;
+    var runtime_paths_len = @max(
+        @as(usize, header.vertex_shader_path_offset) + header.vertex_shader_path_len,
+        @as(usize, header.fragment_shader_path_offset) + header.fragment_shader_path_len,
+    );
     for (0..header.texture_slot_count) |i| {
-        const slot_name_hash = try reader.takeInt(u64, .little);
-        const texture_path_hash = try reader.takeInt(u64, .little);
-        const slot_index = try reader.takeInt(u16, .little);
+        texture_entries[i] = .{
+            .slot_name_hash = try reader.takeInt(u64, .little),
+            .texture_path_hash = try reader.takeInt(u64, .little),
+            .slot_index = try reader.takeInt(u16, .little),
+            .cooked_path = undefined,
+            .cooked_path_offset = try reader.takeInt(u16, .little),
+            .cooked_path_len = try reader.takeInt(u16, .little),
+        };
         _ = try reader.takeInt(u16, .little);
-        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >10}", .{
-            i,
-            slot_name_hash,
-            texture_path_hash,
-            slot_index,
-        });
+        const cooked_path_end = @as(usize, texture_entries[i].cooked_path_offset) + texture_entries[i].cooked_path_len;
+        if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
     }
 
     var entries: [64]zamat.ParamEntry = undefined;
@@ -90,6 +93,32 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     const param_names = param_name_buf[0..param_name_len];
     try reader.readSliceAll(param_names);
 
+    var runtime_path_buf: [4096]u8 = undefined;
+    if (runtime_paths_len > runtime_path_buf.len) return error.RuntimePathsTooLarge;
+    const runtime_paths = runtime_path_buf[0..runtime_paths_len];
+    try reader.readSliceAll(runtime_paths);
+
+    log.info("", .{});
+    log.info("Shader Paths:", .{});
+    log.info("  Vertex:   {s}", .{runtime_paths[header.vertex_shader_path_offset..][0..header.vertex_shader_path_len]});
+    log.info("  Fragment: {s}", .{runtime_paths[header.fragment_shader_path_offset..][0..header.fragment_shader_path_len]});
+
+    log.info("", .{});
+    log.info("Texture Slots:", .{});
+    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >10}  {s}", .{ "index", "slot_hash", "texture_hash", "slot_unit", "cooked_path" });
+    log.info("  {s}", .{"-" ** 86});
+    for (0..header.texture_slot_count) |i| {
+        var entry = texture_entries[i];
+        entry.cooked_path = runtime_paths[entry.cooked_path_offset..][0..entry.cooked_path_len];
+        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >10}  {s}", .{
+            i,
+            entry.slot_name_hash,
+            entry.texture_path_hash,
+            entry.slot_index,
+            entry.cooked_path,
+        });
+    }
+
     for (0..header.param_count) |i| {
         var entry = entries[i];
         entry.name = param_names[entry.name_offset..][0..entry.name_len];
@@ -110,16 +139,18 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     var param_buf: [16]u8 = undefined;
     var data_buf: [16]u8 = undefined;
     var name_buf: [16]u8 = undefined;
+    var runtime_buf: [16]u8 = undefined;
     var total_buf: [16]u8 = undefined;
     const texture_table_size = @as(u64, @intCast(header.texture_slot_count)) * zamat.TEXTURE_SLOT_ENTRY_SIZE;
     const param_table_size = @as(u64, @intCast(header.param_count)) * zamat.PARAM_ENTRY_SIZE;
-    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + param_data_len + param_name_len;
+    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + param_data_len + param_name_len + runtime_paths_len;
     log.info("File Size Summary:", .{});
     log.info("  Header:         {s: >10}", .{fmt.formatBytes(&header_buf, zamat.HEADER_SIZE)});
     log.info("  Texture table:  {s: >10}", .{fmt.formatBytes(&texture_buf, texture_table_size)});
     log.info("  Param table:    {s: >10}", .{fmt.formatBytes(&param_buf, param_table_size)});
     log.info("  Param data:     {s: >10}", .{fmt.formatBytes(&data_buf, param_data_len)});
     log.info("  Param names:    {s: >10}", .{fmt.formatBytes(&name_buf, param_name_len)});
+    log.info("  Runtime paths:  {s: >10}", .{fmt.formatBytes(&runtime_buf, runtime_paths_len)});
     log.info("  Total:          {s: >10}", .{fmt.formatBytes(&total_buf, total_file_size)});
 }
 

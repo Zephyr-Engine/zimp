@@ -17,6 +17,8 @@ pub const CookedMaterial = cooked_material.CookedMaterial;
 pub const TEXTURE_SLOT_ENTRY_SIZE: u32 = @sizeOf(u64) // slot_name_hash
     + @sizeOf(u64) // texture_path_hash
     + @sizeOf(u16) // slot_index
+    + @sizeOf(u16) // cooked_path_offset
+    + @sizeOf(u16) // cooked_path_len
     + @sizeOf(u16); // padding
 
 pub const PARAM_ENTRY_SIZE: u32 = @sizeOf(u16) // name_offset
@@ -35,12 +37,20 @@ pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u16) // padding
 + @sizeOf(u32) // texture_table_offset
 + @sizeOf(u32) // param_table_offset
-+ @sizeOf(u32); // param_data_offset
++ @sizeOf(u32) // param_data_offset
++ @sizeOf(u16) // vertex_shader_path_offset
++ @sizeOf(u16) // vertex_shader_path_len
++ @sizeOf(u16) // fragment_shader_path_offset
++ @sizeOf(u16); // fragment_shader_path_len
 
 pub const ZamatHeader = struct {
     magic: [MAGIC.len]u8 = MAGIC.*,
     version: u32 = ZAMAT_VERSION,
     shader_path_hash: u64,
+    vertex_shader_path_offset: u16,
+    vertex_shader_path_len: u16,
+    fragment_shader_path_offset: u16,
+    fragment_shader_path_len: u16,
     alpha_mode: AlphaMode,
     texture_slot_count: u16,
     param_count: u16,
@@ -58,6 +68,10 @@ pub const ZamatHeader = struct {
 
         return .{
             .shader_path_hash = material.shader_path_hash,
+            .vertex_shader_path_offset = material.vertex_shader_path_offset,
+            .vertex_shader_path_len = material.vertex_shader_path_len,
+            .fragment_shader_path_offset = material.fragment_shader_path_offset,
+            .fragment_shader_path_len = material.fragment_shader_path_len,
             .alpha_mode = material.alpha_mode,
             .texture_slot_count = @intCast(material.texture_slots.len),
             .param_count = @intCast(material.param_entries.len),
@@ -72,6 +86,10 @@ pub const ZamatHeader = struct {
         if (version != ZAMAT_VERSION) return error.UnsupportedVersion;
 
         const shader_path_hash = try reader.takeInt(u64, .little);
+        const vertex_shader_path_offset = try reader.takeInt(u16, .little);
+        const vertex_shader_path_len = try reader.takeInt(u16, .little);
+        const fragment_shader_path_offset = try reader.takeInt(u16, .little);
+        const fragment_shader_path_len = try reader.takeInt(u16, .little);
         const alpha_mode: AlphaMode = @enumFromInt(try reader.takeInt(u16, .little));
         const texture_slot_count = try reader.takeInt(u16, .little);
         const param_count = try reader.takeInt(u16, .little);
@@ -85,6 +103,10 @@ pub const ZamatHeader = struct {
 
         return .{
             .shader_path_hash = shader_path_hash,
+            .vertex_shader_path_offset = vertex_shader_path_offset,
+            .vertex_shader_path_len = vertex_shader_path_len,
+            .fragment_shader_path_offset = fragment_shader_path_offset,
+            .fragment_shader_path_len = fragment_shader_path_len,
             .alpha_mode = alpha_mode,
             .texture_slot_count = texture_slot_count,
             .param_count = param_count,
@@ -98,6 +120,10 @@ pub const ZamatHeader = struct {
         try writer.writeAll(&self.magic);
         try writer.writeInt(u32, self.version, .little);
         try writer.writeInt(u64, self.shader_path_hash, .little);
+        try writer.writeInt(u16, self.vertex_shader_path_offset, .little);
+        try writer.writeInt(u16, self.vertex_shader_path_len, .little);
+        try writer.writeInt(u16, self.fragment_shader_path_offset, .little);
+        try writer.writeInt(u16, self.fragment_shader_path_len, .little);
         try writer.writeInt(u16, @intFromEnum(self.alpha_mode), .little);
         try writer.writeInt(u16, self.texture_slot_count, .little);
         try writer.writeInt(u16, self.param_count, .little);
@@ -110,11 +136,14 @@ pub const ZamatHeader = struct {
 
 pub const Zamat = struct {
     shader_path_hash: u64,
+    vertex_shader_path: []const u8,
+    fragment_shader_path: []const u8,
     alpha_mode: AlphaMode,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
     param_names: []u8,
+    runtime_paths: []u8,
 
     pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Zamat {
         var magic: [MAGIC.len]u8 = undefined;
@@ -131,6 +160,12 @@ pub const Zamat = struct {
         errdefer param_data.deinit(allocator);
         var param_names: std.ArrayList(u8) = .empty;
         errdefer param_names.deinit(allocator);
+        var runtime_paths: std.ArrayList(u8) = .empty;
+        errdefer runtime_paths.deinit(allocator);
+        var runtime_paths_len = @max(
+            @as(usize, header.vertex_shader_path_offset) + header.vertex_shader_path_len,
+            @as(usize, header.fragment_shader_path_offset) + header.fragment_shader_path_len,
+        );
         for (param_entries) |entry| {
             const end = @as(usize, entry.data_offset) + entry.data_size;
             if (end > param_data.items.len) {
@@ -141,26 +176,43 @@ pub const Zamat = struct {
                 try param_names.resize(allocator, name_end);
             }
         }
+        for (texture_slots) |entry| {
+            const cooked_path_end = @as(usize, entry.cooked_path_offset) + entry.cooked_path_len;
+            if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
+        }
+        try runtime_paths.resize(allocator, runtime_paths_len);
         try reader.readSliceAll(param_data.items);
         try reader.readSliceAll(param_names.items);
+        try reader.readSliceAll(runtime_paths.items);
 
         const owned_param_data = try param_data.toOwnedSlice(allocator);
         errdefer allocator.free(owned_param_data);
         const owned_param_names = try param_names.toOwnedSlice(allocator);
         errdefer allocator.free(owned_param_names);
+        const owned_runtime_paths = try runtime_paths.toOwnedSlice(allocator);
+        errdefer allocator.free(owned_runtime_paths);
 
         for (param_entries) |*entry| {
             const start: usize = entry.name_offset;
             entry.name = owned_param_names[start..][0..entry.name_len];
         }
+        for (texture_slots) |*entry| {
+            const start: usize = entry.cooked_path_offset;
+            entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
+        }
+        const vertex_start: usize = header.vertex_shader_path_offset;
+        const fragment_start: usize = header.fragment_shader_path_offset;
 
         return .{
             .shader_path_hash = header.shader_path_hash,
+            .vertex_shader_path = owned_runtime_paths[vertex_start..][0..header.vertex_shader_path_len],
+            .fragment_shader_path = owned_runtime_paths[fragment_start..][0..header.fragment_shader_path_len],
             .alpha_mode = header.alpha_mode,
             .texture_slots = texture_slots,
             .param_entries = param_entries,
             .param_data = owned_param_data,
             .param_names = owned_param_names,
+            .runtime_paths = owned_runtime_paths,
         };
     }
 
@@ -169,16 +221,20 @@ pub const Zamat = struct {
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
         allocator.free(self.param_names);
+        allocator.free(self.runtime_paths);
     }
 };
 
 pub const Material = struct {
     shader_path_hash: u64,
+    vertex_shader_path: []const u8,
+    fragment_shader_path: []const u8,
     alpha_mode: AlphaMode,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
     param_names: []u8,
+    runtime_paths: []u8,
     file_bytes: []u8,
     allocator: std.mem.Allocator,
 
@@ -187,6 +243,7 @@ pub const Material = struct {
         self.allocator.free(self.param_entries);
         self.allocator.free(self.param_data);
         self.allocator.free(self.param_names);
+        self.allocator.free(self.runtime_paths);
         self.allocator.free(self.file_bytes);
     }
 };
@@ -203,11 +260,14 @@ pub fn loadMaterial(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, p
 
     return .{
         .shader_path_hash = z.shader_path_hash,
+        .vertex_shader_path = z.vertex_shader_path,
+        .fragment_shader_path = z.fragment_shader_path,
         .alpha_mode = z.alpha_mode,
         .texture_slots = z.texture_slots,
         .param_entries = z.param_entries,
         .param_data = z.param_data,
         .param_names = z.param_names,
+        .runtime_paths = z.runtime_paths,
         .file_bytes = file_result.bytes,
         .allocator = allocator,
     };
@@ -221,6 +281,8 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
         try writer.writeInt(u64, entry.slot_name_hash, .little);
         try writer.writeInt(u64, entry.texture_path_hash, .little);
         try writer.writeInt(u16, entry.slot_index, .little);
+        try writer.writeInt(u16, entry.cooked_path_offset, .little);
+        try writer.writeInt(u16, entry.cooked_path_len, .little);
         try writer.writeInt(u16, 0, .little);
     }
 
@@ -235,6 +297,7 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
 
     try writer.writeAll(material.param_data);
     try writer.writeAll(material.param_names);
+    try writer.writeAll(material.runtime_paths);
 }
 
 pub fn writeZamat(writer: *std.Io.Writer, material_source: raw_material.MaterialSource, allocator: std.mem.Allocator) !void {
@@ -252,6 +315,9 @@ fn readTextureSlots(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .slot_name_hash = try reader.takeInt(u64, .little),
             .texture_path_hash = try reader.takeInt(u64, .little),
             .slot_index = try reader.takeInt(u16, .little),
+            .cooked_path = undefined,
+            .cooked_path_offset = try reader.takeInt(u16, .little),
+            .cooked_path_len = try reader.takeInt(u16, .little),
         };
         _ = try reader.takeInt(u16, .little);
     }
@@ -310,7 +376,10 @@ test "Zamat write lays out offsets and size" {
     var writer = std.Io.Writer.fixed(&buf);
     try write(&writer, cooked);
 
-    try testing.expectEqual(@as(usize, HEADER_SIZE + 2 * TEXTURE_SLOT_ENTRY_SIZE + 3 * PARAM_ENTRY_SIZE + 28 + 35), writer.end);
+    try testing.expectEqual(
+        @as(usize, HEADER_SIZE + 2 * TEXTURE_SLOT_ENTRY_SIZE + 3 * PARAM_ENTRY_SIZE + cooked.param_data.len + cooked.param_names.len + cooked.runtime_paths.len),
+        writer.end,
+    );
     try testing.expectEqualSlices(u8, MAGIC, buf[0..MAGIC.len]);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
@@ -343,10 +412,13 @@ test "Zamat write and read round trips" {
     defer loaded.deinit(testing.allocator);
 
     try testing.expectEqual(fnv1a("shaders/basic"), loaded.shader_path_hash);
+    try testing.expectEqualStrings("basic.vert.zshdr", loaded.vertex_shader_path);
+    try testing.expectEqualStrings("basic.frag.zshdr", loaded.fragment_shader_path);
     try testing.expectEqual(AlphaMode.alpha_test, loaded.alpha_mode);
     try testing.expectEqual(@as(usize, 1), loaded.texture_slots.len);
     try testing.expectEqual(fnv1a("albedo"), loaded.texture_slots[0].slot_name_hash);
     try testing.expectEqual(fnv1a("textures/test_albedo.png"), loaded.texture_slots[0].texture_path_hash);
+    try testing.expectEqualStrings("test_albedo.ztex", loaded.texture_slots[0].cooked_path);
     try testing.expectEqual(@as(usize, 2), loaded.param_entries.len);
     try testing.expectEqualStrings("u_enabled", loaded.param_entries[0].name);
     try testing.expectEqualStrings("u_mode", loaded.param_entries[1].name);
@@ -367,5 +439,5 @@ test "Zamat supports empty texture and param tables" {
     var writer = std.Io.Writer.fixed(&buf);
     try write(&writer, cooked);
 
-    try testing.expectEqual(@as(usize, HEADER_SIZE), writer.end);
+    try testing.expectEqual(@as(usize, HEADER_SIZE + cooked.runtime_paths.len), writer.end);
 }
