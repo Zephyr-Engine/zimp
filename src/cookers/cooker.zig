@@ -54,6 +54,7 @@ const gltf_cooker = @import("gltf.zig").cooker();
 const obj_cooker = @import("obj.zig").cooker();
 const tex_cooker = @import("tex.zig").cooker();
 const shader_cooker = @import("shader.zig").cooker();
+const material_cooker = @import("material.zig").cooker();
 
 pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .glb = glb_cooker,
@@ -68,6 +69,7 @@ pub const cooker_registry = std.EnumArray(Extension, ?Cooker).init(.{
     .frag = shader_cooker,
     .comp = shader_cooker,
     .glsl = null,
+    .zamat = material_cooker,
     .other = null,
 });
 

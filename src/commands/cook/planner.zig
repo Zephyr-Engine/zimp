@@ -9,6 +9,7 @@ const Cache = @import("../../cache/cache.zig").Cache;
 const CookMetrics = @import("../cook_metrics.zig").CookMetrics;
 const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
+const material_generator = @import("../../parsers/gltf/material_generator.zig");
 
 const Dependencies = std.ArrayList(Hash);
 pub const DependentsMap = std.AutoHashMap(Hash, Dependencies);
@@ -43,6 +44,13 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
             allocator.free(file.path);
         }
         source_files.deinit(allocator);
+    }
+
+    const generated_materials = try material_generator.generateForSources(allocator, ctx.io, ctx.source, source_files.items);
+    if (generated_materials > 0) {
+        log.debug("Generated {d} material source file(s), rescanning assets", .{generated_materials});
+        scanner.deinit(&source_files);
+        source_files = try scanner.scan();
     }
     const scan_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 

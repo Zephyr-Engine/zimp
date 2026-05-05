@@ -1,0 +1,13 @@
+# Auto-generated from meshes/gltf_textured_quad/textured_quad.gltf - CheckerMaterial
+[material]
+shader = "shaders/basic"
+alpha_mode = "solid"
+
+[textures]
+albedo = "meshes/gltf_textured_quad/textured_quad_albedo.png"
+
+[params]
+u_base_color = [1, 1, 1, 1]
+u_metallic = 0.000000
+u_roughness = 1.000000
+u_emissive = [0, 0, 0]

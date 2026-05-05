@@ -26,11 +26,13 @@ pub const DependencyExtractor = struct {
 
 const mesh_extractor = @import("mesh.zig").extractor();
 const shader_extractor = @import("shader.zig").extractor();
+const material_extractor = @import("material.zig").extractor();
 
 pub const extractor_registry = std.EnumArray(AssetType, ?DependencyExtractor).init(.{
     .mesh = mesh_extractor,
     .shader = shader_extractor,
     .texture = null,
+    .material = material_extractor,
     .unknown = null,
 });
 

@@ -4,6 +4,7 @@ pub const AssetType = enum {
     mesh,
     texture,
     shader,
+    material,
     unknown,
 
     pub fn cookedExtension(self: AssetType) []const u8 {
@@ -11,6 +12,7 @@ pub const AssetType = enum {
             .mesh => "zmesh",
             .texture => "ztex",
             .shader => "zshdr",
+            .material => "zamat",
             .unknown => "",
         };
     }
@@ -29,6 +31,7 @@ const asset_map = std.EnumArray(Extension, AssetType).init(.{
     .frag = .shader,
     .comp = .shader,
     .glsl = .shader,
+    .zamat = .material,
     .other = .unknown,
 });
 
@@ -45,6 +48,7 @@ const extension_map = std.StaticStringMap(Extension).initComptime(.{
     .{ "frag", .frag },
     .{ "comp", .comp },
     .{ "glsl", .glsl },
+    .{ "zamat", .zamat },
 });
 
 pub const Extension = enum {
@@ -60,6 +64,7 @@ pub const Extension = enum {
     frag,
     comp,
     glsl,
+    zamat,
     other,
 
     pub fn string(self: Extension) []const u8 {
@@ -76,6 +81,7 @@ pub const Extension = enum {
             .frag => "frag",
             .comp => "comp",
             .glsl => "glsl",
+            .zamat => "zamat",
             .other => "other",
         };
     }

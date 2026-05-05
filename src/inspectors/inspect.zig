@@ -17,12 +17,14 @@ const zamesh_inspector = @import("../inspectors/zmesh.zig").inspector();
 const zatex_inspector = @import("../inspectors/ztex.zig").inspector();
 const zcache_inspector = @import("../inspectors/zcache.zig").inspector();
 const zshdr_inspector = @import("../inspectors/zshdr.zig").inspector();
+const zamat_inspector = @import("../inspectors/zamat.zig").inspector();
 
 pub const inspector_registry = std.StaticStringMap(FormatInspector).initComptime(.{
     .{ FORMAT_MAGIC.ZMESH, zamesh_inspector },
     .{ FORMAT_MAGIC.ZACHE, zcache_inspector },
     .{ FORMAT_MAGIC.ZATEX, zatex_inspector },
     .{ FORMAT_MAGIC.ZSHDR, zshdr_inspector },
+    .{ FORMAT_MAGIC.ZAMAT, zamat_inspector },
 });
 
 const testing = std.testing;
@@ -66,6 +68,10 @@ test "inspector_registry contains ZMESH magic" {
 
 test "inspector_registry contains ZSHDR magic" {
     try testing.expect(inspector_registry.get(FORMAT_MAGIC.ZSHDR) != null);
+}
+
+test "inspector_registry contains ZAMAT magic" {
+    try testing.expect(inspector_registry.get(FORMAT_MAGIC.ZAMAT) != null);
 }
 
 test "inspector_registry returns null for unknown magic" {
