@@ -21,6 +21,7 @@ pub const Zatex = @import("formats/ztex.zig").Zatex;
 pub const ZShader = @import("formats/zshdr.zig").ZShader;
 pub const Zamat = @import("formats/zamat.zig").Zamat;
 pub const mesh = @import("assets/cooked/mesh.zig");
+pub const runtime = @import("runtime.zig");
 
 const asset = @import("assets/asset.zig");
 pub const AssetType = asset.AssetType;
@@ -74,4 +75,5 @@ test {
     _ = @import("cache/cache_dep_graph.zig");
     _ = @import("cache/entry.zig");
     _ = @import("shared/file_read.zig");
+    _ = @import("runtime.zig");
 }
