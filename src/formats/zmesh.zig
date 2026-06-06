@@ -157,11 +157,14 @@ pub const ZMesh = struct {
         material_index: u16,
     };
 
-    pub fn read(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !ZMesh {
+    pub fn readFromFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !ZMesh {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
-        var reader = &file_reader.interface;
+        const reader = &file_reader.interface;
+        return read(allocator, reader);
+    }
 
+    pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ZMesh {
         var magic: [5]u8 = undefined;
         try reader.readSliceAll(&magic);
         if (!std.mem.eql(u8, &magic, MAGIC)) {
@@ -913,7 +916,7 @@ test "ZMesh.read reads positions" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1, 2 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 1, 2, 3 }, .max = .{ 7, 8, 9 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -931,7 +934,7 @@ test "ZMesh.read reads u16 indices" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 2, 1, 0 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -948,7 +951,7 @@ test "ZMesh.read reads u32 indices" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = null, .u32 = @constCast(&[_]u32{ 0, 2, 1 }) }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -968,7 +971,7 @@ test "ZMesh.read reads normals when present" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -984,7 +987,7 @@ test "ZMesh.read sets normals to null when absent" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1007,7 +1010,7 @@ test "ZMesh.read reads uv0 when present" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1024,7 +1027,7 @@ test "ZMesh.read reads AABB" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, .{}, bounds);
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1044,7 +1047,7 @@ test "ZMesh.read reads submeshes" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1, 2, 0, 1, 2 }), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1072,7 +1075,7 @@ test "ZMesh.read roundtrips normals and uv0 together" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 2, .material_index = 0 }}, flags, .{ .min = .{ 1, 2, 3 }, .max = .{ 4, 5, 6 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1094,7 +1097,7 @@ test "ZMesh.read with writeTestZmeshFile" {
     file.close(testing.io);
 
     const read_file = try tmp.dir.openFile(testing.io, "test.zmesh", .{});
-    var zmesh = try ZMesh.read(testing.allocator, testing.io, read_file);
+    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, read_file);
     defer zmesh.deinit(testing.allocator);
     read_file.close(testing.io);
 

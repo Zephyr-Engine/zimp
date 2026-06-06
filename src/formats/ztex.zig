@@ -93,11 +93,14 @@ pub const Zatex = struct {
         data: []u8,
     };
 
-    pub fn read(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !Zatex {
+    pub fn readFromFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !Zatex {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
         const reader = &file_reader.interface;
+        return read(allocator, reader);
+    }
 
+    pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Zatex {
         var magic: [5]u8 = undefined;
         try reader.readSliceAll(&magic);
         if (!std.mem.eql(u8, &magic, MAGIC)) {
@@ -403,7 +406,7 @@ test "Zatex.read parses header fields from a written file" {
     defer cooked.deinit(testing.allocator);
 
     const file = try writeCookedToTmpFile(&tmp, cooked);
-    var ztex = try Zatex.read(testing.allocator, testing.io, file);
+    var ztex = try Zatex.readFromFile(testing.allocator, testing.io, file);
     defer ztex.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -422,7 +425,7 @@ test "Zatex.read reads all mip data and dimensions" {
     defer cooked.deinit(testing.allocator);
 
     const file = try writeCookedToTmpFile(&tmp, cooked);
-    var ztex = try Zatex.read(testing.allocator, testing.io, file);
+    var ztex = try Zatex.readFromFile(testing.allocator, testing.io, file);
     defer ztex.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -442,7 +445,7 @@ test "Zatex.read roundtrips an rgb16f texture" {
     defer cooked.deinit(testing.allocator);
 
     const file = try writeCookedToTmpFile(&tmp, cooked);
-    var ztex = try Zatex.read(testing.allocator, testing.io, file);
+    var ztex = try Zatex.readFromFile(testing.allocator, testing.io, file);
     defer ztex.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -468,7 +471,7 @@ test "Zatex.read returns InvalidMagic on wrong magic bytes" {
     const read_file = try tmp.dir.openFile(testing.io, "bad.ztex", .{});
     defer read_file.close(testing.io);
 
-    try testing.expectError(error.InvalidMagic, Zatex.read(testing.allocator, testing.io, read_file));
+    try testing.expectError(error.InvalidMagic, Zatex.readFromFile(testing.allocator, testing.io, read_file));
 }
 
 test "Zatex.read returns UnsupportedVersion on bad version" {
@@ -486,5 +489,5 @@ test "Zatex.read returns UnsupportedVersion on bad version" {
     const read_file = try tmp.dir.openFile(testing.io, "bad.ztex", .{});
     defer read_file.close(testing.io);
 
-    try testing.expectError(error.UnsupportedVersion, Zatex.read(testing.allocator, testing.io, read_file));
+    try testing.expectError(error.UnsupportedVersion, Zatex.readFromFile(testing.allocator, testing.io, read_file));
 }
