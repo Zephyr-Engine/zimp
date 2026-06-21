@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const raw_texture = @import("../raw/texture.zig");
 const RawTexture = raw_texture.RawTexture;
@@ -105,6 +106,16 @@ pub const CookedTexture = struct {
 };
 
 fn selectFormat(class: TextureClass) TexelFormat {
+    // Apple's OpenGL 4.1 implementation does not support the BC/BPTC formats
+    // emitted by the default cooker. Keep its cooked assets portable rather
+    // than producing textures the runtime cannot upload.
+    if (builtin.os.tag == .macos) {
+        return switch (class) {
+            .hdr_linear => .rgb16f,
+            else => .rgba8,
+        };
+    }
+
     return switch (class) {
         .color_srgb => .bc7,
         .normal_linear => .bc5,
@@ -219,24 +230,24 @@ fn makeUniformRawHdr(allocator: std.mem.Allocator, width: u32, height: u32, fill
     };
 }
 
-test "selectFormat: color_srgb picks bc7" {
-    try testing.expectEqual(TexelFormat.bc7, selectFormat(.color_srgb));
+test "selectFormat: color_srgb picks a supported format" {
+    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc7, selectFormat(.color_srgb));
 }
 
-test "selectFormat: normal_linear picks bc5" {
-    try testing.expectEqual(TexelFormat.bc5, selectFormat(.normal_linear));
+test "selectFormat: normal_linear picks a supported format" {
+    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc5, selectFormat(.normal_linear));
 }
 
-test "selectFormat: single_linear picks bc4" {
-    try testing.expectEqual(TexelFormat.bc4, selectFormat(.single_linear));
+test "selectFormat: single_linear picks a supported format" {
+    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc4, selectFormat(.single_linear));
 }
 
-test "selectFormat: packed_linear picks bc7" {
-    try testing.expectEqual(TexelFormat.bc7, selectFormat(.packed_linear));
+test "selectFormat: packed_linear picks a supported format" {
+    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgba8 else .bc7, selectFormat(.packed_linear));
 }
 
-test "selectFormat: hdr_linear picks bc6h" {
-    try testing.expectEqual(TexelFormat.bc6h, selectFormat(.hdr_linear));
+test "selectFormat: hdr_linear picks a supported format" {
+    try testing.expectEqual(if (builtin.os.tag == .macos) TexelFormat.rgb16f else .bc6h, selectFormat(.hdr_linear));
 }
 
 test "imageSize: rgba8 4x4 = 64" {
@@ -333,7 +344,7 @@ test "CookedTexture.cook: preserves dimensions and picks color_space" {
     try testing.expectEqual(@as(u32, 4), cooked.width);
     try testing.expectEqual(@as(u32, 4), cooked.height);
     try testing.expectEqual(ColorSpace.srgb, cooked.color_space);
-    try testing.expectEqual(TexelFormat.bc7, cooked.format);
+    try testing.expectEqual(selectFormat(.color_srgb), cooked.format);
 }
 
 test "CookedTexture.cook: produces full mip chain" {
@@ -351,7 +362,7 @@ test "CookedTexture.cook: produces full mip chain" {
     try testing.expectEqual(@as(u32, 1), cooked.mips[2].width);
 }
 
-test "CookedTexture.cook: normal_linear produces bc5 mips" {
+test "CookedTexture.cook: normal_linear produces platform-compatible mips" {
     const alloc = testing.allocator;
     // Pixel (128, 128, 255) → signed normal (0, 0, 1)
     const pixel_count: usize = 4 * 4;
@@ -368,8 +379,9 @@ test "CookedTexture.cook: normal_linear produces bc5 mips" {
     var cooked = try CookedTexture.cook(alloc, &raw);
     defer cooked.deinit(alloc);
 
-    try testing.expectEqual(TexelFormat.bc5, cooked.format);
+    try testing.expectEqual(selectFormat(.normal_linear), cooked.format);
     try testing.expectEqual(ColorSpace.linear, cooked.color_space);
+    if (builtin.os.tag == .macos) return;
 
     // Each mip is one BC5 block (2 × 8-byte BC4 halves = 16 bytes) since dims collapse to ≤4x4.
     for (cooked.mips) |mip| {
@@ -384,7 +396,7 @@ test "CookedTexture.cook: normal_linear produces bc5 mips" {
     try testing.expectEqual(@as(u8, 128), top.data[9]); // G red1
 }
 
-test "CookedTexture.cook: single_linear produces bc4 mips" {
+test "CookedTexture.cook: single_linear produces platform-compatible mips" {
     const alloc = testing.allocator;
     var raw = try makeUniformRaw(alloc, 4, 4, .single_linear, 77);
     defer raw.deinit(alloc);
@@ -392,7 +404,8 @@ test "CookedTexture.cook: single_linear produces bc4 mips" {
     var cooked = try CookedTexture.cook(alloc, &raw);
     defer cooked.deinit(alloc);
 
-    try testing.expectEqual(TexelFormat.bc4, cooked.format);
+    try testing.expectEqual(selectFormat(.single_linear), cooked.format);
+    if (builtin.os.tag == .macos) return;
     // Each mip is one 4x4 block = 8 bytes (sub-4 mips round up).
     for (cooked.mips) |mip| {
         try testing.expectEqual(@as(usize, 8), mip.data.len);
