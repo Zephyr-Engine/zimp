@@ -16,16 +16,95 @@ pub fn addCookStep(b: *std.Build, dep: *std.Build.Dependency, options: CookStepO
     return run;
 }
 
-pub const ZMesh = @import("formats/zmesh.zig").ZMesh;
-pub const Zatex = @import("formats/ztex.zig").Zatex;
-pub const ZShader = @import("formats/zshdr.zig").ZShader;
-pub const Zamat = @import("formats/zamat.zig").Zamat;
-pub const mesh = @import("assets/cooked/mesh.zig");
+/// Binary cooked-asset formats and their reader/writer APIs.
+///
+/// For example, use `zimp.formats.zmesh.ZMesh.read` to load a mesh, or
+/// `zimp.formats.ztex.TexelFormat` when creating texture resources.
+pub const formats = struct {
+    pub const zmesh = @import("formats/zmesh.zig");
+    pub const ztex = @import("formats/ztex.zig");
+    pub const zshdr = @import("formats/zshdr.zig");
+    pub const zamat = @import("formats/zamat.zig");
+};
+
+/// Asset data types used by the cooked formats.
+///
+/// `raw` and `cooked` are useful to applications that produce assets
+/// themselves; runtime consumers will normally only need `formats` and
+/// `runtime`.
+pub const assets = struct {
+    pub const raw = struct {
+        pub const mesh = @import("assets/raw/mesh.zig");
+        pub const texture = @import("assets/raw/texture.zig");
+        pub const shader = @import("assets/raw/shader.zig");
+        pub const material = @import("assets/raw/material.zig");
+    };
+
+    pub const cooked = struct {
+        pub const mesh = @import("assets/cooked/mesh.zig");
+        pub const texture = @import("assets/cooked/texture.zig");
+        pub const shader = @import("assets/cooked/shader.zig");
+        pub const material = @import("assets/cooked/material.zig");
+    };
+};
+
+/// Load cooked assets from a directory or a reader, with virtual-path
+/// validation suitable for application asset roots.
 pub const runtime = @import("runtime.zig");
+
+// Convenient top-level aliases retained for existing users.
+pub const ZMesh = formats.zmesh.ZMesh;
+pub const ZMeshHeader = formats.zmesh.ZMeshHeader;
+pub const FormatFlags = assets.cooked.mesh.FormatFlags;
+pub const CookedVertex = assets.cooked.mesh.CookedVertex;
+pub const AABB = assets.cooked.mesh.AABB;
+pub const IndexFormat = assets.cooked.mesh.IndexFormat;
+pub const IndexBuffer = assets.cooked.mesh.IndexBuffer;
+pub const CookedMesh = assets.cooked.mesh.CookedMesh;
+pub const Zatex = formats.ztex.Zatex;
+pub const ZatexHeader = formats.ztex.ZatexHeader;
+pub const TextureType = formats.ztex.TextureType;
+pub const TexelFormat = assets.cooked.texture.TexelFormat;
+pub const ColorSpace = assets.raw.texture.ColorSpace;
+pub const TextureClass = assets.raw.texture.TextureClass;
+pub const CookedMip = assets.cooked.texture.CookedMip;
+pub const CookedTexture = assets.cooked.texture.CookedTexture;
+pub const ZShader = formats.zshdr.ZShader;
+pub const ShaderStage = formats.zshdr.ShaderStage;
+pub const VariantKey = formats.zshdr.VariantKey;
+pub const CookedShader = assets.cooked.shader.CookedShader;
+pub const Zamat = formats.zamat.Zamat;
+pub const ZamatHeader = formats.zamat.ZamatHeader;
+pub const AlphaMode = assets.cooked.material.AlphaMode;
+pub const TextureSlotIndex = assets.cooked.material.TextureSlotIndex;
+pub const TextureSlotEntry = assets.cooked.material.TextureSlotEntry;
+pub const ParamType = assets.cooked.material.ParamType;
+pub const ParamEntry = assets.cooked.material.ParamEntry;
+pub const CookedMaterial = assets.cooked.material.CookedMaterial;
+pub const mesh = assets.cooked.mesh;
 
 const asset = @import("assets/asset.zig");
 pub const AssetType = asset.AssetType;
 pub const Extension = asset.Extension;
+
+test "public API exposes format and asset construction types" {
+    _ = formats.zmesh.ZMesh;
+    _ = formats.ztex.Zatex;
+    _ = formats.zshdr.ZShader;
+    _ = formats.zamat.Zamat;
+
+    _ = assets.raw.mesh.RawMesh;
+    _ = assets.raw.texture.RawTexture;
+    _ = assets.raw.shader.RawShader;
+    _ = assets.raw.material.MaterialSource;
+
+    _ = CookedMesh;
+    _ = CookedTexture;
+    _ = CookedShader;
+    _ = CookedMaterial;
+    _ = AlphaMode;
+    _ = ParamType;
+}
 
 test {
     _ = @import("assets/asset.zig");
