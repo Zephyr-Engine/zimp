@@ -70,6 +70,9 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .shader_set = try reader.takeInt(u16, .little),
             .shader_binding = try reader.takeInt(u16, .little),
             .uv_set = try reader.takeInt(u16, .little),
+            .resource_name = undefined,
+            .resource_name_offset = try reader.takeInt(u16, .little),
+            .resource_name_len = try reader.takeInt(u16, .little),
             .cooked_path = undefined,
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
@@ -94,6 +97,8 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         texture_entries[i].uv_rotation = try readF32FromReader(reader);
         texture_entries[i].normal_scale = try readF32FromReader(reader);
         texture_entries[i].occlusion_strength = try readF32FromReader(reader);
+        const resource_name_end = @as(usize, texture_entries[i].resource_name_offset) + texture_entries[i].resource_name_len;
+        if (resource_name_end > runtime_paths_len) runtime_paths_len = resource_name_end;
         const cooked_path_end = @as(usize, texture_entries[i].cooked_path_offset) + texture_entries[i].cooked_path_len;
         if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
     }
@@ -173,17 +178,19 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Texture Slots:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >5}  {s: >7}  {s}", .{ "index", "slot_hash", "texture_hash", "set", "binding", "cooked_path" });
-    log.info("  {s}", .{"-" ** 86});
+    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >5}  {s: >7}  {s: <24}  {s}", .{ "index", "slot_hash", "texture_hash", "set", "binding", "resource", "cooked_path" });
+    log.info("  {s}", .{"-" ** 112});
     for (0..header.texture_slot_count) |i| {
         var entry = texture_entries[i];
+        entry.resource_name = runtime_paths[entry.resource_name_offset..][0..entry.resource_name_len];
         entry.cooked_path = runtime_paths[entry.cooked_path_offset..][0..entry.cooked_path_len];
-        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >5}  {d: >7}  {s}", .{
+        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >5}  {d: >7}  {s: <24}  {s}", .{
             i,
             entry.slot_name_hash,
             entry.texture_path_hash,
             entry.shader_set,
             entry.shader_binding,
+            entry.resource_name,
             entry.cooked_path,
         });
     }
@@ -268,6 +275,7 @@ test "inspectZamat runs on a valid material file" {
         \\shader = "shaders/basic"
         \\[texture.albedo]
         \\path = "textures/test_albedo.png"
+        \\resource = "u_albedo"
         \\[param.u_roughness]
         \\value = 0.5
         \\

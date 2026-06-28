@@ -13,6 +13,7 @@ blend_mode = "disabled"
 
 [texture.albedo]
 path = "meshes/gltf_textured_quad/textured_quad_albedo.png"
+resource = "u_albedo"
 binding = 0
 
 [param.u_base_color]

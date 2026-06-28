@@ -135,7 +135,7 @@ fn writeMaterialText(
         \\double_sided = {s}
         \\cull_mode = "{s}"
         \\depth_test = true
-        \\depth_write = true
+        \\depth_write = {s}
         \\blend_mode = "{s}"
         \\
     , .{
@@ -146,6 +146,7 @@ fn writeMaterialText(
         material.alphaCutoff,
         if (material.doubleSided) "true" else "false",
         if (material.doubleSided) "none" else "back",
+        if (isAlphaBlend(material.alphaMode)) "false" else "true",
         mapBlendMode(material.alphaMode),
     });
 
@@ -188,6 +189,7 @@ fn appendTexture(
         \\
         \\[texture.{s}]
         \\path = "{s}"
+        \\resource = "{s}"
         \\set = 0
         \\binding = {d}
         \\uv_set = {d}
@@ -206,6 +208,7 @@ fn appendTexture(
     , .{
         slot_name,
         path,
+        textureResourceName(slot_name),
         textureBinding(slot_name),
         info.texCoord,
         minFilterName(sampler.minFilter),
@@ -271,6 +274,11 @@ fn mapBlendMode(value: ?[]const u8) []const u8 {
     return "disabled";
 }
 
+fn isAlphaBlend(value: ?[]const u8) bool {
+    const mode = value orelse return false;
+    return std.ascii.eqlIgnoreCase(mode, "BLEND");
+}
+
 fn appendParamFloat(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: f32, binding: u16) !void {
     try appendPrint(text, allocator,
         \\
@@ -321,6 +329,18 @@ fn textureBinding(slot_name: []const u8) u16 {
     if (std.mem.eql(u8, slot_name, "roughness_metallic")) return 6;
     if (std.mem.eql(u8, slot_name, "orm")) return 7;
     return std.math.maxInt(u16);
+}
+
+fn textureResourceName(slot_name: []const u8) []const u8 {
+    if (std.mem.eql(u8, slot_name, "albedo")) return "u_albedo";
+    if (std.mem.eql(u8, slot_name, "normal")) return "u_normal_map";
+    if (std.mem.eql(u8, slot_name, "roughness")) return "u_roughness_map";
+    if (std.mem.eql(u8, slot_name, "metallic")) return "u_metallic_map";
+    if (std.mem.eql(u8, slot_name, "ao")) return "u_ao_map";
+    if (std.mem.eql(u8, slot_name, "emissive")) return "u_emissive_map";
+    if (std.mem.eql(u8, slot_name, "roughness_metallic")) return "u_roughness_metallic_map";
+    if (std.mem.eql(u8, slot_name, "orm")) return "u_orm_map";
+    return slot_name;
 }
 
 fn minFilterName(value: ?u32) []const u8 {
@@ -491,6 +511,25 @@ test "generateFromGltf writes material with no textures" {
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.") == null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "value = [1, 0, 0, 1]") != null);
+}
+
+test "generateFromGltf disables depth writes for blended materials" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var gltf = try Gltf.parse(
+        \\{"materials":[{"name":"Glass","alphaMode":"BLEND","pbrMetallicRoughness":{"baseColorFactor":[1,1,1,0.5]}}]}
+    , testing.allocator);
+    defer gltf.deinit();
+
+    const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/glass.gltf", &gltf.value, &.{});
+    try testing.expectEqual(@as(usize, 1), count);
+
+    const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/glass_Glass.zamat");
+    defer testing.allocator.free(bytes);
+    try testing.expect(std.mem.indexOf(u8, bytes, "alpha_mode = \"alpha_blend\"") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "depth_write = false") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "blend_mode = \"alpha\"") != null);
 }
 
 test "generateFromGltf preserves occlusion texture strength" {

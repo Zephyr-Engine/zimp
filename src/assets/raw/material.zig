@@ -57,6 +57,7 @@ pub const RenderState = struct {
 pub const TextureSlot = struct {
     slot_name: []const u8,
     texture_path: []const u8,
+    resource_name: []const u8,
     shader_set: u16 = 0,
     shader_binding: u16 = 0,
     uv_set: u16 = 0,
@@ -96,6 +97,7 @@ pub const MaterialSource = struct {
         for (self.textures) |slot| {
             allocator.free(slot.slot_name);
             allocator.free(slot.texture_path);
+            allocator.free(slot.resource_name);
         }
         allocator.free(self.textures);
         for (self.params) |param| {
@@ -137,6 +139,7 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
         for (textures.items) |slot| {
             allocator.free(slot.slot_name);
             allocator.free(slot.texture_path);
+            allocator.free(slot.resource_name);
         }
         textures.deinit(allocator);
     }
@@ -201,6 +204,7 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
 
     for (textures.items) |slot| {
         if (slot.texture_path.len == 0) return error.MissingTexturePath;
+        if (slot.resource_name.len == 0) return error.MissingTextureResource;
     }
     const owned_shader_path = shader_path orelse return error.MissingShaderPath;
 
@@ -209,6 +213,7 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
         for (owned_textures) |slot| {
             allocator.free(slot.slot_name);
             allocator.free(slot.texture_path);
+            allocator.free(slot.resource_name);
         }
         allocator.free(owned_textures);
     }
@@ -236,7 +241,6 @@ fn parseRenderStateKey(state: *RenderState, key: []const u8, value: []const u8) 
         state.alpha_cutoff = try std.fmt.parseFloat(f32, value);
     } else if (std.mem.eql(u8, key, "double_sided")) {
         state.double_sided = try parseBool(value);
-        state.cull_mode = if (state.double_sided) .none else .back;
     } else if (std.mem.eql(u8, key, "cull_mode")) {
         state.cull_mode = try parseCullMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "depth_test")) {
@@ -262,6 +266,9 @@ fn parseTextureSubsection(
     if (std.mem.eql(u8, key, "path")) {
         allocator.free(slot.texture_path);
         slot.texture_path = try allocator.dupe(u8, try parseQuoted(value));
+    } else if (std.mem.eql(u8, key, "resource")) {
+        allocator.free(slot.resource_name);
+        slot.resource_name = try allocator.dupe(u8, try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "set")) {
         slot.shader_set = try parseU16(value);
     } else if (std.mem.eql(u8, key, "binding")) {
@@ -323,9 +330,12 @@ fn findOrAppendTexture(allocator: std.mem.Allocator, textures: *std.ArrayList(Te
     errdefer allocator.free(slot_name);
     const texture_path = try allocator.dupe(u8, "");
     errdefer allocator.free(texture_path);
+    const resource_name = try allocator.dupe(u8, "");
+    errdefer allocator.free(resource_name);
     try textures.append(allocator, .{
         .slot_name = slot_name,
         .texture_path = texture_path,
+        .resource_name = resource_name,
         .shader_binding = defaultTextureBinding(slot_name),
     });
     return textures.items.len - 1;
@@ -494,12 +504,14 @@ test "parseMaterialSource parses v2 render state texture and param subsections" 
         \\alpha_mode = "alpha_test"
         \\alpha_cutoff = 0.33
         \\double_sided = true
+        \\cull_mode = "none"
         \\depth_test = false
         \\depth_write = false
         \\blend_mode = "alpha"
         \\
         \\[texture.albedo]
         \\path = "textures/brick_albedo.png"
+        \\resource = "u_albedo"
         \\set = 2
         \\binding = 3
         \\uv_set = 1
@@ -533,6 +545,7 @@ test "parseMaterialSource parses v2 render state texture and param subsections" 
     const tex = source.textures[0];
     try testing.expectEqualStrings("albedo", tex.slot_name);
     try testing.expectEqualStrings("textures/brick_albedo.png", tex.texture_path);
+    try testing.expectEqualStrings("u_albedo", tex.resource_name);
     try testing.expectEqual(@as(u16, 2), tex.shader_set);
     try testing.expectEqual(@as(u16, 3), tex.shader_binding);
     try testing.expectEqual(@as(u16, 1), tex.uv_set);
@@ -555,6 +568,31 @@ test "parseMaterialSource rejects texture subsection without path" {
         \\shader = "shaders/pbr"
         \\[texture.albedo]
         \\binding = 0
+        \\
+    , testing.allocator));
+}
+
+test "parseMaterialSource preserves explicit cull mode independent of key order" {
+    var source = try parseMaterialSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\[render_state]
+        \\cull_mode = "front"
+        \\double_sided = false
+        \\
+    , testing.allocator);
+    defer source.deinit(testing.allocator);
+
+    try testing.expect(!source.render_state.double_sided);
+    try testing.expectEqual(CullMode.front, source.render_state.cull_mode);
+}
+
+test "parseMaterialSource rejects texture subsection without resource" {
+    try testing.expectError(error.MissingTextureResource, parseMaterialSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\[texture.albedo]
+        \\path = "textures/brick_albedo.png"
         \\
     , testing.allocator));
 }
@@ -609,8 +647,10 @@ test "parseMaterialSource collects texture slots in order" {
         \\shader = "shaders/basic"
         \\[texture.albedo]
         \\path = "textures/brick_albedo.png"
+        \\resource = "u_albedo"
         \\[texture.normal]
         \\path = "textures/sub/brick_normal.png"
+        \\resource = "u_normal_map"
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);
@@ -618,8 +658,10 @@ test "parseMaterialSource collects texture slots in order" {
     try testing.expectEqual(@as(usize, 2), source.textures.len);
     try testing.expectEqualStrings("albedo", source.textures[0].slot_name);
     try testing.expectEqualStrings("textures/brick_albedo.png", source.textures[0].texture_path);
+    try testing.expectEqualStrings("u_albedo", source.textures[0].resource_name);
     try testing.expectEqualStrings("normal", source.textures[1].slot_name);
     try testing.expectEqualStrings("textures/sub/brick_normal.png", source.textures[1].texture_path);
+    try testing.expectEqualStrings("u_normal_map", source.textures[1].resource_name);
 }
 
 test "parseMaterialSource parses params" {
@@ -668,9 +710,11 @@ test "parseMaterialSource parses full example" {
         \\
         \\[texture.albedo]
         \\path = "textures/test_albedo.png"
+        \\resource = "u_albedo"
         \\
         \\[texture.normal]
         \\path = "textures/test_normal.png"
+        \\resource = "u_normal_map"
         \\
         \\[param.u_roughness]
         \\value = 0.5

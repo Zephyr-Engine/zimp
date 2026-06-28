@@ -69,8 +69,10 @@ test "extractMaterialDeps returns shader stages and textures" {
         \\shader = "shaders/basic"
         \\[texture.albedo]
         \\path = "textures/test_albedo.png"
+        \\resource = "u_albedo"
         \\[texture.normal]
         \\path = "textures/test_normal.png"
+        \\resource = "u_normal_map"
         \\
     );
 

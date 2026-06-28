@@ -220,15 +220,13 @@ fn uniformKind(type_name: []const u8) UniformKind {
 }
 
 fn validateTextureSlot(file_path: []const u8, slot: raw_material.TextureSlot, reflected: *const ReflectedShaders) !void {
-    if (textureUniformName(slot.slot_name)) |uniform_name| {
-        const uniform = reflected.findUniform(uniform_name) orelse {
-            log.err("{s}: texture slot '{s}' expects shader sampler uniform '{s}'", .{ file_path, slot.slot_name, uniform_name });
-            return error.MissingShaderUniform;
-        };
-        if (uniform.kind != .sampler) {
-            log.err("{s}: texture slot '{s}' uniform '{s}' is not a sampler", .{ file_path, slot.slot_name, uniform_name });
-            return error.ShaderUniformTypeMismatch;
-        }
+    const uniform = reflected.findUniform(slot.resource_name) orelse {
+        log.err("{s}: texture slot '{s}' has no matching shader sampler uniform '{s}'", .{ file_path, slot.slot_name, slot.resource_name });
+        return error.MissingShaderUniform;
+    };
+    if (uniform.kind != .sampler) {
+        log.err("{s}: texture slot '{s}' resource '{s}' is not a sampler", .{ file_path, slot.slot_name, slot.resource_name });
+        return error.ShaderUniformTypeMismatch;
     }
 }
 
@@ -302,18 +300,6 @@ fn selectRequiredVariants(
     return selected.toOwnedSlice(allocator);
 }
 
-fn textureUniformName(slot_name: []const u8) ?[]const u8 {
-    if (std.mem.eql(u8, slot_name, "albedo")) return "u_albedo";
-    if (std.mem.eql(u8, slot_name, "normal")) return "u_normal_map";
-    if (std.mem.eql(u8, slot_name, "roughness")) return "u_roughness_map";
-    if (std.mem.eql(u8, slot_name, "metallic")) return "u_metallic_map";
-    if (std.mem.eql(u8, slot_name, "ao")) return "u_ao_map";
-    if (std.mem.eql(u8, slot_name, "emissive")) return "u_emissive_map";
-    if (std.mem.eql(u8, slot_name, "roughness_metallic")) return "u_roughness_metallic_map";
-    if (std.mem.eql(u8, slot_name, "orm")) return "u_orm_map";
-    return null;
-}
-
 fn paramUniformKind(value: raw_material.ParamValue.Value) UniformKind {
     return switch (value) {
         .float => .float,
@@ -369,6 +355,7 @@ test "material cooker writes zamat" {
         \\shader = "shaders/basic"
         \\[texture.albedo]
         \\path = "textures/missing.png"
+        \\resource = "u_albedo"
         \\[param.u_roughness]
         \\value = 0.5
         \\
@@ -454,6 +441,7 @@ test "material cooker rejects texture and param binding collision" {
         \\shader = "shaders/basic"
         \\[texture.albedo]
         \\path = "textures/missing.png"
+        \\resource = "u_albedo"
         \\set = 0
         \\binding = 0
         \\[param.u_base_color]
@@ -475,6 +463,32 @@ test "material cooker rejects texture and param binding collision" {
     try testing.expectError(error.DuplicateShaderBinding, cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
 }
 
+test "material cooker accepts custom texture slot with explicit resource" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTestFile(tmp.dir, "materials/test.zamat",
+        \\[material]
+        \\shader = "shaders/basic"
+        \\[texture.custom_mask]
+        \\path = "textures/missing.png"
+        \\resource = "u_custom_mask"
+        \\set = 0
+        \\binding = 3
+        \\
+    );
+    try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
+    try writeTestFile(tmp.dir, "shaders/basic.frag",
+        \\uniform sampler2D u_custom_mask;
+        \\void main() {}
+        \\
+    );
+
+    var out: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    try cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
+}
+
 test "material cooker selects declared variants from material contents" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -486,6 +500,7 @@ test "material cooker selects declared variants from material contents" {
         \\alpha_mode = "alpha_test"
         \\[texture.normal]
         \\path = "textures/missing.png"
+        \\resource = "u_normal_map"
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");

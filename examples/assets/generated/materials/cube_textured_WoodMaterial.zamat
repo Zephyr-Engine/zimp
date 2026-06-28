@@ -13,14 +13,17 @@ blend_mode = "disabled"
 
 [texture.albedo]
 path = "generated/textures/cube_textured_albedo.png"
+resource = "u_albedo"
 binding = 0
 
 [texture.roughness_metallic]
 path = "generated/textures/cube_textured_roughness.png"
+resource = "u_roughness_metallic_map"
 binding = 6
 
 [texture.normal]
 path = "generated/textures/cube_textured_normal.png"
+resource = "u_normal_map"
 binding = 1
 
 [param.u_base_color]

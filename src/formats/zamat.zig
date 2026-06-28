@@ -27,6 +27,8 @@ pub const TEXTURE_SLOT_ENTRY_SIZE: u32 = @sizeOf(u64) // slot_name_hash
     + @sizeOf(u16) // shader_set
     + @sizeOf(u16) // shader_binding
     + @sizeOf(u16) // uv_set
+    + @sizeOf(u16) // resource_name_offset
+    + @sizeOf(u16) // resource_name_len
     + @sizeOf(u16) // cooked_path_offset
     + @sizeOf(u16) // cooked_path_len
     + @sizeOf(u8) // min_filter
@@ -257,6 +259,8 @@ pub const Zamat = struct {
             }
         }
         for (texture_slots) |entry| {
+            const resource_name_end = @as(usize, entry.resource_name_offset) + entry.resource_name_len;
+            if (resource_name_end > runtime_paths_len) runtime_paths_len = resource_name_end;
             const cooked_path_end = @as(usize, entry.cooked_path_offset) + entry.cooked_path_len;
             if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
         }
@@ -282,6 +286,8 @@ pub const Zamat = struct {
             entry.name = owned_param_names[start..][0..entry.name_len];
         }
         for (texture_slots) |*entry| {
+            const resource_start: usize = entry.resource_name_offset;
+            entry.resource_name = owned_runtime_paths[resource_start..][0..entry.resource_name_len];
             const start: usize = entry.cooked_path_offset;
             entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
         }
@@ -383,6 +389,8 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
         try writer.writeInt(u16, entry.shader_set, .little);
         try writer.writeInt(u16, entry.shader_binding, .little);
         try writer.writeInt(u16, entry.uv_set, .little);
+        try writer.writeInt(u16, entry.resource_name_offset, .little);
+        try writer.writeInt(u16, entry.resource_name_len, .little);
         try writer.writeInt(u16, entry.cooked_path_offset, .little);
         try writer.writeInt(u16, entry.cooked_path_len, .little);
         try writer.writeInt(u8, @intFromEnum(entry.sampler.min_filter), .little);
@@ -450,6 +458,9 @@ fn readTextureSlots(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .shader_set = try reader.takeInt(u16, .little),
             .shader_binding = try reader.takeInt(u16, .little),
             .uv_set = try reader.takeInt(u16, .little),
+            .resource_name = undefined,
+            .resource_name_offset = try reader.takeInt(u16, .little),
+            .resource_name_len = try reader.takeInt(u16, .little),
             .cooked_path = undefined,
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
@@ -553,8 +564,10 @@ test "Zamat write lays out offsets and size" {
         \\shader = "shaders/basic"
         \\[texture.albedo]
         \\path = "textures/test_albedo.png"
+        \\resource = "u_albedo"
         \\[texture.normal]
         \\path = "textures/test_normal.png"
+        \\resource = "u_normal_map"
         \\[param.u_roughness]
         \\value = 0.5
         \\[param.u_light_dir]
@@ -594,6 +607,7 @@ test "Zamat write and read round trips" {
         \\alpha_mode = "alpha_test"
         \\[texture.albedo]
         \\path = "textures/test_albedo.png"
+        \\resource = "u_albedo"
         \\[param.u_enabled]
         \\value = true
         \\[param.u_mode]
@@ -617,6 +631,7 @@ test "Zamat write and read round trips" {
     try testing.expectEqual(@as(usize, 1), loaded.texture_slots.len);
     try testing.expectEqual(fnv1a("albedo"), loaded.texture_slots[0].slot_name_hash);
     try testing.expectEqual(fnv1a("textures/test_albedo.png"), loaded.texture_slots[0].texture_path_hash);
+    try testing.expectEqualStrings("u_albedo", loaded.texture_slots[0].resource_name);
     try testing.expectEqualStrings("test_albedo.ztex", loaded.texture_slots[0].cooked_path);
     try testing.expectEqual(@as(usize, 2), loaded.param_entries.len);
     try testing.expectEqualStrings("u_enabled", loaded.param_entries[0].name);
@@ -639,6 +654,7 @@ test "Zamat v2 round trips render state bindings and sampler metadata" {
         \\blend_mode = "alpha"
         \\[texture.normal]
         \\path = "textures/test_normal.png"
+        \\resource = "u_normal_map"
         \\set = 2
         \\binding = 7
         \\uv_set = 1
@@ -676,6 +692,7 @@ test "Zamat v2 round trips render state bindings and sampler metadata" {
     try testing.expectEqual(BlendMode.alpha, loaded.render_state.blend_mode);
 
     const tex = loaded.texture_slots[0];
+    try testing.expectEqualStrings("u_normal_map", tex.resource_name);
     try testing.expectEqual(@as(u16, 2), tex.shader_set);
     try testing.expectEqual(@as(u16, 7), tex.shader_binding);
     try testing.expectEqual(@as(u16, 1), tex.uv_set);

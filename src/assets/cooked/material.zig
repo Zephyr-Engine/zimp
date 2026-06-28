@@ -58,6 +58,9 @@ pub const TextureSlotEntry = struct {
     sampler: SamplerDesc,
     normal_scale: f32,
     occlusion_strength: f32,
+    resource_name: []const u8,
+    resource_name_offset: u16,
+    resource_name_len: u16,
     cooked_path: []const u8,
     cooked_path_offset: u16,
     cooked_path_len: u16,
@@ -124,6 +127,7 @@ pub const CookedMaterial = struct {
         for (source.textures, texture_slots) |slot, *entry| {
             const cooked_texture_path = try textureCookedPath(allocator, slot.texture_path);
             defer allocator.free(cooked_texture_path);
+            const resource_name_offset = try appendRuntimePath(&runtime_paths, allocator, slot.resource_name);
             const cooked_path_offset = try appendRuntimePath(&runtime_paths, allocator, cooked_texture_path);
             entry.* = .{
                 .slot_name_hash = source_file.fnv1a(slot.slot_name),
@@ -138,6 +142,9 @@ pub const CookedMaterial = struct {
                 .sampler = slot.sampler,
                 .normal_scale = slot.normal_scale,
                 .occlusion_strength = slot.occlusion_strength,
+                .resource_name = runtime_paths.items[resource_name_offset..][0..slot.resource_name.len],
+                .resource_name_offset = resource_name_offset,
+                .resource_name_len = @intCast(slot.resource_name.len),
                 .cooked_path = runtime_paths.items[cooked_path_offset..][0..cooked_texture_path.len],
                 .cooked_path_offset = cooked_path_offset,
                 .cooked_path_len = @intCast(cooked_texture_path.len),
@@ -156,6 +163,8 @@ pub const CookedMaterial = struct {
         const vertex_start: usize = vertex_shader_path_offset;
         const fragment_start: usize = fragment_shader_path_offset;
         for (texture_slots) |*entry| {
+            const resource_start: usize = entry.resource_name_offset;
+            entry.resource_name = owned_runtime_paths[resource_start..][0..entry.resource_name_len];
             const start: usize = entry.cooked_path_offset;
             entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
         }
