@@ -189,10 +189,11 @@ fn parseUniformLine(
 ) !void {
     const no_comment = if (std.mem.indexOf(u8, line, "//")) |idx| line[0..idx] else line;
     const trimmed = std.mem.trim(u8, no_comment, " \t\r");
-    if (!std.mem.startsWith(u8, trimmed, "uniform ")) return;
 
     var it = std.mem.tokenizeAny(u8, trimmed, " \t;");
-    _ = it.next() orelse return;
+    while (it.next()) |token| {
+        if (std.mem.eql(u8, token, "uniform")) break;
+    } else return;
     const type_name = it.next() orelse return;
     var uniform_name = it.next() orelse return;
     if (std.mem.indexOfScalar(u8, uniform_name, '[')) |idx| {
@@ -480,6 +481,33 @@ test "material cooker accepts custom texture slot with explicit resource" {
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
     try writeTestFile(tmp.dir, "shaders/basic.frag",
         \\uniform sampler2D u_custom_mask;
+        \\void main() {}
+        \\
+    );
+
+    var out: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    try cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
+}
+
+test "material cooker reflects layout-qualified uniforms" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTestFile(tmp.dir, "materials/test.zamat",
+        \\[material]
+        \\shader = "shaders/basic"
+        \\[texture.albedo]
+        \\path = "textures/missing.png"
+        \\resource = "u_albedo"
+        \\[param.u_roughness]
+        \\value = 0.5
+        \\
+    );
+    try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
+    try writeTestFile(tmp.dir, "shaders/basic.frag",
+        \\layout(binding = 0) uniform sampler2D u_albedo;
+        \\layout(location = 3) uniform float u_roughness;
         \\void main() {}
         \\
     );
