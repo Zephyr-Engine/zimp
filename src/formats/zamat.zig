@@ -206,7 +206,6 @@ pub const Zamat = struct {
     shader_path_hash: u64,
     vertex_shader_path: []const u8,
     fragment_shader_path: []const u8,
-    alpha_mode: AlphaMode,
     render_state: RenderState,
     required_variants: []const []const u8,
     texture_slots: []TextureSlotEntry,
@@ -297,7 +296,6 @@ pub const Zamat = struct {
             .shader_path_hash = header.shader_path_hash,
             .vertex_shader_path = owned_runtime_paths[vertex_start..][0..header.vertex_shader_path_len],
             .fragment_shader_path = owned_runtime_paths[fragment_start..][0..header.fragment_shader_path_len],
-            .alpha_mode = header.render_state.alpha_mode,
             .render_state = header.render_state,
             .required_variants = required_variants,
             .texture_slots = texture_slots,
@@ -324,7 +322,6 @@ pub const Material = struct {
     shader_path_hash: u64,
     vertex_shader_path: []const u8,
     fragment_shader_path: []const u8,
-    alpha_mode: AlphaMode,
     render_state: RenderState,
     required_variants: []const []const u8,
     texture_slots: []TextureSlotEntry,
@@ -362,7 +359,6 @@ pub fn loadMaterial(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, p
         .shader_path_hash = z.shader_path_hash,
         .vertex_shader_path = z.vertex_shader_path,
         .fragment_shader_path = z.fragment_shader_path,
-        .alpha_mode = z.alpha_mode,
         .render_state = z.render_state,
         .required_variants = z.required_variants,
         .texture_slots = z.texture_slots,
@@ -617,7 +613,7 @@ test "Zamat write and read round trips" {
     try testing.expectEqual(fnv1a("shaders/basic"), loaded.shader_path_hash);
     try testing.expectEqualStrings("basic.vert.zshdr", loaded.vertex_shader_path);
     try testing.expectEqualStrings("basic.frag.zshdr", loaded.fragment_shader_path);
-    try testing.expectEqual(AlphaMode.alpha_test, loaded.alpha_mode);
+    try testing.expectEqual(AlphaMode.alpha_test, loaded.render_state.alpha_mode);
     try testing.expectEqual(@as(usize, 1), loaded.texture_slots.len);
     try testing.expectEqual(fnv1a("albedo"), loaded.texture_slots[0].slot_name_hash);
     try testing.expectEqual(fnv1a("textures/test_albedo.png"), loaded.texture_slots[0].texture_path_hash);

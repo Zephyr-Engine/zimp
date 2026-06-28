@@ -207,20 +207,20 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
 
 fn parseRenderStateKey(state: *RenderState, key: []const u8, value: []const u8) !void {
     if (std.mem.eql(u8, key, "alpha_mode")) {
-        state.alpha_mode = try parseAlphaMode(try parseMaybeQuoted(value));
+        state.alpha_mode = try parseAlphaMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "alpha_cutoff")) {
         state.alpha_cutoff = try std.fmt.parseFloat(f32, value);
     } else if (std.mem.eql(u8, key, "double_sided")) {
         state.double_sided = try parseBool(value);
         state.cull_mode = if (state.double_sided) .none else .back;
     } else if (std.mem.eql(u8, key, "cull_mode")) {
-        state.cull_mode = try parseCullMode(try parseMaybeQuoted(value));
+        state.cull_mode = try parseCullMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "depth_test")) {
         state.depth_test = try parseBool(value);
     } else if (std.mem.eql(u8, key, "depth_write")) {
         state.depth_write = try parseBool(value);
     } else if (std.mem.eql(u8, key, "blend_mode")) {
-        state.blend_mode = try parseBlendMode(try parseMaybeQuoted(value));
+        state.blend_mode = try parseBlendMode(try parseQuoted(value));
     } else {
         return error.UnknownRenderStateKey;
     }
@@ -251,15 +251,15 @@ fn parseTextureSubsection(
     } else if (std.mem.eql(u8, key, "uv_rotation")) {
         slot.uv_rotation = try std.fmt.parseFloat(f32, value);
     } else if (std.mem.eql(u8, key, "min_filter")) {
-        slot.sampler.min_filter = try parseFilterMode(try parseMaybeQuoted(value));
+        slot.sampler.min_filter = try parseFilterMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "mag_filter")) {
-        slot.sampler.mag_filter = try parseFilterMode(try parseMaybeQuoted(value));
+        slot.sampler.mag_filter = try parseFilterMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "mip_filter")) {
-        slot.sampler.mip_filter = try parseMipFilterMode(try parseMaybeQuoted(value));
+        slot.sampler.mip_filter = try parseMipFilterMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "wrap_s")) {
-        slot.sampler.wrap_s = try parseWrapMode(try parseMaybeQuoted(value));
+        slot.sampler.wrap_s = try parseWrapMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "wrap_t")) {
-        slot.sampler.wrap_t = try parseWrapMode(try parseMaybeQuoted(value));
+        slot.sampler.wrap_t = try parseWrapMode(try parseQuoted(value));
     } else if (std.mem.eql(u8, key, "max_anisotropy")) {
         slot.sampler.max_anisotropy = try std.fmt.parseFloat(f32, value);
     } else if (std.mem.eql(u8, key, "normal_scale")) {
@@ -324,11 +324,6 @@ fn findOrAppendParam(allocator: std.mem.Allocator, params: *std.ArrayList(ParamV
 fn parseQuoted(value: []const u8) ![]const u8 {
     if (value.len < 2 or value[0] != '"' or value[value.len - 1] != '"') return error.ExpectedQuotedString;
     return value[1 .. value.len - 1];
-}
-
-fn parseMaybeQuoted(value: []const u8) ![]const u8 {
-    if (value.len >= 2 and value[0] == '"' and value[value.len - 1] == '"') return value[1 .. value.len - 1];
-    return value;
 }
 
 pub fn parseAlphaMode(value: []const u8) !AlphaMode {
@@ -521,6 +516,39 @@ test "parseMaterialSource rejects texture subsection without path" {
         \\shader = "shaders/pbr"
         \\[texture.albedo]
         \\binding = 0
+        \\
+    , testing.allocator));
+}
+
+test "parseMaterialSource rejects pre-v2 material forms" {
+    try testing.expectError(error.UnknownMaterialKey, parseMaterialSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\alpha_mode = "alpha_test"
+        \\
+    , testing.allocator));
+
+    try testing.expectError(error.UnknownMaterialSection, parseMaterialSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\[textures]
+        \\albedo = "textures/brick_albedo.png"
+        \\
+    , testing.allocator));
+
+    try testing.expectError(error.ExpectedQuotedString, parseMaterialSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\[render_state]
+        \\alpha_mode = alpha_test
+        \\
+    , testing.allocator));
+
+    try testing.expectError(error.UnknownBlendMode, parseMaterialSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\[render_state]
+        \\blend_mode = "opaque"
         \\
     , testing.allocator));
 }
