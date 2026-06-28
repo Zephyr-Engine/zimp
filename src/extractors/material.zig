@@ -67,9 +67,10 @@ test "extractMaterialDeps returns shader stages and textures" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[textures]
-        \\albedo = "textures/test_albedo.png"
-        \\normal = "textures/test_normal.png"
+        \\[texture.albedo]
+        \\path = "textures/test_albedo.png"
+        \\[texture.normal]
+        \\path = "textures/test_normal.png"
         \\
     );
 

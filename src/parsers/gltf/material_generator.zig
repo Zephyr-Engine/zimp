@@ -266,9 +266,9 @@ fn mapAlphaMode(value: ?[]const u8) []const u8 {
 }
 
 fn mapBlendMode(value: ?[]const u8) []const u8 {
-    const mode = value orelse return "opaque";
+    const mode = value orelse return "disabled";
     if (std.ascii.eqlIgnoreCase(mode, "BLEND")) return "alpha";
-    return "opaque";
+    return "disabled";
 }
 
 fn appendParamFloat(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: f32, binding: u16) !void {

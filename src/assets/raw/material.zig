@@ -86,7 +86,6 @@ pub const ParamValue = struct {
 
 pub const MaterialSource = struct {
     shader_path: []const u8,
-    alpha_mode: AlphaMode = .solid,
     render_state: RenderState = .{},
     required_variants: []const []const u8 = &.{},
     textures: []const TextureSlot,
@@ -111,8 +110,6 @@ pub const MaterialSource = struct {
 const Section = enum {
     material,
     render_state,
-    textures,
-    params,
     texture,
     param,
 };
@@ -159,10 +156,6 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
                 .{ .kind = .material }
             else if (std.mem.eql(u8, name, "render_state"))
                 .{ .kind = .render_state }
-            else if (std.mem.eql(u8, name, "textures"))
-                .{ .kind = .textures }
-            else if (std.mem.eql(u8, name, "params"))
-                .{ .kind = .params }
             else if (std.mem.startsWith(u8, name, "texture."))
                 .{ .kind = .texture, .name = name["texture.".len..] }
             else if (std.mem.startsWith(u8, name, "param."))
@@ -183,34 +176,11 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
                 if (std.mem.eql(u8, key, "shader")) {
                     if (shader_path) |old| allocator.free(old);
                     shader_path = try allocator.dupe(u8, try parseQuoted(value));
-                } else if (std.mem.eql(u8, key, "alpha_mode")) {
-                    render_state.alpha_mode = try parseAlphaMode(try parseQuoted(value));
                 } else {
                     return error.UnknownMaterialKey;
                 }
             },
             .render_state => try parseRenderStateKey(&render_state, key, value),
-            .textures => {
-                const slot_name = try allocator.dupe(u8, key);
-                errdefer allocator.free(slot_name);
-                const texture_path = try allocator.dupe(u8, try parseQuoted(value));
-                errdefer allocator.free(texture_path);
-                try textures.append(allocator, .{
-                    .slot_name = slot_name,
-                    .texture_path = texture_path,
-                    .shader_binding = defaultTextureBinding(slot_name),
-                });
-            },
-            .params => {
-                const name = try allocator.dupe(u8, key);
-                errdefer allocator.free(name);
-                const parsed_value = try parseParamValue(value);
-                try params.append(allocator, .{
-                    .name = name,
-                    .value = parsed_value,
-                    .shader_binding = @intCast(params.items.len),
-                });
-            },
             .texture => {
                 const name = active.name orelse return error.InvalidSectionHeader;
                 try parseTextureSubsection(allocator, &textures, name, key, value);
@@ -228,7 +198,6 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
 
     return .{
         .shader_path = shader_path orelse return error.MissingShaderPath,
-        .alpha_mode = render_state.alpha_mode,
         .render_state = render_state,
         .required_variants = &.{},
         .textures = try textures.toOwnedSlice(allocator),
@@ -377,7 +346,6 @@ fn parseCullMode(value: []const u8) !CullMode {
 }
 
 fn parseBlendMode(value: []const u8) !BlendMode {
-    if (std.mem.eql(u8, value, "opaque")) return .disabled;
     if (std.mem.eql(u8, value, "disabled")) return .disabled;
     if (std.mem.eql(u8, value, "alpha")) return .alpha;
     if (std.mem.eql(u8, value, "premultiplied_alpha")) return .premultiplied_alpha;
@@ -471,7 +439,7 @@ fn looksFloat(value: []const u8) bool {
 
 const testing = std.testing;
 
-test "parseMaterialSource parses material section and default alpha" {
+test "parseMaterialSource parses material section" {
     var source = try parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
@@ -480,19 +448,7 @@ test "parseMaterialSource parses material section and default alpha" {
     defer source.deinit(testing.allocator);
 
     try testing.expectEqualStrings("shaders/basic", source.shader_path);
-    try testing.expectEqual(AlphaMode.solid, source.alpha_mode);
-}
-
-test "parseMaterialSource parses alpha blend" {
-    var source = try parseMaterialSource(
-        \\[material]
-        \\shader = "shaders/basic"
-        \\alpha_mode = "alpha_blend"
-        \\
-    , testing.allocator);
-    defer source.deinit(testing.allocator);
-
-    try testing.expectEqual(AlphaMode.alpha_blend, source.alpha_mode);
+    try testing.expectEqual(AlphaMode.solid, source.render_state.alpha_mode);
 }
 
 test "parseMaterialSource parses v2 render state texture and param subsections" {
@@ -573,9 +529,10 @@ test "parseMaterialSource collects texture slots in order" {
     var source = try parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[textures]
-        \\albedo = "textures/brick_albedo.png"
-        \\normal = "textures/sub/brick_normal.png"
+        \\[texture.albedo]
+        \\path = "textures/brick_albedo.png"
+        \\[texture.normal]
+        \\path = "textures/sub/brick_normal.png"
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);
@@ -591,13 +548,18 @@ test "parseMaterialSource parses params" {
     var source = try parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[params]
-        \\u_roughness  =  0.5
-        \\u_mode = 2
-        \\u_enabled = true
-        \\u_uv_scale = [2.0, 2.0]
-        \\u_light_dir = [0.5, 1.0, 0.3]
-        \\u_base_color = [1.0, 1.0, 1.0, 1.0]
+        \\[param.u_roughness]
+        \\value = 0.5
+        \\[param.u_mode]
+        \\value = 2
+        \\[param.u_enabled]
+        \\value = true
+        \\[param.u_uv_scale]
+        \\value = [2.0, 2.0]
+        \\[param.u_light_dir]
+        \\value = [0.5, 1.0, 0.3]
+        \\[param.u_base_color]
+        \\value = [1.0, 1.0, 1.0, 1.0]
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);
@@ -615,8 +577,8 @@ test "parseMaterialSource rejects unsupported array lengths" {
     try testing.expectError(error.UnsupportedParamArrayLength, parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[params]
-        \\u_bad = [1.0]
+        \\[param.u_bad]
+        \\value = [1.0]
         \\
     , testing.allocator));
 }
@@ -626,14 +588,20 @@ test "parseMaterialSource parses full example" {
         \\[material]
         \\shader = "shaders/basic"
         \\
-        \\[textures]
-        \\albedo = "textures/test_albedo.png"
-        \\normal = "textures/test_normal.png"
+        \\[texture.albedo]
+        \\path = "textures/test_albedo.png"
         \\
-        \\[params]
-        \\u_roughness = 0.5
-        \\u_light_dir = [0.5, 1.0, 0.3]
-        \\u_light_color = [1.0, 0.95, 0.9]
+        \\[texture.normal]
+        \\path = "textures/test_normal.png"
+        \\
+        \\[param.u_roughness]
+        \\value = 0.5
+        \\
+        \\[param.u_light_dir]
+        \\value = [0.5, 1.0, 0.3]
+        \\
+        \\[param.u_light_color]
+        \\value = [1.0, 0.95, 0.9]
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);
@@ -641,5 +609,5 @@ test "parseMaterialSource parses full example" {
     try testing.expectEqualStrings("shaders/basic", source.shader_path);
     try testing.expectEqual(@as(usize, 2), source.textures.len);
     try testing.expectEqual(@as(usize, 3), source.params.len);
-    try testing.expectEqual(AlphaMode.solid, source.alpha_mode);
+    try testing.expectEqual(AlphaMode.solid, source.render_state.alpha_mode);
 }

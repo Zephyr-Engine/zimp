@@ -359,10 +359,10 @@ test "material cooker writes zamat" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[textures]
-        \\albedo = "textures/missing.png"
-        \\[params]
-        \\u_roughness = 0.5
+        \\[texture.albedo]
+        \\path = "textures/missing.png"
+        \\[param.u_roughness]
+        \\value = 0.5
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -402,8 +402,8 @@ test "material cooker rejects params missing from shader reflection" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[params]
-        \\u_missing = 0.5
+        \\[param.u_missing]
+        \\value = 0.5
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -421,8 +421,8 @@ test "material cooker rejects param type mismatch" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[params]
-        \\u_roughness = [1.0, 2.0]
+        \\[param.u_roughness]
+        \\value = [1.0, 2.0]
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -446,8 +446,8 @@ test "material cooker selects declared variants from material contents" {
         \\shader = "shaders/basic"
         \\[render_state]
         \\alpha_mode = "alpha_test"
-        \\[textures]
-        \\normal = "textures/missing.png"
+        \\[texture.normal]
+        \\path = "textures/missing.png"
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");

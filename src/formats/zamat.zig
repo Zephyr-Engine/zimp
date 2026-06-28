@@ -555,13 +555,16 @@ test "Zamat write lays out offsets and size" {
     var cooked = try cookedFromSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[textures]
-        \\albedo = "textures/test_albedo.png"
-        \\normal = "textures/test_normal.png"
-        \\[params]
-        \\u_roughness = 0.5
-        \\u_light_dir = [0.5, 1.0, 0.3]
-        \\u_light_color = [1.0, 0.95, 0.9]
+        \\[texture.albedo]
+        \\path = "textures/test_albedo.png"
+        \\[texture.normal]
+        \\path = "textures/test_normal.png"
+        \\[param.u_roughness]
+        \\value = 0.5
+        \\[param.u_light_dir]
+        \\value = [0.5, 1.0, 0.3]
+        \\[param.u_light_color]
+        \\value = [1.0, 0.95, 0.9]
         \\
     );
     defer cooked.deinit(testing.allocator);
@@ -591,12 +594,14 @@ test "Zamat write and read round trips" {
     var cooked = try cookedFromSource(
         \\[material]
         \\shader = "shaders/basic"
+        \\[render_state]
         \\alpha_mode = "alpha_test"
-        \\[textures]
-        \\albedo = "textures/test_albedo.png"
-        \\[params]
-        \\u_enabled = true
-        \\u_mode = 2
+        \\[texture.albedo]
+        \\path = "textures/test_albedo.png"
+        \\[param.u_enabled]
+        \\value = true
+        \\[param.u_mode]
+        \\value = 2
         \\
     );
     defer cooked.deinit(testing.allocator);

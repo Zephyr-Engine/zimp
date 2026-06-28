@@ -104,11 +104,6 @@ pub const CookedMaterial = struct {
     runtime_paths: []u8,
 
     pub fn cook(allocator: std.mem.Allocator, source: *const raw_material.MaterialSource) !CookedMaterial {
-        var render_state = source.render_state;
-        if (render_state.alpha_mode == .solid and source.alpha_mode != .solid) {
-            render_state.alpha_mode = source.alpha_mode;
-        }
-
         const texture_slots = try allocator.alloc(TextureSlotEntry, source.textures.len);
         errdefer allocator.free(texture_slots);
         var runtime_paths: std.ArrayList(u8) = .empty;
@@ -174,8 +169,8 @@ pub const CookedMaterial = struct {
             .fragment_shader_path = owned_runtime_paths[fragment_start..][0..fragment_shader_path.len],
             .fragment_shader_path_offset = fragment_shader_path_offset,
             .fragment_shader_path_len = @intCast(fragment_shader_path.len),
-            .alpha_mode = render_state.alpha_mode,
-            .render_state = render_state,
+            .alpha_mode = source.render_state.alpha_mode,
+            .render_state = source.render_state,
             .required_variants = required_variants,
             .texture_slots = texture_slots,
             .param_entries = params.entries,
@@ -346,20 +341,4 @@ test "buildParamDataBlock packs params and offsets" {
     try testing.expectEqual(ParamType.vec2, result.entries[1].param_type);
     try testing.expectEqual(@as(u32, @bitCast(@as(f32, 0.5))), std.mem.readInt(u32, result.data[0..4], .little));
     try testing.expectEqual(@as(u32, @bitCast(@as(f32, 2.0))), std.mem.readInt(u32, result.data[4..8], .little));
-}
-
-test "CookedMaterial cook honors legacy alpha_mode field" {
-    const source = raw_material.MaterialSource{
-        .shader_path = "shaders/basic",
-        .alpha_mode = .alpha_blend,
-        .render_state = .{},
-        .textures = &.{},
-        .params = &.{},
-    };
-
-    var cooked = try CookedMaterial.cook(testing.allocator, &source);
-    defer cooked.deinit(testing.allocator);
-
-    try testing.expectEqual(AlphaMode.alpha_blend, cooked.alpha_mode);
-    try testing.expectEqual(AlphaMode.alpha_blend, cooked.render_state.alpha_mode);
 }

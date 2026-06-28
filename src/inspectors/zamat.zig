@@ -23,7 +23,7 @@ fn cullModeName(mode: zamat.CullMode) []const u8 {
 
 fn blendModeName(mode: zamat.BlendMode) []const u8 {
     return switch (mode) {
-        .disabled => "opaque",
+        .disabled => "disabled",
         .alpha => "alpha",
         .premultiplied_alpha => "premultiplied_alpha",
     };
@@ -266,10 +266,10 @@ test "inspectZamat runs on a valid material file" {
     var parsed = try raw_material.parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[textures]
-        \\albedo = "textures/test_albedo.png"
-        \\[params]
-        \\u_roughness = 0.5
+        \\[texture.albedo]
+        \\path = "textures/test_albedo.png"
+        \\[param.u_roughness]
+        \\value = 0.5
         \\
     , testing.allocator);
     defer parsed.deinit(testing.allocator);
