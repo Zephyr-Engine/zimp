@@ -205,19 +205,46 @@ Binary material definitions referencing cooked shaders and textures by path hash
 ```toml
 [material]
 shader = "shaders/pbr_standard"
+
+[render_state]
 alpha_mode = "solid"
+alpha_cutoff = 0.5
+double_sided = false
+cull_mode = "back"
+depth_test = true
+depth_write = true
+blend_mode = "disabled"
 
-[textures]
-albedo = "textures/brick_albedo.png"
-normal = "textures/brick_normal.png"
-roughness_metallic = "textures/brick_rm.png"
+[texture.albedo]
+path = "textures/brick_albedo.png"
+resource = "u_albedo"
+set = 0
+binding = 0
 
-[params]
-u_uv_scale = [2.0, 2.0]
-u_emissive_strength = 0.0
+[texture.normal]
+path = "textures/brick_normal.png"
+resource = "u_normal_map"
+set = 0
+binding = 1
+
+[texture.roughness_metallic]
+path = "textures/brick_rm.png"
+resource = "u_roughness_metallic_map"
+set = 0
+binding = 6
+
+[param.u_uv_scale]
+value = [2.0, 2.0]
+set = 1
+binding = 0
+
+[param.u_emissive_strength]
+value = 0.0
+set = 1
+binding = 1
 ```
 
-`[material]` holds metadata. `shader` is a base path that resolves to `<shader>.vert` and `<shader>.frag`; `alpha_mode` defaults to `solid` and may be `solid`, `alpha_test`, or `alpha_blend`. `[textures]` maps engine slot names to source texture paths; standard slots are `albedo`, `normal`, `roughness`, `metallic`, `ao`, `emissive`, `roughness_metallic`, and `orm`. `[params]` maps exact shader uniform names to scalar, boolean, vec2, vec3, or vec4 literals.
+`[material]` holds metadata. `shader` is a base path that resolves to `<shader>.vert` and `<shader>.frag`; `[render_state]` stores draw-state such as alpha mode, culling, depth, and blending. Each `[texture.<slot>]` maps one semantic texture slot to a source texture path, an exact shader sampler `resource`, and binding metadata; standard slots are `albedo`, `normal`, `roughness`, `metallic`, `ao`, `emissive`, `roughness_metallic`, and `orm`, but custom slots are valid when `resource` names a reflected sampler. Each `[param.<uniform>]` maps one exact shader uniform name to a scalar, boolean, vec2, vec3, or vec4 literal plus binding metadata.
 
 When `.glb` or `.gltf` files contain materials, zimp auto-generates material source files under `generated/materials/` and embedded image files under `generated/textures/`, then rescans so they cook in the same run. Hand-written files in `materials/` with the same generated filename take priority and are never overwritten. GLTF PBR fields map to standard slots and uniforms: base color texture to `albedo`, metallic-roughness texture to `roughness_metallic`, normal to `normal`, occlusion to `ao`, emissive texture to `emissive`, and factors to `u_base_color`, `u_metallic`, `u_roughness`, and `u_emissive`.
 

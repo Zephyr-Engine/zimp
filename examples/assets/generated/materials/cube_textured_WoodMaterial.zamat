@@ -1,15 +1,43 @@
 # Auto-generated from meshes/cube_textured.glb - WoodMaterial
 [material]
 shader = "shaders/basic"
+
+[render_state]
 alpha_mode = "solid"
+alpha_cutoff = 0.5
+double_sided = false
+cull_mode = "back"
+depth_test = true
+depth_write = true
+blend_mode = "disabled"
 
-[textures]
-albedo = "generated/textures/cube_textured_albedo.png"
-roughness_metallic = "generated/textures/cube_textured_roughness.png"
-normal = "generated/textures/cube_textured_normal.png"
+[texture.albedo]
+path = "generated/textures/cube_textured_albedo.png"
+resource = "u_albedo"
+binding = 0
 
-[params]
-u_base_color = [1, 1, 1, 1]
-u_metallic = 0.000000
-u_roughness = 1.000000
-u_emissive = [0, 0, 0]
+[texture.roughness_metallic]
+path = "generated/textures/cube_textured_roughness.png"
+resource = "u_roughness_metallic_map"
+binding = 6
+
+[texture.normal]
+path = "generated/textures/cube_textured_normal.png"
+resource = "u_normal_map"
+binding = 1
+
+[param.u_base_color]
+value = [1, 1, 1, 1]
+binding = 0
+
+[param.u_metallic]
+value = 0.000000
+binding = 1
+
+[param.u_roughness]
+value = 1.000000
+binding = 2
+
+[param.u_emissive]
+value = [0, 0, 0]
+binding = 3

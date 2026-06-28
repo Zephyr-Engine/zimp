@@ -13,6 +13,22 @@ fn alphaModeName(mode: zamat.AlphaMode) []const u8 {
     };
 }
 
+fn cullModeName(mode: zamat.CullMode) []const u8 {
+    return switch (mode) {
+        .none => "none",
+        .front => "front",
+        .back => "back",
+    };
+}
+
+fn blendModeName(mode: zamat.BlendMode) []const u8 {
+    return switch (mode) {
+        .disabled => "disabled",
+        .alpha => "alpha",
+        .premultiplied_alpha => "premultiplied_alpha",
+    };
+}
+
 fn paramTypeName(param_type: zamat.ParamType) []const u8 {
     return switch (param_type) {
         .float => "float",
@@ -32,9 +48,13 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("  Magic:       {s}", .{zamat.MAGIC});
     log.info("  Version:     {d}", .{header.version});
     log.info("  Shader hash: 0x{x:0>16}", .{header.shader_path_hash});
-    log.info("  Alpha mode:  {s}", .{alphaModeName(header.alpha_mode)});
+    log.info("  Alpha mode:  {s}", .{alphaModeName(header.render_state.alpha_mode)});
+    log.info("  Alpha cut:   {d}", .{header.render_state.alpha_cutoff});
+    log.info("  Cull mode:   {s}", .{cullModeName(header.render_state.cull_mode)});
+    log.info("  Blend mode:  {s}", .{blendModeName(header.render_state.blend_mode)});
     log.info("  Textures:    {d}", .{header.texture_slot_count});
     log.info("  Params:      {d}", .{header.param_count});
+    log.info("  Variants:    {d}", .{header.variant_count});
 
     var texture_entries: [32]zamat.TextureSlotEntry = undefined;
     if (header.texture_slot_count > texture_entries.len) return error.TooManyTextureSlots;
@@ -47,11 +67,38 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .slot_name_hash = try reader.takeInt(u64, .little),
             .texture_path_hash = try reader.takeInt(u64, .little),
             .slot_index = try reader.takeInt(u16, .little),
+            .shader_set = try reader.takeInt(u16, .little),
+            .shader_binding = try reader.takeInt(u16, .little),
+            .uv_set = try reader.takeInt(u16, .little),
+            .resource_name = undefined,
+            .resource_name_offset = try reader.takeInt(u16, .little),
+            .resource_name_len = try reader.takeInt(u16, .little),
             .cooked_path = undefined,
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
+            .sampler = .{
+                .min_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .mag_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .mip_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .wrap_s = @enumFromInt(try reader.takeInt(u8, .little)),
+                .wrap_t = @enumFromInt(try reader.takeInt(u8, .little)),
+                .max_anisotropy = undefined,
+            },
+            .uv_offset = undefined,
+            .uv_scale = undefined,
+            .uv_rotation = undefined,
+            .normal_scale = undefined,
+            .occlusion_strength = undefined,
         };
-        _ = try reader.takeInt(u16, .little);
+        _ = try reader.takeInt(u8, .little);
+        texture_entries[i].sampler.max_anisotropy = try readF32FromReader(reader);
+        texture_entries[i].uv_offset = .{ try readF32FromReader(reader), try readF32FromReader(reader) };
+        texture_entries[i].uv_scale = .{ try readF32FromReader(reader), try readF32FromReader(reader) };
+        texture_entries[i].uv_rotation = try readF32FromReader(reader);
+        texture_entries[i].normal_scale = try readF32FromReader(reader);
+        texture_entries[i].occlusion_strength = try readF32FromReader(reader);
+        const resource_name_end = @as(usize, texture_entries[i].resource_name_offset) + texture_entries[i].resource_name_len;
+        if (resource_name_end > runtime_paths_len) runtime_paths_len = resource_name_end;
         const cooked_path_end = @as(usize, texture_entries[i].cooked_path_offset) + texture_entries[i].cooked_path_len;
         if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
     }
@@ -72,6 +119,8 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .name_offset = try reader.takeInt(u16, .little),
             .name_len = try reader.takeInt(u16, .little),
             .param_type = @enumFromInt(try reader.takeInt(u16, .little)),
+            .shader_set = try reader.takeInt(u16, .little),
+            .shader_binding = try reader.takeInt(u16, .little),
             .data_offset = try reader.takeInt(u16, .little),
             .data_size = try reader.takeInt(u16, .little),
         };
@@ -81,6 +130,18 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         if (end > param_data_len) param_data_len = end;
         const name_end = @as(usize, entries[i].name_offset) + entries[i].name_len;
         if (name_end > param_name_len) param_name_len = name_end;
+    }
+
+    var variant_entries: [64]struct { name_offset: u16, name_len: u16 } = undefined;
+    if (header.variant_count > variant_entries.len) return error.TooManyVariants;
+    var variant_name_len: usize = 0;
+    for (0..header.variant_count) |i| {
+        variant_entries[i] = .{
+            .name_offset = try reader.takeInt(u16, .little),
+            .name_len = try reader.takeInt(u16, .little),
+        };
+        const name_end = @as(usize, variant_entries[i].name_offset) + variant_entries[i].name_len;
+        if (name_end > variant_name_len) variant_name_len = name_end;
     }
 
     var param_data_buf: [4096]u8 = undefined;
@@ -93,6 +154,11 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     const param_names = param_name_buf[0..param_name_len];
     try reader.readSliceAll(param_names);
 
+    var variant_name_buf: [4096]u8 = undefined;
+    if (variant_name_len > variant_name_buf.len) return error.VariantNamesTooLarge;
+    const variant_names = variant_name_buf[0..variant_name_len];
+    try reader.readSliceAll(variant_names);
+
     var runtime_path_buf: [4096]u8 = undefined;
     if (runtime_paths_len > runtime_path_buf.len) return error.RuntimePathsTooLarge;
     const runtime_paths = runtime_path_buf[0..runtime_paths_len];
@@ -104,17 +170,27 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("  Fragment: {s}", .{runtime_paths[header.fragment_shader_path_offset..][0..header.fragment_shader_path_len]});
 
     log.info("", .{});
+    log.info("Required Variants:", .{});
+    for (0..header.variant_count) |i| {
+        const entry = variant_entries[i];
+        log.info("  {s}", .{variant_names[entry.name_offset..][0..entry.name_len]});
+    }
+
+    log.info("", .{});
     log.info("Texture Slots:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >10}  {s}", .{ "index", "slot_hash", "texture_hash", "slot_unit", "cooked_path" });
-    log.info("  {s}", .{"-" ** 86});
+    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >5}  {s: >7}  {s: <24}  {s}", .{ "index", "slot_hash", "texture_hash", "set", "binding", "resource", "cooked_path" });
+    log.info("  {s}", .{"-" ** 112});
     for (0..header.texture_slot_count) |i| {
         var entry = texture_entries[i];
+        entry.resource_name = runtime_paths[entry.resource_name_offset..][0..entry.resource_name_len];
         entry.cooked_path = runtime_paths[entry.cooked_path_offset..][0..entry.cooked_path_len];
-        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >10}  {s}", .{
+        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >5}  {d: >7}  {s: <24}  {s}", .{
             i,
             entry.slot_name_hash,
             entry.texture_path_hash,
-            entry.slot_index,
+            entry.shader_set,
+            entry.shader_binding,
+            entry.resource_name,
             entry.cooked_path,
         });
     }
@@ -143,11 +219,13 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     var total_buf: [16]u8 = undefined;
     const texture_table_size = @as(u64, @intCast(header.texture_slot_count)) * zamat.TEXTURE_SLOT_ENTRY_SIZE;
     const param_table_size = @as(u64, @intCast(header.param_count)) * zamat.PARAM_ENTRY_SIZE;
-    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + param_data_len + param_name_len + runtime_paths_len;
+    const variant_table_size = @as(u64, @intCast(header.variant_count)) * zamat.VARIANT_ENTRY_SIZE;
+    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + variant_table_size + param_data_len + param_name_len + variant_name_len + runtime_paths_len;
     log.info("File Size Summary:", .{});
     log.info("  Header:         {s: >10}", .{fmt.formatBytes(&header_buf, zamat.HEADER_SIZE)});
     log.info("  Texture table:  {s: >10}", .{fmt.formatBytes(&texture_buf, texture_table_size)});
     log.info("  Param table:    {s: >10}", .{fmt.formatBytes(&param_buf, param_table_size)});
+    log.info("  Variant table:  {s: >10}", .{fmt.formatBytes(&param_buf, variant_table_size)});
     log.info("  Param data:     {s: >10}", .{fmt.formatBytes(&data_buf, param_data_len)});
     log.info("  Param names:    {s: >10}", .{fmt.formatBytes(&name_buf, param_name_len)});
     log.info("  Runtime paths:  {s: >10}", .{fmt.formatBytes(&runtime_buf, runtime_paths_len)});
@@ -174,6 +252,10 @@ fn readF32(bytes: *const [4]u8) f32 {
     return @bitCast(std.mem.readInt(u32, bytes, .little));
 }
 
+fn readF32FromReader(reader: *std.Io.Reader) !f32 {
+    return @bitCast(try reader.takeInt(u32, .little));
+}
+
 pub fn inspector() FormatInspector {
     return .{ .inspectFn = inspectZamat };
 }
@@ -191,10 +273,11 @@ test "inspectZamat runs on a valid material file" {
     var parsed = try raw_material.parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[textures]
-        \\albedo = "textures/test_albedo.png"
-        \\[params]
-        \\u_roughness = 0.5
+        \\[texture.albedo]
+        \\path = "textures/test_albedo.png"
+        \\resource = "u_albedo"
+        \\[param.u_roughness]
+        \\value = 0.5
         \\
     , testing.allocator);
     defer parsed.deinit(testing.allocator);

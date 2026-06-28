@@ -75,13 +75,30 @@ pub const VariantKey = formats.zshdr.VariantKey;
 pub const CookedShader = assets.cooked.shader.CookedShader;
 pub const Zamat = formats.zamat.Zamat;
 pub const ZamatHeader = formats.zamat.ZamatHeader;
+pub const LoadedMaterial = formats.zamat.Material;
+pub const loadMaterial = formats.zamat.loadMaterial;
 pub const AlphaMode = assets.cooked.material.AlphaMode;
+pub const CullMode = assets.cooked.material.CullMode;
+pub const BlendMode = assets.cooked.material.BlendMode;
+pub const FilterMode = assets.cooked.material.FilterMode;
+pub const MipFilterMode = assets.cooked.material.MipFilterMode;
+pub const WrapMode = assets.cooked.material.WrapMode;
+pub const SamplerDesc = assets.cooked.material.SamplerDesc;
+pub const RenderState = assets.cooked.material.RenderState;
 pub const TextureSlotIndex = assets.cooked.material.TextureSlotIndex;
+pub const slotNameToIndex = assets.cooked.material.slotNameToIndex;
 pub const TextureSlotEntry = assets.cooked.material.TextureSlotEntry;
 pub const ParamType = assets.cooked.material.ParamType;
 pub const ParamEntry = assets.cooked.material.ParamEntry;
+pub const ParamBuildResult = assets.cooked.material.ParamBuildResult;
 pub const CookedMaterial = assets.cooked.material.CookedMaterial;
+pub const MaterialSource = assets.raw.material.MaterialSource;
+pub const TextureSlot = assets.raw.material.TextureSlot;
+pub const ParamValue = assets.raw.material.ParamValue;
+pub const parseMaterialSource = assets.raw.material.parseMaterialSource;
+pub const parseAlphaMode = assets.raw.material.parseAlphaMode;
 pub const mesh = assets.cooked.mesh;
+pub const material = assets.cooked.material;
 
 const asset = @import("assets/asset.zig");
 pub const AssetType = asset.AssetType;
@@ -103,7 +120,26 @@ test "public API exposes format and asset construction types" {
     _ = CookedShader;
     _ = CookedMaterial;
     _ = AlphaMode;
+    _ = CullMode;
+    _ = BlendMode;
+    _ = FilterMode;
+    _ = MipFilterMode;
+    _ = WrapMode;
+    _ = SamplerDesc;
+    _ = RenderState;
+    _ = TextureSlotIndex;
+    _ = slotNameToIndex;
+    _ = TextureSlotEntry;
     _ = ParamType;
+    _ = ParamEntry;
+    _ = ParamBuildResult;
+    _ = MaterialSource;
+    _ = TextureSlot;
+    _ = ParamValue;
+    _ = parseMaterialSource;
+    _ = parseAlphaMode;
+    _ = LoadedMaterial;
+    _ = loadMaterial;
 }
 
 test {

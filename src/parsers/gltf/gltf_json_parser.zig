@@ -32,6 +32,7 @@ pub const GltfJson = struct {
     buffers: []GltfBuffer = &.{},
     materials: []GltfMaterial = &.{},
     textures: []GltfTexture = &.{},
+    samplers: []GltfSampler = &.{},
     images: []GltfImage = &.{},
 };
 
@@ -189,6 +190,8 @@ pub const GltfMaterial = struct {
     emissiveTexture: ?GltfTextureInfo = null,
     emissiveFactor: ?[3]f32 = null,
     alphaMode: ?[]const u8 = null,
+    alphaCutoff: f32 = 0.5,
+    doubleSided: bool = false,
 };
 
 pub const GltfPbr = struct {
@@ -203,11 +206,19 @@ pub const GltfTextureInfo = struct {
     index: u32,
     texCoord: u32 = 0,
     scale: ?f32 = null,
+    strength: ?f32 = null,
 };
 
 pub const GltfTexture = struct {
     source: ?u32 = null,
     sampler: ?u32 = null,
+};
+
+pub const GltfSampler = struct {
+    magFilter: ?u32 = null,
+    minFilter: ?u32 = null,
+    wrapS: u32 = 10497,
+    wrapT: u32 = 10497,
 };
 
 pub const GltfImage = struct {
@@ -437,10 +448,12 @@ test "parse materials with pbr" {
         \\    "metallicRoughnessTexture":{"index":2}
         \\  },
         \\  "normalTexture":{"index":1,"scale":1.0},
-        \\  "occlusionTexture":{"index":3},
+        \\  "occlusionTexture":{"index":3,"strength":0.4},
         \\  "emissiveTexture":{"index":4},
         \\  "emissiveFactor":[0.0,0.0,0.0],
-        \\  "alphaMode":"OPAQUE"
+        \\  "alphaMode":"MASK",
+        \\  "alphaCutoff":0.33,
+        \\  "doubleSided":true
         \\}]}
     , testing.allocator);
     defer gltf.deinit();
@@ -448,7 +461,9 @@ test "parse materials with pbr" {
     try testing.expectEqual(1, gltf.value.materials.len);
     const mat = gltf.value.materials[0];
     try testing.expectEqualStrings("WoodMaterial", mat.name.?);
-    try testing.expectEqualStrings("OPAQUE", mat.alphaMode.?);
+    try testing.expectEqualStrings("MASK", mat.alphaMode.?);
+    try testing.expectEqual(@as(f32, 0.33), mat.alphaCutoff);
+    try testing.expect(mat.doubleSided);
     try testing.expectEqual([3]f32{ 0.0, 0.0, 0.0 }, mat.emissiveFactor.?);
 
     const pbr = mat.pbrMetallicRoughness.?;
@@ -463,6 +478,7 @@ test "parse materials with pbr" {
     try testing.expectEqual(@as(f32, 1.0), normal.scale.?);
     try testing.expectEqual(0, normal.texCoord);
     try testing.expectEqual(3, mat.occlusionTexture.?.index);
+    try testing.expectEqual(@as(f32, 0.4), mat.occlusionTexture.?.strength.?);
     try testing.expectEqual(4, mat.emissiveTexture.?.index);
 }
 
@@ -498,7 +514,7 @@ test "parse material with no pbr" {
 
 test "parse textures" {
     var gltf = try Gltf.parse(
-        \\{"textures":[{"source":0,"sampler":0},{"source":1},{}]}
+        \\{"textures":[{"source":0,"sampler":0},{"source":1},{}],"samplers":[{"magFilter":9728,"minFilter":9984,"wrapS":33071,"wrapT":33648}]}
     , testing.allocator);
     defer gltf.deinit();
 
@@ -508,6 +524,11 @@ test "parse textures" {
     try testing.expectEqual(1, gltf.value.textures[1].source.?);
     try testing.expectEqual(null, gltf.value.textures[1].sampler);
     try testing.expectEqual(null, gltf.value.textures[2].source);
+    try testing.expectEqual(@as(usize, 1), gltf.value.samplers.len);
+    try testing.expectEqual(@as(u32, 9728), gltf.value.samplers[0].magFilter.?);
+    try testing.expectEqual(@as(u32, 9984), gltf.value.samplers[0].minFilter.?);
+    try testing.expectEqual(@as(u32, 33071), gltf.value.samplers[0].wrapS);
+    try testing.expectEqual(@as(u32, 33648), gltf.value.samplers[0].wrapT);
 }
 
 test "parse images with buffer view" {

@@ -4,6 +4,13 @@ const source_file = @import("../source_file.zig");
 const raw_material = @import("../raw/material.zig");
 
 pub const AlphaMode = raw_material.AlphaMode;
+pub const CullMode = raw_material.CullMode;
+pub const BlendMode = raw_material.BlendMode;
+pub const FilterMode = raw_material.FilterMode;
+pub const MipFilterMode = raw_material.MipFilterMode;
+pub const WrapMode = raw_material.WrapMode;
+pub const SamplerDesc = raw_material.SamplerDesc;
+pub const RenderState = raw_material.RenderState;
 pub const Hash = source_file.Hash;
 
 pub const TextureSlotIndex = enum(u16) {
@@ -42,6 +49,18 @@ pub const TextureSlotEntry = struct {
     slot_name_hash: Hash,
     texture_path_hash: Hash,
     slot_index: u16,
+    shader_set: u16,
+    shader_binding: u16,
+    uv_set: u16,
+    uv_offset: [2]f32,
+    uv_scale: [2]f32,
+    uv_rotation: f32,
+    sampler: SamplerDesc,
+    normal_scale: f32,
+    occlusion_strength: f32,
+    resource_name: []const u8,
+    resource_name_offset: u16,
+    resource_name_len: u16,
     cooked_path: []const u8,
     cooked_path_offset: u16,
     cooked_path_len: u16,
@@ -52,6 +71,8 @@ pub const ParamEntry = struct {
     name_offset: u16,
     name_len: u16,
     param_type: ParamType,
+    shader_set: u16,
+    shader_binding: u16,
     data_offset: u16,
     data_size: u16,
 };
@@ -76,7 +97,8 @@ pub const CookedMaterial = struct {
     fragment_shader_path: []const u8,
     fragment_shader_path_offset: u16,
     fragment_shader_path_len: u16,
-    alpha_mode: AlphaMode,
+    render_state: RenderState,
+    required_variants: []const []const u8,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
@@ -105,11 +127,24 @@ pub const CookedMaterial = struct {
         for (source.textures, texture_slots) |slot, *entry| {
             const cooked_texture_path = try textureCookedPath(allocator, slot.texture_path);
             defer allocator.free(cooked_texture_path);
+            const resource_name_offset = try appendRuntimePath(&runtime_paths, allocator, slot.resource_name);
             const cooked_path_offset = try appendRuntimePath(&runtime_paths, allocator, cooked_texture_path);
             entry.* = .{
                 .slot_name_hash = source_file.fnv1a(slot.slot_name),
                 .texture_path_hash = source_file.fnv1a(slot.texture_path),
                 .slot_index = if (slotNameToIndex(slot.slot_name)) |idx| @intFromEnum(idx) else std.math.maxInt(u16),
+                .shader_set = slot.shader_set,
+                .shader_binding = slot.shader_binding,
+                .uv_set = slot.uv_set,
+                .uv_offset = slot.uv_offset,
+                .uv_scale = slot.uv_scale,
+                .uv_rotation = slot.uv_rotation,
+                .sampler = slot.sampler,
+                .normal_scale = slot.normal_scale,
+                .occlusion_strength = slot.occlusion_strength,
+                .resource_name = runtime_paths.items[resource_name_offset..][0..slot.resource_name.len],
+                .resource_name_offset = resource_name_offset,
+                .resource_name_len = @intCast(slot.resource_name.len),
                 .cooked_path = runtime_paths.items[cooked_path_offset..][0..cooked_texture_path.len],
                 .cooked_path_offset = cooked_path_offset,
                 .cooked_path_len = @intCast(cooked_texture_path.len),
@@ -119,12 +154,17 @@ pub const CookedMaterial = struct {
         var params = try buildParamDataBlock(source.params, allocator);
         errdefer params.deinit(allocator);
 
+        const required_variants = try dupeStringList(allocator, source.required_variants);
+        errdefer freeStringList(allocator, required_variants);
+
         const owned_runtime_paths = try runtime_paths.toOwnedSlice(allocator);
         errdefer allocator.free(owned_runtime_paths);
 
         const vertex_start: usize = vertex_shader_path_offset;
         const fragment_start: usize = fragment_shader_path_offset;
         for (texture_slots) |*entry| {
+            const resource_start: usize = entry.resource_name_offset;
+            entry.resource_name = owned_runtime_paths[resource_start..][0..entry.resource_name_len];
             const start: usize = entry.cooked_path_offset;
             entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
         }
@@ -137,7 +177,8 @@ pub const CookedMaterial = struct {
             .fragment_shader_path = owned_runtime_paths[fragment_start..][0..fragment_shader_path.len],
             .fragment_shader_path_offset = fragment_shader_path_offset,
             .fragment_shader_path_len = @intCast(fragment_shader_path.len),
-            .alpha_mode = source.alpha_mode,
+            .render_state = source.render_state,
+            .required_variants = required_variants,
             .texture_slots = texture_slots,
             .param_entries = params.entries,
             .param_data = params.data,
@@ -148,12 +189,33 @@ pub const CookedMaterial = struct {
 
     pub fn deinit(self: *CookedMaterial, allocator: std.mem.Allocator) void {
         allocator.free(self.texture_slots);
+        freeStringList(allocator, self.required_variants);
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
         allocator.free(self.param_names);
         allocator.free(self.runtime_paths);
     }
 };
+
+fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, strings.len);
+    errdefer allocator.free(out);
+
+    var loaded: usize = 0;
+    errdefer for (out[0..loaded]) |item| allocator.free(item);
+
+    for (strings, 0..) |value, i| {
+        out[i] = try allocator.dupe(u8, value);
+        loaded += 1;
+    }
+
+    return out;
+}
+
+fn freeStringList(allocator: std.mem.Allocator, strings: []const []const u8) void {
+    for (strings) |value| allocator.free(value);
+    allocator.free(strings);
+}
 
 fn shaderCookedPath(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}.zshdr", .{std.fs.path.basename(source_path)});
@@ -197,6 +259,8 @@ pub fn buildParamDataBlock(params: []const raw_material.ParamValue, allocator: s
             .name_offset = name_offset,
             .name_len = @intCast(param.name.len),
             .param_type = param_type,
+            .shader_set = param.shader_set,
+            .shader_binding = param.shader_binding,
             .data_offset = data_offset,
             .data_size = @intCast(size),
         });
