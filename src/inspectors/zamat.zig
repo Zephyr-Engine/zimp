@@ -13,6 +13,22 @@ fn alphaModeName(mode: zamat.AlphaMode) []const u8 {
     };
 }
 
+fn cullModeName(mode: zamat.CullMode) []const u8 {
+    return switch (mode) {
+        .none => "none",
+        .front => "front",
+        .back => "back",
+    };
+}
+
+fn blendModeName(mode: zamat.BlendMode) []const u8 {
+    return switch (mode) {
+        .@"opaque" => "opaque",
+        .alpha => "alpha",
+        .premultiplied_alpha => "premultiplied_alpha",
+    };
+}
+
 fn paramTypeName(param_type: zamat.ParamType) []const u8 {
     return switch (param_type) {
         .float => "float",
@@ -32,7 +48,10 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("  Magic:       {s}", .{zamat.MAGIC});
     log.info("  Version:     {d}", .{header.version});
     log.info("  Shader hash: 0x{x:0>16}", .{header.shader_path_hash});
-    log.info("  Alpha mode:  {s}", .{alphaModeName(header.alpha_mode)});
+    log.info("  Alpha mode:  {s}", .{alphaModeName(header.render_state.alpha_mode)});
+    log.info("  Alpha cut:   {d}", .{header.render_state.alpha_cutoff});
+    log.info("  Cull mode:   {s}", .{cullModeName(header.render_state.cull_mode)});
+    log.info("  Blend mode:  {s}", .{blendModeName(header.render_state.blend_mode)});
     log.info("  Textures:    {d}", .{header.texture_slot_count});
     log.info("  Params:      {d}", .{header.param_count});
 
@@ -47,11 +66,33 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .slot_name_hash = try reader.takeInt(u64, .little),
             .texture_path_hash = try reader.takeInt(u64, .little),
             .slot_index = try reader.takeInt(u16, .little),
+            .shader_set = try reader.takeInt(u16, .little),
+            .shader_binding = try reader.takeInt(u16, .little),
+            .uv_set = try reader.takeInt(u16, .little),
             .cooked_path = undefined,
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
+            .sampler = .{
+                .min_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .mag_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .mip_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .wrap_s = @enumFromInt(try reader.takeInt(u8, .little)),
+                .wrap_t = @enumFromInt(try reader.takeInt(u8, .little)),
+                .max_anisotropy = undefined,
+            },
+            .uv_offset = undefined,
+            .uv_scale = undefined,
+            .uv_rotation = undefined,
+            .normal_scale = undefined,
+            .occlusion_strength = undefined,
         };
-        _ = try reader.takeInt(u16, .little);
+        _ = try reader.takeInt(u8, .little);
+        texture_entries[i].sampler.max_anisotropy = try readF32FromReader(reader);
+        texture_entries[i].uv_offset = .{ try readF32FromReader(reader), try readF32FromReader(reader) };
+        texture_entries[i].uv_scale = .{ try readF32FromReader(reader), try readF32FromReader(reader) };
+        texture_entries[i].uv_rotation = try readF32FromReader(reader);
+        texture_entries[i].normal_scale = try readF32FromReader(reader);
+        texture_entries[i].occlusion_strength = try readF32FromReader(reader);
         const cooked_path_end = @as(usize, texture_entries[i].cooked_path_offset) + texture_entries[i].cooked_path_len;
         if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
     }
@@ -72,6 +113,8 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .name_offset = try reader.takeInt(u16, .little),
             .name_len = try reader.takeInt(u16, .little),
             .param_type = @enumFromInt(try reader.takeInt(u16, .little)),
+            .shader_set = try reader.takeInt(u16, .little),
+            .shader_binding = try reader.takeInt(u16, .little),
             .data_offset = try reader.takeInt(u16, .little),
             .data_size = try reader.takeInt(u16, .little),
         };
@@ -105,16 +148,17 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Texture Slots:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >10}  {s}", .{ "index", "slot_hash", "texture_hash", "slot_unit", "cooked_path" });
+    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >5}  {s: >7}  {s}", .{ "index", "slot_hash", "texture_hash", "set", "binding", "cooked_path" });
     log.info("  {s}", .{"-" ** 86});
     for (0..header.texture_slot_count) |i| {
         var entry = texture_entries[i];
         entry.cooked_path = runtime_paths[entry.cooked_path_offset..][0..entry.cooked_path_len];
-        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >10}  {s}", .{
+        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >5}  {d: >7}  {s}", .{
             i,
             entry.slot_name_hash,
             entry.texture_path_hash,
-            entry.slot_index,
+            entry.shader_set,
+            entry.shader_binding,
             entry.cooked_path,
         });
     }
@@ -172,6 +216,10 @@ fn formatParamValue(buf: []u8, data: []const u8, entry: zamat.ParamEntry) []cons
 
 fn readF32(bytes: *const [4]u8) f32 {
     return @bitCast(std.mem.readInt(u32, bytes, .little));
+}
+
+fn readF32FromReader(reader: *std.Io.Reader) !f32 {
+    return @bitCast(try reader.takeInt(u32, .little));
 }
 
 pub fn inspector() FormatInspector {

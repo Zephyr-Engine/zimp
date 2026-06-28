@@ -4,6 +4,13 @@ const source_file = @import("../source_file.zig");
 const raw_material = @import("../raw/material.zig");
 
 pub const AlphaMode = raw_material.AlphaMode;
+pub const CullMode = raw_material.CullMode;
+pub const BlendMode = raw_material.BlendMode;
+pub const FilterMode = raw_material.FilterMode;
+pub const MipFilterMode = raw_material.MipFilterMode;
+pub const WrapMode = raw_material.WrapMode;
+pub const SamplerDesc = raw_material.SamplerDesc;
+pub const RenderState = raw_material.RenderState;
 pub const Hash = source_file.Hash;
 
 pub const TextureSlotIndex = enum(u16) {
@@ -42,6 +49,15 @@ pub const TextureSlotEntry = struct {
     slot_name_hash: Hash,
     texture_path_hash: Hash,
     slot_index: u16,
+    shader_set: u16,
+    shader_binding: u16,
+    uv_set: u16,
+    uv_offset: [2]f32,
+    uv_scale: [2]f32,
+    uv_rotation: f32,
+    sampler: SamplerDesc,
+    normal_scale: f32,
+    occlusion_strength: f32,
     cooked_path: []const u8,
     cooked_path_offset: u16,
     cooked_path_len: u16,
@@ -52,6 +68,8 @@ pub const ParamEntry = struct {
     name_offset: u16,
     name_len: u16,
     param_type: ParamType,
+    shader_set: u16,
+    shader_binding: u16,
     data_offset: u16,
     data_size: u16,
 };
@@ -77,6 +95,7 @@ pub const CookedMaterial = struct {
     fragment_shader_path_offset: u16,
     fragment_shader_path_len: u16,
     alpha_mode: AlphaMode,
+    render_state: RenderState,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
@@ -110,6 +129,15 @@ pub const CookedMaterial = struct {
                 .slot_name_hash = source_file.fnv1a(slot.slot_name),
                 .texture_path_hash = source_file.fnv1a(slot.texture_path),
                 .slot_index = if (slotNameToIndex(slot.slot_name)) |idx| @intFromEnum(idx) else std.math.maxInt(u16),
+                .shader_set = slot.shader_set,
+                .shader_binding = slot.shader_binding,
+                .uv_set = slot.uv_set,
+                .uv_offset = slot.uv_offset,
+                .uv_scale = slot.uv_scale,
+                .uv_rotation = slot.uv_rotation,
+                .sampler = slot.sampler,
+                .normal_scale = slot.normal_scale,
+                .occlusion_strength = slot.occlusion_strength,
                 .cooked_path = runtime_paths.items[cooked_path_offset..][0..cooked_texture_path.len],
                 .cooked_path_offset = cooked_path_offset,
                 .cooked_path_len = @intCast(cooked_texture_path.len),
@@ -137,7 +165,8 @@ pub const CookedMaterial = struct {
             .fragment_shader_path = owned_runtime_paths[fragment_start..][0..fragment_shader_path.len],
             .fragment_shader_path_offset = fragment_shader_path_offset,
             .fragment_shader_path_len = @intCast(fragment_shader_path.len),
-            .alpha_mode = source.alpha_mode,
+            .alpha_mode = source.render_state.alpha_mode,
+            .render_state = source.render_state,
             .texture_slots = texture_slots,
             .param_entries = params.entries,
             .param_data = params.data,
@@ -197,6 +226,8 @@ pub fn buildParamDataBlock(params: []const raw_material.ParamValue, allocator: s
             .name_offset = name_offset,
             .name_len = @intCast(param.name.len),
             .param_type = param_type,
+            .shader_set = param.shader_set,
+            .shader_binding = param.shader_binding,
             .data_offset = data_offset,
             .data_size = @intCast(size),
         });

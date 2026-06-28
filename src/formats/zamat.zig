@@ -6,9 +6,16 @@ const raw_material = @import("../assets/raw/material.zig");
 const file_read = @import("../shared/file_read.zig");
 
 pub const MAGIC = constants.FORMAT_MAGIC.ZAMAT;
-pub const ZAMAT_VERSION: u32 = 1;
+pub const ZAMAT_VERSION: u32 = 2;
 
 pub const AlphaMode = cooked_material.AlphaMode;
+pub const CullMode = cooked_material.CullMode;
+pub const BlendMode = cooked_material.BlendMode;
+pub const FilterMode = cooked_material.FilterMode;
+pub const MipFilterMode = cooked_material.MipFilterMode;
+pub const WrapMode = cooked_material.WrapMode;
+pub const SamplerDesc = cooked_material.SamplerDesc;
+pub const RenderState = cooked_material.RenderState;
 pub const TextureSlotEntry = cooked_material.TextureSlotEntry;
 pub const ParamEntry = cooked_material.ParamEntry;
 pub const ParamType = cooked_material.ParamType;
@@ -17,13 +24,29 @@ pub const CookedMaterial = cooked_material.CookedMaterial;
 pub const TEXTURE_SLOT_ENTRY_SIZE: u32 = @sizeOf(u64) // slot_name_hash
     + @sizeOf(u64) // texture_path_hash
     + @sizeOf(u16) // slot_index
+    + @sizeOf(u16) // shader_set
+    + @sizeOf(u16) // shader_binding
+    + @sizeOf(u16) // uv_set
     + @sizeOf(u16) // cooked_path_offset
     + @sizeOf(u16) // cooked_path_len
-    + @sizeOf(u16); // padding
+    + @sizeOf(u8) // min_filter
+    + @sizeOf(u8) // mag_filter
+    + @sizeOf(u8) // mip_filter
+    + @sizeOf(u8) // wrap_s
+    + @sizeOf(u8) // wrap_t
+    + @sizeOf(u8) // padding
+    + @sizeOf(f32) // max_anisotropy
+    + @sizeOf([2]f32) // uv_offset
+    + @sizeOf([2]f32) // uv_scale
+    + @sizeOf(f32) // uv_rotation
+    + @sizeOf(f32) // normal_scale
+    + @sizeOf(f32); // occlusion_strength
 
 pub const PARAM_ENTRY_SIZE: u32 = @sizeOf(u16) // name_offset
     + @sizeOf(u16) // name_size
     + @sizeOf(u16) // param_type
+    + @sizeOf(u16) // shader_set
+    + @sizeOf(u16) // shader_binding
     + @sizeOf(u16) // data_offset
     + @sizeOf(u16) // data_size
     + @sizeOf(u16); // padding
@@ -31,17 +54,21 @@ pub const PARAM_ENTRY_SIZE: u32 = @sizeOf(u16) // name_offset
 pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u32) // version
 + @sizeOf(u64) // shader_path_hash
-+ @sizeOf(u16) // alpha_mode
-+ @sizeOf(u16) // texture_slot_count
-+ @sizeOf(u16) // param_count
-+ @sizeOf(u16) // padding
-+ @sizeOf(u32) // texture_table_offset
-+ @sizeOf(u32) // param_table_offset
-+ @sizeOf(u32) // param_data_offset
 + @sizeOf(u16) // vertex_shader_path_offset
 + @sizeOf(u16) // vertex_shader_path_len
 + @sizeOf(u16) // fragment_shader_path_offset
-+ @sizeOf(u16); // fragment_shader_path_len
++ @sizeOf(u16) // fragment_shader_path_len
++ @sizeOf(u16) // alpha_mode
++ @sizeOf(u16) // cull_mode
++ @sizeOf(u16) // blend_mode
++ @sizeOf(u8) // render flags
++ @sizeOf(u8) // padding
++ @sizeOf(f32) // alpha_cutoff
++ @sizeOf(u16) // texture_slot_count
++ @sizeOf(u16) // param_count
++ @sizeOf(u32) // texture_table_offset
++ @sizeOf(u32) // param_table_offset
++ @sizeOf(u32); // param_data_offset
 
 pub const ZamatHeader = struct {
     magic: [MAGIC.len]u8 = MAGIC.*,
@@ -51,7 +78,7 @@ pub const ZamatHeader = struct {
     vertex_shader_path_len: u16,
     fragment_shader_path_offset: u16,
     fragment_shader_path_len: u16,
-    alpha_mode: AlphaMode,
+    render_state: RenderState,
     texture_slot_count: u16,
     param_count: u16,
     texture_table_offset: u32,
@@ -72,7 +99,7 @@ pub const ZamatHeader = struct {
             .vertex_shader_path_len = material.vertex_shader_path_len,
             .fragment_shader_path_offset = material.fragment_shader_path_offset,
             .fragment_shader_path_len = material.fragment_shader_path_len,
-            .alpha_mode = material.alpha_mode,
+            .render_state = material.render_state,
             .texture_slot_count = @intCast(material.texture_slots.len),
             .param_count = @intCast(material.param_entries.len),
             .texture_table_offset = texture_table_offset,
@@ -91,9 +118,13 @@ pub const ZamatHeader = struct {
         const fragment_shader_path_offset = try reader.takeInt(u16, .little);
         const fragment_shader_path_len = try reader.takeInt(u16, .little);
         const alpha_mode: AlphaMode = @enumFromInt(try reader.takeInt(u16, .little));
+        const cull_mode: CullMode = @enumFromInt(try reader.takeInt(u16, .little));
+        const blend_mode: BlendMode = @enumFromInt(try reader.takeInt(u16, .little));
+        const flags = try reader.takeInt(u8, .little);
+        _ = try reader.takeInt(u8, .little);
+        const alpha_cutoff = readF32Int(try reader.takeInt(u32, .little));
         const texture_slot_count = try reader.takeInt(u16, .little);
         const param_count = try reader.takeInt(u16, .little);
-        _ = try reader.takeInt(u16, .little);
         const texture_table_offset = try reader.takeInt(u32, .little);
         const param_table_offset = try reader.takeInt(u32, .little);
         const param_data_offset = try reader.takeInt(u32, .little);
@@ -107,7 +138,15 @@ pub const ZamatHeader = struct {
             .vertex_shader_path_len = vertex_shader_path_len,
             .fragment_shader_path_offset = fragment_shader_path_offset,
             .fragment_shader_path_len = fragment_shader_path_len,
-            .alpha_mode = alpha_mode,
+            .render_state = .{
+                .alpha_mode = alpha_mode,
+                .alpha_cutoff = alpha_cutoff,
+                .double_sided = (flags & 0x1) != 0,
+                .depth_test = (flags & 0x2) != 0,
+                .depth_write = (flags & 0x4) != 0,
+                .cull_mode = cull_mode,
+                .blend_mode = blend_mode,
+            },
             .texture_slot_count = texture_slot_count,
             .param_count = param_count,
             .texture_table_offset = texture_table_offset,
@@ -124,10 +163,18 @@ pub const ZamatHeader = struct {
         try writer.writeInt(u16, self.vertex_shader_path_len, .little);
         try writer.writeInt(u16, self.fragment_shader_path_offset, .little);
         try writer.writeInt(u16, self.fragment_shader_path_len, .little);
-        try writer.writeInt(u16, @intFromEnum(self.alpha_mode), .little);
+        try writer.writeInt(u16, @intFromEnum(self.render_state.alpha_mode), .little);
+        try writer.writeInt(u16, @intFromEnum(self.render_state.cull_mode), .little);
+        try writer.writeInt(u16, @intFromEnum(self.render_state.blend_mode), .little);
+        var flags: u8 = 0;
+        if (self.render_state.double_sided) flags |= 0x1;
+        if (self.render_state.depth_test) flags |= 0x2;
+        if (self.render_state.depth_write) flags |= 0x4;
+        try writer.writeInt(u8, flags, .little);
+        try writer.writeInt(u8, 0, .little);
+        try writer.writeInt(u32, @bitCast(self.render_state.alpha_cutoff), .little);
         try writer.writeInt(u16, self.texture_slot_count, .little);
         try writer.writeInt(u16, self.param_count, .little);
-        try writer.writeInt(u16, 0, .little);
         try writer.writeInt(u32, self.texture_table_offset, .little);
         try writer.writeInt(u32, self.param_table_offset, .little);
         try writer.writeInt(u32, self.param_data_offset, .little);
@@ -139,6 +186,7 @@ pub const Zamat = struct {
     vertex_shader_path: []const u8,
     fragment_shader_path: []const u8,
     alpha_mode: AlphaMode,
+    render_state: RenderState,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
@@ -207,7 +255,8 @@ pub const Zamat = struct {
             .shader_path_hash = header.shader_path_hash,
             .vertex_shader_path = owned_runtime_paths[vertex_start..][0..header.vertex_shader_path_len],
             .fragment_shader_path = owned_runtime_paths[fragment_start..][0..header.fragment_shader_path_len],
-            .alpha_mode = header.alpha_mode,
+            .alpha_mode = header.render_state.alpha_mode,
+            .render_state = header.render_state,
             .texture_slots = texture_slots,
             .param_entries = param_entries,
             .param_data = owned_param_data,
@@ -230,6 +279,7 @@ pub const Material = struct {
     vertex_shader_path: []const u8,
     fragment_shader_path: []const u8,
     alpha_mode: AlphaMode,
+    render_state: RenderState,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
@@ -263,6 +313,7 @@ pub fn loadMaterial(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, p
         .vertex_shader_path = z.vertex_shader_path,
         .fragment_shader_path = z.fragment_shader_path,
         .alpha_mode = z.alpha_mode,
+        .render_state = z.render_state,
         .texture_slots = z.texture_slots,
         .param_entries = z.param_entries,
         .param_data = z.param_data,
@@ -281,15 +332,33 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
         try writer.writeInt(u64, entry.slot_name_hash, .little);
         try writer.writeInt(u64, entry.texture_path_hash, .little);
         try writer.writeInt(u16, entry.slot_index, .little);
+        try writer.writeInt(u16, entry.shader_set, .little);
+        try writer.writeInt(u16, entry.shader_binding, .little);
+        try writer.writeInt(u16, entry.uv_set, .little);
         try writer.writeInt(u16, entry.cooked_path_offset, .little);
         try writer.writeInt(u16, entry.cooked_path_len, .little);
-        try writer.writeInt(u16, 0, .little);
+        try writer.writeInt(u8, @intFromEnum(entry.sampler.min_filter), .little);
+        try writer.writeInt(u8, @intFromEnum(entry.sampler.mag_filter), .little);
+        try writer.writeInt(u8, @intFromEnum(entry.sampler.mip_filter), .little);
+        try writer.writeInt(u8, @intFromEnum(entry.sampler.wrap_s), .little);
+        try writer.writeInt(u8, @intFromEnum(entry.sampler.wrap_t), .little);
+        try writer.writeInt(u8, 0, .little);
+        try writeF32(writer, entry.sampler.max_anisotropy);
+        try writeF32(writer, entry.uv_offset[0]);
+        try writeF32(writer, entry.uv_offset[1]);
+        try writeF32(writer, entry.uv_scale[0]);
+        try writeF32(writer, entry.uv_scale[1]);
+        try writeF32(writer, entry.uv_rotation);
+        try writeF32(writer, entry.normal_scale);
+        try writeF32(writer, entry.occlusion_strength);
     }
 
     for (material.param_entries) |entry| {
         try writer.writeInt(u16, entry.name_offset, .little);
         try writer.writeInt(u16, entry.name_len, .little);
         try writer.writeInt(u16, @intFromEnum(entry.param_type), .little);
+        try writer.writeInt(u16, entry.shader_set, .little);
+        try writer.writeInt(u16, entry.shader_binding, .little);
         try writer.writeInt(u16, entry.data_offset, .little);
         try writer.writeInt(u16, entry.data_size, .little);
         try writer.writeInt(u16, 0, .little);
@@ -315,11 +384,33 @@ fn readTextureSlots(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .slot_name_hash = try reader.takeInt(u64, .little),
             .texture_path_hash = try reader.takeInt(u64, .little),
             .slot_index = try reader.takeInt(u16, .little),
+            .shader_set = try reader.takeInt(u16, .little),
+            .shader_binding = try reader.takeInt(u16, .little),
+            .uv_set = try reader.takeInt(u16, .little),
             .cooked_path = undefined,
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
+            .sampler = .{
+                .min_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .mag_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .mip_filter = @enumFromInt(try reader.takeInt(u8, .little)),
+                .wrap_s = @enumFromInt(try reader.takeInt(u8, .little)),
+                .wrap_t = @enumFromInt(try reader.takeInt(u8, .little)),
+                .max_anisotropy = undefined,
+            },
+            .uv_offset = undefined,
+            .uv_scale = undefined,
+            .uv_rotation = undefined,
+            .normal_scale = undefined,
+            .occlusion_strength = undefined,
         };
-        _ = try reader.takeInt(u16, .little);
+        _ = try reader.takeInt(u8, .little);
+        entry.sampler.max_anisotropy = try readF32(reader);
+        entry.uv_offset = .{ try readF32(reader), try readF32(reader) };
+        entry.uv_scale = .{ try readF32(reader), try readF32(reader) };
+        entry.uv_rotation = try readF32(reader);
+        entry.normal_scale = try readF32(reader);
+        entry.occlusion_strength = try readF32(reader);
     }
 
     return entries;
@@ -335,17 +426,33 @@ fn readParamEntries(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .name_offset = try reader.takeInt(u16, .little),
             .name_len = undefined,
             .param_type = undefined,
+            .shader_set = undefined,
+            .shader_binding = undefined,
             .data_offset = undefined,
             .data_size = undefined,
         };
         entry.name_len = try reader.takeInt(u16, .little);
         entry.param_type = @enumFromInt(try reader.takeInt(u16, .little));
+        entry.shader_set = try reader.takeInt(u16, .little);
+        entry.shader_binding = try reader.takeInt(u16, .little);
         entry.data_offset = try reader.takeInt(u16, .little);
         entry.data_size = try reader.takeInt(u16, .little);
         _ = try reader.takeInt(u16, .little);
     }
 
     return entries;
+}
+
+fn writeF32(writer: *std.Io.Writer, value: f32) !void {
+    try writer.writeInt(u32, @bitCast(value), .little);
+}
+
+fn readF32(reader: *std.Io.Reader) !f32 {
+    return readF32Int(try reader.takeInt(u32, .little));
+}
+
+fn readF32Int(value: u32) f32 {
+    return @bitCast(value);
 }
 
 const testing = std.testing;
@@ -425,6 +532,70 @@ test "Zamat write and read round trips" {
     try testing.expectEqual(@as(usize, 8), loaded.param_data.len);
     try testing.expectEqual(@as(u32, 1), std.mem.readInt(u32, loaded.param_data[0..4], .little));
     try testing.expectEqual(@as(i32, 2), std.mem.readInt(i32, loaded.param_data[4..8], .little));
+}
+
+test "Zamat v2 round trips render state bindings and sampler metadata" {
+    var cooked = try cookedFromSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\[render_state]
+        \\alpha_mode = "alpha_blend"
+        \\alpha_cutoff = 0.42
+        \\double_sided = true
+        \\depth_test = false
+        \\depth_write = false
+        \\blend_mode = "alpha"
+        \\[texture.normal]
+        \\path = "textures/test_normal.png"
+        \\set = 2
+        \\binding = 7
+        \\uv_set = 1
+        \\uv_offset = [0.1, 0.2]
+        \\uv_scale = [3.0, 4.0]
+        \\uv_rotation = 0.5
+        \\min_filter = "nearest"
+        \\mag_filter = "linear"
+        \\mip_filter = "nearest"
+        \\wrap_s = "clamp_to_edge"
+        \\wrap_t = "mirrored_repeat"
+        \\max_anisotropy = 4
+        \\normal_scale = 0.8
+        \\[param.u_roughness]
+        \\value = 0.5
+        \\set = 3
+        \\binding = 9
+        \\
+    );
+    defer cooked.deinit(testing.allocator);
+
+    var buf: [2048]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try write(&writer, cooked);
+
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
+    var loaded = try Zamat.read(testing.allocator, &reader);
+    defer loaded.deinit(testing.allocator);
+
+    try testing.expectEqual(AlphaMode.alpha_blend, loaded.render_state.alpha_mode);
+    try testing.expectEqual(@as(f32, 0.42), loaded.render_state.alpha_cutoff);
+    try testing.expect(loaded.render_state.double_sided);
+    try testing.expect(!loaded.render_state.depth_test);
+    try testing.expect(!loaded.render_state.depth_write);
+    try testing.expectEqual(BlendMode.alpha, loaded.render_state.blend_mode);
+
+    const tex = loaded.texture_slots[0];
+    try testing.expectEqual(@as(u16, 2), tex.shader_set);
+    try testing.expectEqual(@as(u16, 7), tex.shader_binding);
+    try testing.expectEqual(@as(u16, 1), tex.uv_set);
+    try testing.expectEqual([2]f32{ 0.1, 0.2 }, tex.uv_offset);
+    try testing.expectEqual([2]f32{ 3.0, 4.0 }, tex.uv_scale);
+    try testing.expectEqual(FilterMode.nearest, tex.sampler.min_filter);
+    try testing.expectEqual(WrapMode.clamp_to_edge, tex.sampler.wrap_s);
+    try testing.expectEqual(WrapMode.mirrored_repeat, tex.sampler.wrap_t);
+    try testing.expectEqual(@as(f32, 0.8), tex.normal_scale);
+
+    try testing.expectEqual(@as(u16, 3), loaded.param_entries[0].shader_set);
+    try testing.expectEqual(@as(u16, 9), loaded.param_entries[0].shader_binding);
 }
 
 test "Zamat supports empty texture and param tables" {
