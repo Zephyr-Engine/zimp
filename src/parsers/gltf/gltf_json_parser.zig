@@ -206,6 +206,7 @@ pub const GltfTextureInfo = struct {
     index: u32,
     texCoord: u32 = 0,
     scale: ?f32 = null,
+    strength: ?f32 = null,
 };
 
 pub const GltfTexture = struct {
@@ -447,7 +448,7 @@ test "parse materials with pbr" {
         \\    "metallicRoughnessTexture":{"index":2}
         \\  },
         \\  "normalTexture":{"index":1,"scale":1.0},
-        \\  "occlusionTexture":{"index":3},
+        \\  "occlusionTexture":{"index":3,"strength":0.4},
         \\  "emissiveTexture":{"index":4},
         \\  "emissiveFactor":[0.0,0.0,0.0],
         \\  "alphaMode":"MASK",
@@ -477,6 +478,7 @@ test "parse materials with pbr" {
     try testing.expectEqual(@as(f32, 1.0), normal.scale.?);
     try testing.expectEqual(0, normal.texCoord);
     try testing.expectEqual(3, mat.occlusionTexture.?.index);
+    try testing.expectEqual(@as(f32, 0.4), mat.occlusionTexture.?.strength.?);
     try testing.expectEqual(4, mat.emissiveTexture.?.index);
 }
 

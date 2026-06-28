@@ -154,7 +154,7 @@ fn writeMaterialText(
         if (pbr.metallicRoughnessTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "roughness_metallic", info, .{});
     }
     if (material.normalTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "normal", info, .{ .normal_scale = info.scale orelse 1.0 });
-    if (material.occlusionTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "ao", info, .{ .occlusion_strength = info.scale orelse 1.0 });
+    if (material.occlusionTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "ao", info, .{ .occlusion_strength = info.strength orelse 1.0 });
     if (material.emissiveTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "emissive", info, .{});
 
     const pbr = material.pbrMetallicRoughness orelse GltfPbr{};
@@ -491,6 +491,28 @@ test "generateFromGltf writes material with no textures" {
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.") == null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "value = [1, 0, 0, 1]") != null);
+}
+
+test "generateFromGltf preserves occlusion texture strength" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var gltf = try Gltf.parse(
+        \\{
+        \\  "materials":[{"name":"Mat","occlusionTexture":{"index":0,"strength":0.25}}],
+        \\  "textures":[{"source":0}],
+        \\  "images":[{"uri":"ao.png"}]
+        \\}
+    , testing.allocator);
+    defer gltf.deinit();
+
+    const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube.glb", &gltf.value, &.{});
+    try testing.expectEqual(@as(usize, 1), count);
+
+    const mat = try readTestFile(testing.allocator, tmp.dir, "generated/materials/cube_Mat.zamat");
+    defer testing.allocator.free(mat);
+    try testing.expect(std.mem.indexOf(u8, mat, "[texture.ao]") != null);
+    try testing.expect(std.mem.indexOf(u8, mat, "occlusion_strength = 0.25") != null);
 }
 
 test "generateFromGltf does not overwrite handwritten material" {
