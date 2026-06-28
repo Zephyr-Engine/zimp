@@ -261,6 +261,14 @@ fn validateBindings(file_path: []const u8, source: *const raw_material.MaterialS
             }
         }
     }
+    for (source.textures) |texture| {
+        for (source.params) |param| {
+            if (texture.shader_set == param.shader_set and texture.shader_binding == param.shader_binding) {
+                log.err("{s}: duplicate texture/param binding set={d} binding={d}", .{ file_path, texture.shader_set, texture.shader_binding });
+                return error.DuplicateShaderBinding;
+            }
+        }
+    }
 }
 
 fn selectRequiredVariants(
@@ -435,6 +443,36 @@ test "material cooker rejects param type mismatch" {
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
     try testing.expectError(error.ShaderUniformTypeMismatch, cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
+}
+
+test "material cooker rejects texture and param binding collision" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTestFile(tmp.dir, "materials/test.zamat",
+        \\[material]
+        \\shader = "shaders/basic"
+        \\[texture.albedo]
+        \\path = "textures/missing.png"
+        \\set = 0
+        \\binding = 0
+        \\[param.u_base_color]
+        \\value = [1.0, 1.0, 1.0, 1.0]
+        \\set = 0
+        \\binding = 0
+        \\
+    );
+    try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
+    try writeTestFile(tmp.dir, "shaders/basic.frag",
+        \\uniform sampler2D u_albedo;
+        \\uniform vec4 u_base_color;
+        \\void main() {}
+        \\
+    );
+
+    var out: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    try testing.expectError(error.DuplicateShaderBinding, cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
 }
 
 test "material cooker selects declared variants from material contents" {

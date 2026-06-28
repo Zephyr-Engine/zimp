@@ -119,6 +119,13 @@ const ActiveSection = struct {
     name: ?[]const u8 = null,
 };
 
+const ParsedParam = struct {
+    name: []const u8,
+    value: ?ParamValue.Value = null,
+    shader_set: u16 = 1,
+    shader_binding: u16 = 0,
+};
+
 pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !MaterialSource {
     var shader_path: ?[]const u8 = null;
     errdefer if (shader_path) |path| allocator.free(path);
@@ -134,7 +141,7 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
         textures.deinit(allocator);
     }
 
-    var params: std.ArrayList(ParamValue) = .empty;
+    var params: std.ArrayList(ParsedParam) = .empty;
     errdefer {
         for (params.items) |param| allocator.free(param.name);
         params.deinit(allocator);
@@ -195,13 +202,30 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
     for (textures.items) |slot| {
         if (slot.texture_path.len == 0) return error.MissingTexturePath;
     }
+    const owned_shader_path = shader_path orelse return error.MissingShaderPath;
+
+    const owned_textures = try textures.toOwnedSlice(allocator);
+    errdefer {
+        for (owned_textures) |slot| {
+            allocator.free(slot.slot_name);
+            allocator.free(slot.texture_path);
+        }
+        allocator.free(owned_textures);
+    }
+
+    const owned_params = try completeParams(allocator, params.items);
+    errdefer {
+        for (owned_params) |param| allocator.free(param.name);
+        allocator.free(owned_params);
+    }
+    params.deinit(allocator);
 
     return .{
-        .shader_path = shader_path orelse return error.MissingShaderPath,
+        .shader_path = owned_shader_path,
         .render_state = render_state,
         .required_variants = &.{},
-        .textures = try textures.toOwnedSlice(allocator),
-        .params = try params.toOwnedSlice(allocator),
+        .textures = owned_textures,
+        .params = owned_params,
     };
 }
 
@@ -273,7 +297,7 @@ fn parseTextureSubsection(
 
 fn parseParamSubsection(
     allocator: std.mem.Allocator,
-    params: *std.ArrayList(ParamValue),
+    params: *std.ArrayList(ParsedParam),
     param_name_raw: []const u8,
     key: []const u8,
     value: []const u8,
@@ -307,7 +331,7 @@ fn findOrAppendTexture(allocator: std.mem.Allocator, textures: *std.ArrayList(Te
     return textures.items.len - 1;
 }
 
-fn findOrAppendParam(allocator: std.mem.Allocator, params: *std.ArrayList(ParamValue), param_name_raw: []const u8) !usize {
+fn findOrAppendParam(allocator: std.mem.Allocator, params: *std.ArrayList(ParsedParam), param_name_raw: []const u8) !usize {
     for (params.items, 0..) |param, i| {
         if (std.mem.eql(u8, param.name, param_name_raw)) return i;
     }
@@ -315,10 +339,25 @@ fn findOrAppendParam(allocator: std.mem.Allocator, params: *std.ArrayList(ParamV
     errdefer allocator.free(name);
     try params.append(allocator, .{
         .name = name,
-        .value = .{ .float = 0 },
         .shader_binding = @intCast(params.items.len),
     });
     return params.items.len - 1;
+}
+
+fn completeParams(allocator: std.mem.Allocator, params: []const ParsedParam) ![]ParamValue {
+    const complete = try allocator.alloc(ParamValue, params.len);
+    errdefer allocator.free(complete);
+
+    for (params, complete) |param, *out| {
+        out.* = .{
+            .name = param.name,
+            .value = param.value orelse return error.MissingParamValue,
+            .shader_set = param.shader_set,
+            .shader_binding = param.shader_binding,
+        };
+    }
+
+    return complete;
 }
 
 fn parseQuoted(value: []const u8) ![]const u8 {
@@ -516,6 +555,17 @@ test "parseMaterialSource rejects texture subsection without path" {
         \\shader = "shaders/pbr"
         \\[texture.albedo]
         \\binding = 0
+        \\
+    , testing.allocator));
+}
+
+test "parseMaterialSource rejects param subsection without value" {
+    try testing.expectError(error.MissingParamValue, parseMaterialSource(
+        \\[material]
+        \\shader = "shaders/pbr"
+        \\[param.u_roughness]
+        \\set = 1
+        \\binding = 3
         \\
     , testing.allocator));
 }
