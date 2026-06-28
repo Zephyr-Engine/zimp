@@ -1,11 +1,18 @@
 #version 330 core
+// VARIANTS: HAS_ALBEDO_MAP, HAS_NORMAL_MAP, HAS_AO, HAS_EMISSIVE, HAS_METALLIC_ROUGHNESS_MAP, ALPHA_TEST, ALPHA_BLEND, DOUBLE_SIDED
 #include "common.glsl"
 
 uniform sampler2D u_albedo;
 uniform sampler2D u_normal_map;
+uniform sampler2D u_roughness_metallic_map;
+uniform sampler2D u_ao_map;
+uniform sampler2D u_emissive_map;
 uniform vec3 u_light_dir;
 uniform vec3 u_light_color;
+uniform vec4 u_base_color;
+uniform float u_metallic;
 uniform float u_roughness;
+uniform vec3 u_emissive;
 
 in vec3 v_normal;
 in vec2 v_uv;

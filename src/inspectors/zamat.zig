@@ -23,7 +23,7 @@ fn cullModeName(mode: zamat.CullMode) []const u8 {
 
 fn blendModeName(mode: zamat.BlendMode) []const u8 {
     return switch (mode) {
-        .@"opaque" => "opaque",
+        .disabled => "opaque",
         .alpha => "alpha",
         .premultiplied_alpha => "premultiplied_alpha",
     };
@@ -54,6 +54,7 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("  Blend mode:  {s}", .{blendModeName(header.render_state.blend_mode)});
     log.info("  Textures:    {d}", .{header.texture_slot_count});
     log.info("  Params:      {d}", .{header.param_count});
+    log.info("  Variants:    {d}", .{header.variant_count});
 
     var texture_entries: [32]zamat.TextureSlotEntry = undefined;
     if (header.texture_slot_count > texture_entries.len) return error.TooManyTextureSlots;
@@ -126,6 +127,18 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         if (name_end > param_name_len) param_name_len = name_end;
     }
 
+    var variant_entries: [64]struct { name_offset: u16, name_len: u16 } = undefined;
+    if (header.variant_count > variant_entries.len) return error.TooManyVariants;
+    var variant_name_len: usize = 0;
+    for (0..header.variant_count) |i| {
+        variant_entries[i] = .{
+            .name_offset = try reader.takeInt(u16, .little),
+            .name_len = try reader.takeInt(u16, .little),
+        };
+        const name_end = @as(usize, variant_entries[i].name_offset) + variant_entries[i].name_len;
+        if (name_end > variant_name_len) variant_name_len = name_end;
+    }
+
     var param_data_buf: [4096]u8 = undefined;
     if (param_data_len > param_data_buf.len) return error.ParamDataTooLarge;
     const param_data = param_data_buf[0..param_data_len];
@@ -136,6 +149,11 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     const param_names = param_name_buf[0..param_name_len];
     try reader.readSliceAll(param_names);
 
+    var variant_name_buf: [4096]u8 = undefined;
+    if (variant_name_len > variant_name_buf.len) return error.VariantNamesTooLarge;
+    const variant_names = variant_name_buf[0..variant_name_len];
+    try reader.readSliceAll(variant_names);
+
     var runtime_path_buf: [4096]u8 = undefined;
     if (runtime_paths_len > runtime_path_buf.len) return error.RuntimePathsTooLarge;
     const runtime_paths = runtime_path_buf[0..runtime_paths_len];
@@ -145,6 +163,13 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     log.info("Shader Paths:", .{});
     log.info("  Vertex:   {s}", .{runtime_paths[header.vertex_shader_path_offset..][0..header.vertex_shader_path_len]});
     log.info("  Fragment: {s}", .{runtime_paths[header.fragment_shader_path_offset..][0..header.fragment_shader_path_len]});
+
+    log.info("", .{});
+    log.info("Required Variants:", .{});
+    for (0..header.variant_count) |i| {
+        const entry = variant_entries[i];
+        log.info("  {s}", .{variant_names[entry.name_offset..][0..entry.name_len]});
+    }
 
     log.info("", .{});
     log.info("Texture Slots:", .{});
@@ -187,11 +212,13 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     var total_buf: [16]u8 = undefined;
     const texture_table_size = @as(u64, @intCast(header.texture_slot_count)) * zamat.TEXTURE_SLOT_ENTRY_SIZE;
     const param_table_size = @as(u64, @intCast(header.param_count)) * zamat.PARAM_ENTRY_SIZE;
-    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + param_data_len + param_name_len + runtime_paths_len;
+    const variant_table_size = @as(u64, @intCast(header.variant_count)) * zamat.VARIANT_ENTRY_SIZE;
+    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + variant_table_size + param_data_len + param_name_len + variant_name_len + runtime_paths_len;
     log.info("File Size Summary:", .{});
     log.info("  Header:         {s: >10}", .{fmt.formatBytes(&header_buf, zamat.HEADER_SIZE)});
     log.info("  Texture table:  {s: >10}", .{fmt.formatBytes(&texture_buf, texture_table_size)});
     log.info("  Param table:    {s: >10}", .{fmt.formatBytes(&param_buf, param_table_size)});
+    log.info("  Variant table:  {s: >10}", .{fmt.formatBytes(&param_buf, variant_table_size)});
     log.info("  Param data:     {s: >10}", .{fmt.formatBytes(&data_buf, param_data_len)});
     log.info("  Param names:    {s: >10}", .{fmt.formatBytes(&name_buf, param_name_len)});
     log.info("  Runtime paths:  {s: >10}", .{fmt.formatBytes(&runtime_buf, runtime_paths_len)});

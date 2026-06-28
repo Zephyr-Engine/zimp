@@ -13,7 +13,7 @@ pub const CullMode = enum(u16) {
 };
 
 pub const BlendMode = enum(u16) {
-    @"opaque" = 0,
+    disabled = 0,
     alpha = 1,
     premultiplied_alpha = 2,
 };
@@ -51,7 +51,7 @@ pub const RenderState = struct {
     cull_mode: CullMode = .back,
     depth_test: bool = true,
     depth_write: bool = true,
-    blend_mode: BlendMode = .@"opaque",
+    blend_mode: BlendMode = .disabled,
 };
 
 pub const TextureSlot = struct {
@@ -88,6 +88,7 @@ pub const MaterialSource = struct {
     shader_path: []const u8,
     alpha_mode: AlphaMode = .solid,
     render_state: RenderState = .{},
+    required_variants: []const []const u8 = &.{},
     textures: []const TextureSlot,
     params: []const ParamValue,
 
@@ -102,6 +103,8 @@ pub const MaterialSource = struct {
             allocator.free(param.name);
         }
         allocator.free(self.params);
+        for (self.required_variants) |variant| allocator.free(variant);
+        if (self.required_variants.len > 0) allocator.free(self.required_variants);
     }
 };
 
@@ -227,6 +230,7 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
         .shader_path = shader_path orelse return error.MissingShaderPath,
         .alpha_mode = render_state.alpha_mode,
         .render_state = render_state,
+        .required_variants = &.{},
         .textures = try textures.toOwnedSlice(allocator),
         .params = try params.toOwnedSlice(allocator),
     };
@@ -373,7 +377,8 @@ fn parseCullMode(value: []const u8) !CullMode {
 }
 
 fn parseBlendMode(value: []const u8) !BlendMode {
-    if (std.mem.eql(u8, value, "opaque")) return .@"opaque";
+    if (std.mem.eql(u8, value, "opaque")) return .disabled;
+    if (std.mem.eql(u8, value, "disabled")) return .disabled;
     if (std.mem.eql(u8, value, "alpha")) return .alpha;
     if (std.mem.eql(u8, value, "premultiplied_alpha")) return .premultiplied_alpha;
     return error.UnknownBlendMode;

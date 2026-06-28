@@ -96,6 +96,7 @@ pub const CookedMaterial = struct {
     fragment_shader_path_len: u16,
     alpha_mode: AlphaMode,
     render_state: RenderState,
+    required_variants: []const []const u8,
     texture_slots: []TextureSlotEntry,
     param_entries: []ParamEntry,
     param_data: []u8,
@@ -147,6 +148,9 @@ pub const CookedMaterial = struct {
         var params = try buildParamDataBlock(source.params, allocator);
         errdefer params.deinit(allocator);
 
+        const required_variants = try dupeStringList(allocator, source.required_variants);
+        errdefer freeStringList(allocator, required_variants);
+
         const owned_runtime_paths = try runtime_paths.toOwnedSlice(allocator);
         errdefer allocator.free(owned_runtime_paths);
 
@@ -167,6 +171,7 @@ pub const CookedMaterial = struct {
             .fragment_shader_path_len = @intCast(fragment_shader_path.len),
             .alpha_mode = source.render_state.alpha_mode,
             .render_state = source.render_state,
+            .required_variants = required_variants,
             .texture_slots = texture_slots,
             .param_entries = params.entries,
             .param_data = params.data,
@@ -177,12 +182,33 @@ pub const CookedMaterial = struct {
 
     pub fn deinit(self: *CookedMaterial, allocator: std.mem.Allocator) void {
         allocator.free(self.texture_slots);
+        freeStringList(allocator, self.required_variants);
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
         allocator.free(self.param_names);
         allocator.free(self.runtime_paths);
     }
 };
+
+fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]const []const u8 {
+    const out = try allocator.alloc([]const u8, strings.len);
+    errdefer allocator.free(out);
+
+    var loaded: usize = 0;
+    errdefer for (out[0..loaded]) |item| allocator.free(item);
+
+    for (strings, 0..) |value, i| {
+        out[i] = try allocator.dupe(u8, value);
+        loaded += 1;
+    }
+
+    return out;
+}
+
+fn freeStringList(allocator: std.mem.Allocator, strings: []const []const u8) void {
+    for (strings) |value| allocator.free(value);
+    allocator.free(strings);
+}
 
 fn shaderCookedPath(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
     return std.fmt.allocPrint(allocator, "{s}.zshdr", .{std.fs.path.basename(source_path)});
