@@ -3,6 +3,7 @@ const ZMesh = @import("formats/zmesh.zig").ZMesh;
 const Zatex = @import("formats/ztex.zig").Zatex;
 const ZShader = @import("formats/zshdr.zig").ZShader;
 const Zamat = @import("formats/zamat.zig").Zamat;
+pub const AssetType = @import("assets/asset.zig").AssetType;
 
 pub const Asset = union(enum) {
     mesh: ZMesh,
@@ -21,15 +22,6 @@ pub const Asset = union(enum) {
 };
 
 pub const CookedAsset = Asset;
-
-pub const AssetKind = enum {
-    mesh,
-    texture,
-    shader_stage,
-    material,
-};
-
-pub const AssetType = enum { mesh, texture, shader, material };
 
 pub const CookedStore = struct {
     root: []u8,
@@ -83,15 +75,6 @@ pub fn detectType(path: []const u8) ?AssetType {
     if (std.mem.endsWith(u8, path, ".zshdr")) return .shader;
     if (std.mem.endsWith(u8, path, ".zamat")) return .material;
     return null;
-}
-
-pub fn inferKind(path: []const u8) ?AssetKind {
-    return switch (detectType(path) orelse return null) {
-        .mesh => .mesh,
-        .texture => .texture,
-        .shader => .shader_stage,
-        .material => .material,
-    };
 }
 
 pub fn normalizeVirtualPath(allocator: std.mem.Allocator, raw_path: []const u8) PathError![]u8 {
@@ -215,24 +198,16 @@ pub fn loadFromReader(
         .texture => return .{ .texture = try Zatex.read(allocator, reader) },
         .shader => return .{ .shader = try ZShader.read(allocator, reader) },
         .material => return .{ .material = try Zamat.read(allocator, reader) },
+        .unknown => return error.UnsupportedAssetType,
     }
 }
 
 pub fn loadCooked(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
-    kind: AssetKind,
+    asset_type: AssetType,
 ) !CookedAsset {
-    return loadFromReader(allocator, reader, assetTypeForKind(kind));
-}
-
-fn assetTypeForKind(kind: AssetKind) AssetType {
-    return switch (kind) {
-        .mesh => .mesh,
-        .texture => .texture,
-        .shader_stage => .shader,
-        .material => .material,
-    };
+    return loadFromReader(allocator, reader, asset_type);
 }
 
 fn isSeparator(byte: u8) bool {
