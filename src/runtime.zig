@@ -3,6 +3,7 @@ const ZMesh = @import("formats/zmesh.zig").ZMesh;
 const Zatex = @import("formats/ztex.zig").Zatex;
 const ZShader = @import("formats/zshdr.zig").ZShader;
 const Zamat = @import("formats/zamat.zig").Zamat;
+pub const AssetType = @import("assets/asset.zig").AssetType;
 
 pub const Asset = union(enum) {
     mesh: ZMesh,
@@ -20,7 +21,43 @@ pub const Asset = union(enum) {
     }
 };
 
-pub const AssetType = enum { mesh, texture, shader, material };
+pub const CookedAsset = Asset;
+
+pub const CookedStore = struct {
+    root: []u8,
+    dir: std.Io.Dir,
+
+    const max_asset_bytes: usize = 512 * 1024 * 1024;
+
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, root: []const u8) !CookedStore {
+        const cwd = std.Io.Dir.cwd();
+        const dir = try std.Io.Dir.openDir(cwd, io, root, .{});
+        errdefer dir.close(io);
+        return initFromDir(allocator, root, dir);
+    }
+
+    pub fn initFromDir(allocator: std.mem.Allocator, root: []const u8, dir: std.Io.Dir) !CookedStore {
+        return .{
+            .root = try allocator.dupe(u8, root),
+            .dir = dir,
+        };
+    }
+
+    pub fn deinit(self: *CookedStore, allocator: std.mem.Allocator, io: std.Io) void {
+        self.dir.close(io);
+        allocator.free(self.root);
+    }
+
+    pub fn readAlloc(
+        self: *CookedStore,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        normalized_path: []const u8,
+    ) ![]u8 {
+        try validateVirtualPath(normalized_path);
+        return self.dir.readFileAlloc(io, normalized_path, allocator, .limited(max_asset_bytes));
+    }
+};
 
 pub const PathError = error{
     AbsolutePathNotAllowed,
@@ -161,6 +198,7 @@ pub fn loadFromReader(
         .texture => return .{ .texture = try Zatex.read(allocator, reader) },
         .shader => return .{ .shader = try ZShader.read(allocator, reader) },
         .material => return .{ .material = try Zamat.read(allocator, reader) },
+        .unknown => return error.UnsupportedAssetType,
     }
 }
 
