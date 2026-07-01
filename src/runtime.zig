@@ -20,7 +20,52 @@ pub const Asset = union(enum) {
     }
 };
 
+pub const CookedAsset = Asset;
+
+pub const AssetKind = enum {
+    mesh,
+    texture,
+    shader_stage,
+    material,
+};
+
 pub const AssetType = enum { mesh, texture, shader, material };
+
+pub const CookedStore = struct {
+    root: []u8,
+    dir: std.Io.Dir,
+
+    const max_asset_bytes: usize = 512 * 1024 * 1024;
+
+    pub fn init(allocator: std.mem.Allocator, io: std.Io, root: []const u8) !CookedStore {
+        const cwd = std.Io.Dir.cwd();
+        const dir = try std.Io.Dir.openDir(cwd, io, root, .{});
+        errdefer dir.close(io);
+        return initFromDir(allocator, root, dir);
+    }
+
+    pub fn initFromDir(allocator: std.mem.Allocator, root: []const u8, dir: std.Io.Dir) !CookedStore {
+        return .{
+            .root = try allocator.dupe(u8, root),
+            .dir = dir,
+        };
+    }
+
+    pub fn deinit(self: *CookedStore, allocator: std.mem.Allocator, io: std.Io) void {
+        self.dir.close(io);
+        allocator.free(self.root);
+    }
+
+    pub fn readAlloc(
+        self: *CookedStore,
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        normalized_path: []const u8,
+    ) ![]u8 {
+        try validateVirtualPath(normalized_path);
+        return self.dir.readFileAlloc(io, normalized_path, allocator, .limited(max_asset_bytes));
+    }
+};
 
 pub const PathError = error{
     AbsolutePathNotAllowed,
@@ -38,6 +83,15 @@ pub fn detectType(path: []const u8) ?AssetType {
     if (std.mem.endsWith(u8, path, ".zshdr")) return .shader;
     if (std.mem.endsWith(u8, path, ".zamat")) return .material;
     return null;
+}
+
+pub fn inferKind(path: []const u8) ?AssetKind {
+    return switch (detectType(path) orelse return null) {
+        .mesh => .mesh,
+        .texture => .texture,
+        .shader => .shader_stage,
+        .material => .material,
+    };
 }
 
 pub fn normalizeVirtualPath(allocator: std.mem.Allocator, raw_path: []const u8) PathError![]u8 {
@@ -162,6 +216,23 @@ pub fn loadFromReader(
         .shader => return .{ .shader = try ZShader.read(allocator, reader) },
         .material => return .{ .material = try Zamat.read(allocator, reader) },
     }
+}
+
+pub fn loadCooked(
+    allocator: std.mem.Allocator,
+    reader: *std.Io.Reader,
+    kind: AssetKind,
+) !CookedAsset {
+    return loadFromReader(allocator, reader, assetTypeForKind(kind));
+}
+
+fn assetTypeForKind(kind: AssetKind) AssetType {
+    return switch (kind) {
+        .mesh => .mesh,
+        .texture => .texture,
+        .shader_stage => .shader,
+        .material => .material,
+    };
 }
 
 fn isSeparator(byte: u8) bool {
