@@ -202,14 +202,6 @@ pub fn loadFromReader(
     }
 }
 
-pub fn loadCooked(
-    allocator: std.mem.Allocator,
-    reader: *std.Io.Reader,
-    asset_type: AssetType,
-) !CookedAsset {
-    return loadFromReader(allocator, reader, asset_type);
-}
-
 fn isSeparator(byte: u8) bool {
     return byte == '/' or byte == '\\';
 }
