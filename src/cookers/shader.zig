@@ -12,7 +12,6 @@ pub fn cooker() Cooker {
     return .{
         .cookFn = cookShader,
         .asset_type = .shader,
-        .outputPathFn = shaderOutputPath,
     };
 }
 
@@ -35,8 +34,4 @@ fn cookShader(
     defer cooked.deinit(allocator);
 
     try zshdr.write(writer, cooked);
-}
-
-fn shaderOutputPath(allocator: std.mem.Allocator, file_path: []const u8, asset_type: asset.AssetType) ![]u8 {
-    return path_helpers.cookedOutput(allocator, file_path, asset_type);
 }
