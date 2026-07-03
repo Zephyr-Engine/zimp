@@ -109,7 +109,7 @@ const CookJob = struct {
         }
 
         if (self.lookupEntry()) |cache_entry| {
-            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &self.entry);
+            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &self.entry, self.cache.host_os);
             if (staleness == .stale_content or staleness == .hash_match) {
                 result.metrics.source_bytes_hashed += info.size;
             }
@@ -152,7 +152,7 @@ const CookJob = struct {
         }
 
         if (self.lookupEntry()) |cache_entry| {
-            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &self.entry);
+            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &self.entry, self.cache.host_os);
             if (staleness == .stale_content or staleness == .hash_match) {
                 decision.metrics.source_bytes_hashed += decision.source_size;
             }
@@ -493,7 +493,7 @@ pub const Executor = struct {
         }
 
         if (self.cache.lookupEntryMut(entry)) |cache_entry| {
-            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &entry);
+            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &entry, self.cache.host_os);
             if (staleness == .stale_content or staleness == .hash_match) {
                 self.metrics.source_bytes_hashed += info.size;
             }
@@ -564,7 +564,7 @@ pub const Executor = struct {
             const info = try entry.getFileInfo(self.ctx.source, self.ctx.io);
             decision.source_size = info.size;
 
-            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &entry);
+            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &entry, self.cache.host_os);
             if (staleness == .stale_content or staleness == .hash_match) {
                 self.metrics.source_bytes_hashed += decision.source_size;
             }

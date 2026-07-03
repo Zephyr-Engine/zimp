@@ -45,7 +45,8 @@ pub const CacheSession = struct {
         }
     }
 
-    pub fn persist(self: *CacheSession, io: std.Io) !void {
+    pub fn persist(self: *CacheSession, allocator: std.mem.Allocator, io: std.Io) !void {
+        try self.cache.setCurrentHostOs(allocator);
         try self.cache.write(io);
     }
 

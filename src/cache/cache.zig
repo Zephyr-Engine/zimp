@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const source_file_mod = @import("../assets/source_file.zig");
 const AssetType = @import("../assets/asset.zig").AssetType;
@@ -12,10 +13,10 @@ const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
 const log = @import("../logger.zig");
 
-pub const VERSION = 3;
+pub const VERSION = 4;
 pub const MAGIC = "ZACHE";
 
-pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32); // magic + version + entry_count
+pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16); // magic + version + entry_count + output_dir_len + host_os_len
 
 pub const CacheHeader = struct {
     version: u16 = VERSION,
@@ -24,6 +25,10 @@ pub const CacheHeader = struct {
 
 const EntryMap = std.AutoHashMap(Hash, u32); // path_hash -> entry index
 
+pub fn currentHostOsName() []const u8 {
+    return @tagName(builtin.os.tag);
+}
+
 pub const Cache = struct {
     header: CacheHeader,
     entries: std.ArrayList(CacheEntry),
@@ -31,8 +36,12 @@ pub const Cache = struct {
     dependency_graph: CacheDepGraph,
     source_dir: std.Io.Dir,
     output_dir_path: []const u8 = "",
+    host_os: []const u8 = "",
 
     pub fn init(allocator: std.mem.Allocator, source_dir: std.Io.Dir, output_dir_path: []const u8) !Cache {
+        const owned_output_dir_path = try allocator.dupe(u8, output_dir_path);
+        errdefer allocator.free(owned_output_dir_path);
+
         return .{
             .header = .{
                 .entry_count = 0,
@@ -41,7 +50,8 @@ pub const Cache = struct {
             .dependency_graph = CacheDepGraph.init(allocator),
             .entries = .empty,
             .source_dir = source_dir,
-            .output_dir_path = try allocator.dupe(u8, output_dir_path),
+            .output_dir_path = owned_output_dir_path,
+            .host_os = try allocator.dupe(u8, currentHostOsName()),
         };
     }
 
@@ -54,6 +64,17 @@ pub const Cache = struct {
         self.entry_map.deinit();
         self.dependency_graph.deinit(allocator);
         allocator.free(self.output_dir_path);
+        allocator.free(self.host_os);
+    }
+
+    pub fn hostOsChanged(self: *const Cache) bool {
+        return !std.mem.eql(u8, self.host_os, currentHostOsName());
+    }
+
+    pub fn setCurrentHostOs(self: *Cache, allocator: std.mem.Allocator) !void {
+        const host_os = try allocator.dupe(u8, currentHostOsName());
+        allocator.free(self.host_os);
+        self.host_os = host_os;
     }
 
     pub fn pushCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry) !void {
@@ -190,6 +211,8 @@ pub const Cache = struct {
         try io_writer.writeInt(u32, self.header.entry_count, .little);
         try io_writer.writeInt(u16, @intCast(self.output_dir_path.len), .little);
         try io_writer.writeAll(self.output_dir_path);
+        try io_writer.writeInt(u16, @intCast(self.host_os.len), .little);
+        try io_writer.writeAll(self.host_os);
 
         for (self.entries.items) |entry| {
             try io_writer.writeInt(u64, entry.source_path_hash, .little);
@@ -300,6 +323,11 @@ pub const Cache = struct {
         errdefer allocator.free(output_dir_path);
         try reader.readSliceAll(output_dir_path);
 
+        const host_os_len = try reader.takeInt(u16, .little);
+        const host_os = try allocator.alloc(u8, host_os_len);
+        errdefer allocator.free(host_os);
+        try reader.readSliceAll(host_os);
+
         var entries: std.ArrayList(CacheEntry) = .empty;
         errdefer {
             for (entries.items) |entry| {
@@ -405,6 +433,7 @@ pub const Cache = struct {
             .entries = entries,
             .source_dir = .cwd(),
             .output_dir_path = output_dir_path,
+            .host_os = host_os,
         };
     }
 };
@@ -502,6 +531,8 @@ fn writeTestCacheWithOutputDirAndDependencies(
     try writer.writeInt(u32, @intCast(entries.len), .little);
     try writer.writeInt(u16, @intCast(output_dir_path.len), .little);
     try writer.writeAll(output_dir_path);
+    try writer.writeInt(u16, @intCast(currentHostOsName().len), .little);
+    try writer.writeAll(currentHostOsName());
 
     for (entries) |entry| {
         try writer.writeInt(u64, entry.source_path_hash, .little);
@@ -930,6 +961,8 @@ test "read errors on truncated entry data" {
     try writer.writeInt(u32, 1, .little);
     try writer.writeInt(u16, 1, .little); // output_dir_path len
     try writer.writeAll("."); // output_dir_path
+    try writer.writeInt(u16, @intCast(currentHostOsName().len), .little); // host_os len
+    try writer.writeAll(currentHostOsName()); // host_os
     try writer.writeInt(u64, 0xAAAA, .little);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
@@ -1004,7 +1037,7 @@ test "write then read round-trip with zero entries" {
 }
 
 test "HEADER_SIZE matches expected layout" {
-    try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32)), HEADER_SIZE);
+    try testing.expectEqual(@as(u32, MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16)), HEADER_SIZE);
 }
 
 test "upsertEntry inserts new entry when not in cache" {

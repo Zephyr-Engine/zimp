@@ -16,6 +16,13 @@ pub const AssetType = enum {
             .unknown => "",
         };
     }
+
+    pub fn rebuildsOnHostOsChange(self: AssetType) bool {
+        return switch (self) {
+            .material => true,
+            .mesh, .texture, .shader, .unknown => false,
+        };
+    }
 };
 
 const asset_map = std.EnumArray(Extension, AssetType).init(.{
@@ -123,6 +130,14 @@ test "Extension.assetType maps glsl to shader" {
 
 test "Extension.assetType maps other to unknown" {
     try testing.expectEqual(.unknown, Extension.other.assetType());
+}
+
+test "AssetType.rebuildsOnHostOsChange marks only OS-sensitive assets" {
+    try testing.expect(AssetType.material.rebuildsOnHostOsChange());
+    try testing.expect(!AssetType.mesh.rebuildsOnHostOsChange());
+    try testing.expect(!AssetType.texture.rebuildsOnHostOsChange());
+    try testing.expect(!AssetType.shader.rebuildsOnHostOsChange());
+    try testing.expect(!AssetType.unknown.rebuildsOnHostOsChange());
 }
 
 test "Extension.processEntry returns gltf for .gltf file" {

@@ -39,7 +39,7 @@ pub fn run(
     try executor.run(ctx.io, progress);
 
     const cache_write_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
-    try cache_session.persist(ctx.io);
+    try cache_session.persist(allocator, ctx.io);
     const cache_write_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     metrics.cache_write_ns = @intCast(cache_write_start.durationTo(cache_write_end).raw.nanoseconds);
     metrics.cache_bytes_written = cache_session_mod.CacheSession.cacheBytesWritten(ctx);
