@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const asset = @import("../assets/asset.zig");
+const path_helpers = @import("../path.zig");
 const Extension = asset.Extension;
 const AssetType = asset.AssetType;
 
@@ -38,16 +39,9 @@ pub const Cooker = struct {
         if (self.outputPathFn) |path_fn| {
             return path_fn(allocator, file_path, self.asset_type);
         }
-        return defaultOutputPath(allocator, file_path, self.asset_type);
+        return path_helpers.cookedOutput(allocator, file_path, self.asset_type);
     }
 };
-
-fn defaultOutputPath(allocator: std.mem.Allocator, file_path: []const u8, asset_type: AssetType) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{
-        std.fs.path.stem(file_path),
-        asset_type.cookedExtension(),
-    });
-}
 
 const glb_cooker = @import("glb.zig").cooker();
 const gltf_cooker = @import("gltf.zig").cooker();
