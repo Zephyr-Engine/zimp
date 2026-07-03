@@ -52,6 +52,9 @@ pub const assets = struct {
 /// validation suitable for application asset roots.
 pub const runtime = @import("runtime.zig");
 
+/// Path normalization, cooked output path naming, and virtual asset path checks.
+pub const path = @import("path.zig");
+
 // Convenient top-level aliases retained for existing users.
 pub const ZMesh = formats.zmesh.ZMesh;
 pub const ZMeshHeader = formats.zmesh.ZMeshHeader;
@@ -140,6 +143,9 @@ test "public API exposes format and asset construction types" {
     _ = parseAlphaMode;
     _ = LoadedMaterial;
     _ = loadMaterial;
+    _ = path.normalizeVirtual;
+    _ = path.resolveShaderInclude;
+    _ = path.cookedOutput;
 }
 
 test {
@@ -191,4 +197,5 @@ test {
     _ = @import("cache/entry.zig");
     _ = @import("shared/file_read.zig");
     _ = @import("runtime.zig");
+    _ = @import("path.zig");
 }

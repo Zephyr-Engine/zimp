@@ -4,10 +4,11 @@ const DependencyExtractor = @import("extractor.zig").DependencyExtractor;
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const shader_source = @import("../assets/raw/shader.zig");
 const file_read = @import("../shared/file_read.zig");
+const path_helpers = @import("../path.zig");
 
 const parseIncludeFilename = shader_source.parseIncludeFilename;
-const resolveIncludePath = shader_source.resolveIncludePath;
-const normalizePath = shader_source.normalizePath;
+const resolveIncludePath = path_helpers.resolveShaderInclude;
+const normalizePath = path_helpers.normalizeRelative;
 
 pub fn extractor() DependencyExtractor {
     return .{ .extractFn = extractShaderDeps, .asset_type = .shader };

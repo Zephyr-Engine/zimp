@@ -2,6 +2,7 @@ const std = @import("std");
 
 const source_file = @import("../source_file.zig");
 const raw_material = @import("../raw/material.zig");
+const path_helpers = @import("../../path.zig");
 
 pub const AlphaMode = raw_material.AlphaMode;
 pub const CullMode = raw_material.CullMode;
@@ -116,16 +117,16 @@ pub const CookedMaterial = struct {
         const fragment_source_path = try std.fmt.allocPrint(allocator, "{s}.frag", .{source.shader_path});
         defer allocator.free(fragment_source_path);
 
-        const vertex_shader_path = try shaderCookedPath(allocator, vertex_source_path);
+        const vertex_shader_path = try path_helpers.cookedOutput(allocator, vertex_source_path, .shader);
         defer allocator.free(vertex_shader_path);
-        const fragment_shader_path = try shaderCookedPath(allocator, fragment_source_path);
+        const fragment_shader_path = try path_helpers.cookedOutput(allocator, fragment_source_path, .shader);
         defer allocator.free(fragment_shader_path);
 
         const vertex_shader_path_offset = try appendRuntimePath(&runtime_paths, allocator, vertex_shader_path);
         const fragment_shader_path_offset = try appendRuntimePath(&runtime_paths, allocator, fragment_shader_path);
 
         for (source.textures, texture_slots) |slot, *entry| {
-            const cooked_texture_path = try textureCookedPath(allocator, slot.texture_path);
+            const cooked_texture_path = try path_helpers.cookedOutput(allocator, slot.texture_path, .texture);
             defer allocator.free(cooked_texture_path);
             const resource_name_offset = try appendRuntimePath(&runtime_paths, allocator, slot.resource_name);
             const cooked_path_offset = try appendRuntimePath(&runtime_paths, allocator, cooked_texture_path);
@@ -215,14 +216,6 @@ fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]
 fn freeStringList(allocator: std.mem.Allocator, strings: []const []const u8) void {
     for (strings) |value| allocator.free(value);
     allocator.free(strings);
-}
-
-fn shaderCookedPath(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}.zshdr", .{std.fs.path.basename(source_path)});
-}
-
-fn textureCookedPath(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}.ztex", .{std.fs.path.stem(source_path)});
 }
 
 fn appendRuntimePath(list: *std.ArrayList(u8), allocator: std.mem.Allocator, path: []const u8) !u16 {

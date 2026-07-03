@@ -5,6 +5,7 @@ const asset = @import("../assets/asset.zig");
 const RawShader = @import("../assets/raw/shader.zig").RawShader;
 const CookedShader = @import("../assets/cooked/shader.zig").CookedShader;
 const file_read = @import("../shared/file_read.zig");
+const path_helpers = @import("../path.zig");
 const zshdr = @import("../formats/zshdr.zig");
 
 pub fn cooker() Cooker {
@@ -37,8 +38,5 @@ fn cookShader(
 }
 
 fn shaderOutputPath(allocator: std.mem.Allocator, file_path: []const u8, asset_type: asset.AssetType) ![]u8 {
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{
-        std.fs.path.basename(file_path),
-        asset_type.cookedExtension(),
-    });
+    return path_helpers.cookedOutput(allocator, file_path, asset_type);
 }

@@ -3,6 +3,7 @@ const std = @import("std");
 const asset = @import("../asset.zig");
 const file_read = @import("../../shared/file_read.zig");
 const log = @import("../../logger.zig");
+const path_helpers = @import("../../path.zig");
 
 pub const VariantKey = struct {
     bits: u32,
@@ -141,26 +142,11 @@ pub fn includeUsesAngleBrackets(line: []const u8) bool {
 }
 
 pub fn resolveIncludePath(allocator: std.mem.Allocator, shader_path: []const u8, include: []const u8) ![]u8 {
-    const dir = std.fs.path.dirname(shader_path) orelse return allocator.dupe(u8, include);
-    const joined = try std.fs.path.join(allocator, &.{ dir, include });
-    defer allocator.free(joined);
-    return normalizePath(allocator, joined);
+    return path_helpers.resolveShaderInclude(allocator, shader_path, include);
 }
 
 pub fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    var parts: std.ArrayListUnmanaged([]const u8) = .empty;
-    defer parts.deinit(allocator);
-
-    var it = std.mem.splitScalar(u8, path, '/');
-    while (it.next()) |part| {
-        if (std.mem.eql(u8, part, "..")) {
-            if (parts.items.len > 0) parts.items.len -= 1;
-        } else if (part.len > 0 and !std.mem.eql(u8, part, ".")) {
-            try parts.append(allocator, part);
-        }
-    }
-
-    return std.mem.join(allocator, "/", parts.items);
+    return path_helpers.normalizeRelative(allocator, path);
 }
 
 pub fn preprocessShader(

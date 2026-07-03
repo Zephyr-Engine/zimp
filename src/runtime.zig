@@ -3,6 +3,7 @@ const ZMesh = @import("formats/zmesh.zig").ZMesh;
 const Zatex = @import("formats/ztex.zig").Zatex;
 const ZShader = @import("formats/zshdr.zig").ZShader;
 const Zamat = @import("formats/zamat.zig").Zamat;
+const path_helpers = @import("path.zig");
 pub const AssetType = @import("assets/asset.zig").AssetType;
 
 pub const Asset = union(enum) {
@@ -54,20 +55,13 @@ pub const CookedStore = struct {
         io: std.Io,
         normalized_path: []const u8,
     ) ![]u8 {
-        try validateVirtualPath(normalized_path);
+        try path_helpers.validateVirtual(normalized_path);
         return self.dir.readFileAlloc(io, normalized_path, allocator, .limited(max_asset_bytes));
     }
 };
 
-pub const PathError = error{
-    AbsolutePathNotAllowed,
-    ParentTraversalNotAllowed,
-    EmptyPath,
-    PathTooLong,
-    OutOfMemory,
-};
-
-pub const max_virtual_path_len: usize = 4096;
+pub const PathError = path_helpers.Error;
+pub const max_virtual_path_len = path_helpers.max_virtual_path_len;
 
 pub fn detectType(path: []const u8) ?AssetType {
     if (std.mem.endsWith(u8, path, ".zmesh")) return .mesh;
@@ -78,79 +72,11 @@ pub fn detectType(path: []const u8) ?AssetType {
 }
 
 pub fn normalizeVirtualPath(allocator: std.mem.Allocator, raw_path: []const u8) PathError![]u8 {
-    if (raw_path.len == 0) {
-        return PathError.EmptyPath;
-    }
-    if (raw_path.len > max_virtual_path_len) {
-        return PathError.PathTooLong;
-    }
-    if (isAbsolutePath(raw_path)) {
-        return PathError.AbsolutePathNotAllowed;
-    }
-
-    var out: std.ArrayList(u8) = .empty;
-    errdefer out.deinit(allocator);
-
-    var i: usize = 0;
-    while (i < raw_path.len) {
-        while (i < raw_path.len and isSeparator(raw_path[i])) : (i += 1) {}
-        const start = i;
-        while (i < raw_path.len and !isSeparator(raw_path[i])) : (i += 1) {}
-        const segment = raw_path[start..i];
-
-        if (segment.len == 0 or std.mem.eql(u8, segment, ".")) {
-            continue;
-        }
-        if (std.mem.eql(u8, segment, "..")) {
-            return PathError.ParentTraversalNotAllowed;
-        }
-
-        if (out.items.len != 0) {
-            try out.append(allocator, '/');
-        }
-        try out.appendSlice(allocator, segment);
-    }
-
-    if (out.items.len == 0) {
-        return PathError.EmptyPath;
-    }
-    if (out.items.len > max_virtual_path_len) {
-        return PathError.PathTooLong;
-    }
-
-    return out.toOwnedSlice(allocator);
+    return path_helpers.normalizeVirtual(allocator, raw_path);
 }
 
 pub fn validateVirtualPath(path: []const u8) PathError!void {
-    if (path.len == 0) {
-        return PathError.EmptyPath;
-    }
-    if (path.len > max_virtual_path_len) {
-        return PathError.PathTooLong;
-    }
-    if (isAbsolutePath(path)) {
-        return PathError.AbsolutePathNotAllowed;
-    }
-
-    var saw_segment = false;
-    var i: usize = 0;
-    while (i < path.len) {
-        while (i < path.len and isSeparator(path[i])) : (i += 1) {}
-        const start = i;
-        while (i < path.len and !isSeparator(path[i])) : (i += 1) {}
-        const segment = path[start..i];
-        if (segment.len == 0 or std.mem.eql(u8, segment, ".")) {
-            continue;
-        }
-        if (std.mem.eql(u8, segment, "..")) {
-            return PathError.ParentTraversalNotAllowed;
-        }
-        saw_segment = true;
-    }
-
-    if (!saw_segment) {
-        return PathError.EmptyPath;
-    }
+    return path_helpers.validateVirtual(path);
 }
 
 pub fn resolveRelativeVirtualPath(
@@ -158,20 +84,7 @@ pub fn resolveRelativeVirtualPath(
     base_path: []const u8,
     dependency_path: []const u8,
 ) PathError![]u8 {
-    try validateVirtualPath(base_path);
-    if (dependency_path.len == 0) return PathError.EmptyPath;
-    if (isAbsolutePath(dependency_path)) return PathError.AbsolutePathNotAllowed;
-
-    const slash_index = std.mem.lastIndexOfScalar(u8, base_path, '/');
-    if (slash_index == null) {
-        return normalizeVirtualPath(allocator, dependency_path);
-    }
-
-    const base_dir = base_path[0..slash_index.?];
-    const joined = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ base_dir, dependency_path });
-    defer allocator.free(joined);
-
-    return normalizeVirtualPath(allocator, joined);
+    return path_helpers.resolveRelativeVirtual(allocator, base_path, dependency_path);
 }
 
 pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !Asset {
@@ -200,20 +113,6 @@ pub fn loadFromReader(
         .material => return .{ .material = try Zamat.read(allocator, reader) },
         .unknown => return error.UnsupportedAssetType,
     }
-}
-
-fn isSeparator(byte: u8) bool {
-    return byte == '/' or byte == '\\';
-}
-
-fn isAbsolutePath(path: []const u8) bool {
-    if (path.len == 0) {
-        return false;
-    }
-    if (isSeparator(path[0])) {
-        return true;
-    }
-    return path.len >= 2 and std.ascii.isAlphabetic(path[0]) and path[1] == ':';
 }
 
 const testing = std.testing;
