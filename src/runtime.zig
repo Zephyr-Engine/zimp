@@ -22,8 +22,6 @@ pub const Asset = union(enum) {
     }
 };
 
-pub const CookedAsset = Asset;
-
 pub const CookedStore = struct {
     root: []u8,
     dir: std.Io.Dir,
@@ -60,9 +58,6 @@ pub const CookedStore = struct {
     }
 };
 
-pub const PathError = path_helpers.Error;
-pub const max_virtual_path_len = path_helpers.max_virtual_path_len;
-
 pub fn detectType(path: []const u8) ?AssetType {
     if (std.mem.endsWith(u8, path, ".zmesh")) return .mesh;
     if (std.mem.endsWith(u8, path, ".ztex")) return .texture;
@@ -71,24 +66,8 @@ pub fn detectType(path: []const u8) ?AssetType {
     return null;
 }
 
-pub fn normalizeVirtualPath(allocator: std.mem.Allocator, raw_path: []const u8) PathError![]u8 {
-    return path_helpers.normalizeVirtual(allocator, raw_path);
-}
-
-pub fn validateVirtualPath(path: []const u8) PathError!void {
-    return path_helpers.validateVirtual(path);
-}
-
-pub fn resolveRelativeVirtualPath(
-    allocator: std.mem.Allocator,
-    base_path: []const u8,
-    dependency_path: []const u8,
-) PathError![]u8 {
-    return path_helpers.resolveRelativeVirtual(allocator, base_path, dependency_path);
-}
-
 pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !Asset {
-    const normalized_path = try normalizeVirtualPath(allocator, path);
+    const normalized_path = try path_helpers.normalizeVirtual(allocator, path);
     defer allocator.free(normalized_path);
 
     const asset_type = detectType(normalized_path) orelse return error.UnsupportedAssetType;
@@ -117,12 +96,6 @@ pub fn loadFromReader(
 
 const testing = std.testing;
 
-fn expectNormalized(input: []const u8, expected: []const u8) !void {
-    const normalized = try normalizeVirtualPath(testing.allocator, input);
-    defer testing.allocator.free(normalized);
-    try testing.expectEqualStrings(expected, normalized);
-}
-
 test "detectType maps cooked asset extensions" {
     try testing.expectEqual(AssetType.mesh, detectType("monkey.zmesh").?);
     try testing.expectEqual(AssetType.material, detectType("monkey.zamat").?);
@@ -132,32 +105,6 @@ test "detectType maps cooked asset extensions" {
 
 test "detectType requires lowercase cooked extensions" {
     try testing.expect(detectType("MONKEY.ZMESH") == null);
-}
-
-test "normalizeVirtualPath normalizes separators and leading dot segments" {
-    try expectNormalized("meshes\\monkey.zmesh", "meshes/monkey.zmesh");
-    try expectNormalized("./monkey.zmesh", "monkey.zmesh");
-    try expectNormalized("meshes///monkey.zmesh", "meshes/monkey.zmesh");
-}
-
-test "normalizeVirtualPath rejects unsafe paths" {
-    try testing.expectError(PathError.ParentTraversalNotAllowed, normalizeVirtualPath(testing.allocator, "../secret.zmesh"));
-    try testing.expectError(PathError.ParentTraversalNotAllowed, normalizeVirtualPath(testing.allocator, "materials/../secret.zmesh"));
-    try testing.expectError(PathError.AbsolutePathNotAllowed, normalizeVirtualPath(testing.allocator, "/tmp/file.zmesh"));
-    try testing.expectError(PathError.AbsolutePathNotAllowed, normalizeVirtualPath(testing.allocator, "C:\\tmp\\file.zmesh"));
-}
-
-test "resolveRelativeVirtualPath joins sibling dependencies" {
-    const resolved = try resolveRelativeVirtualPath(testing.allocator, "materials/monkey.zamat", "brick_albedo.ztex");
-    defer testing.allocator.free(resolved);
-    try testing.expectEqualStrings("materials/brick_albedo.ztex", resolved);
-}
-
-test "resolveRelativeVirtualPath rejects parent traversal" {
-    try testing.expectError(
-        PathError.ParentTraversalNotAllowed,
-        resolveRelativeVirtualPath(testing.allocator, "materials/monkey.zamat", "../x.ztex"),
-    );
 }
 
 test "loadFromFile loads zmesh" {

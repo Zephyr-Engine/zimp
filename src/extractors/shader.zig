@@ -7,8 +7,6 @@ const file_read = @import("../shared/file_read.zig");
 const path_helpers = @import("../path.zig");
 
 const parseIncludeFilename = shader_source.parseIncludeFilename;
-const resolveIncludePath = path_helpers.resolveShaderInclude;
-const normalizePath = path_helpers.normalizeRelative;
 
 pub fn extractor() DependencyExtractor {
     return .{ .extractFn = extractShaderDeps, .asset_type = .shader };
@@ -34,7 +32,7 @@ fn extractShaderDeps(
     var lines = std.mem.splitScalar(u8, file_result.bytes, '\n');
     while (lines.next()) |line| {
         if (parseIncludeFilename(line)) |filename| {
-            const path = try resolveIncludePath(allocator, source.path, filename);
+            const path = try path_helpers.resolveShaderInclude(allocator, source.path, filename);
             errdefer allocator.free(path);
             try deps.append(allocator, SourceFile.fromPath(path));
         }
@@ -91,42 +89,6 @@ test "parseIncludeFilename ignores mismatched delimiters" {
 
 test "parseIncludeFilename ignores line without whitespace or bracket after directive" {
     try testing.expectEqual(@as(?[]const u8, null), parseIncludeFilename("#includefoo\n"));
-}
-
-test "normalizePath leaves simple path unchanged" {
-    const p = try normalizePath(testing.allocator, "shaders/common.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("shaders/common.glsl", p);
-}
-
-test "normalizePath resolves double-dot" {
-    const p = try normalizePath(testing.allocator, "shaders/../shared/lighting.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("shared/lighting.glsl", p);
-}
-
-test "normalizePath resolves dot component" {
-    const p = try normalizePath(testing.allocator, "shaders/./common.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("shaders/common.glsl", p);
-}
-
-test "resolveIncludePath prefixes include with shader directory" {
-    const p = try resolveIncludePath(testing.allocator, "shaders/basic.frag", "common.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("shaders/common.glsl", p);
-}
-
-test "resolveIncludePath resolves parent directory traversal" {
-    const p = try resolveIncludePath(testing.allocator, "shaders/basic.frag", "../shared/lighting.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("shared/lighting.glsl", p);
-}
-
-test "resolveIncludePath returns include as-is when shader has no directory" {
-    const p = try resolveIncludePath(testing.allocator, "basic.frag", "common.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("common.glsl", p);
 }
 
 test "extractShaderDeps returns #include paths from a shader file" {

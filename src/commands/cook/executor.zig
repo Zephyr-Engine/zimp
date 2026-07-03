@@ -40,18 +40,6 @@ const CookJobResult = struct {
     metrics: MetricsDelta = .{},
 };
 
-const AssetDecision = struct {
-    action: Action = .cook,
-    source_size: u64 = 0,
-    cache_entry: ?*CacheEntry = null,
-
-    const Action = enum {
-        cached,
-        hash_match,
-        cook,
-    };
-};
-
 const CookJob = struct {
     allocator: std.mem.Allocator,
     ctx: *const CookContext,
@@ -88,10 +76,16 @@ const CookJob = struct {
     }
 
     const JobDecision = struct {
-        action: AssetDecision.Action = .cook,
+        action: Action = .cook,
         source_size: u64 = 0,
         source_mtime: i96 = 0,
         metrics: MetricsDelta = .{},
+
+        const Action = enum {
+            cached,
+            hash_match,
+            cook,
+        };
     };
 
     fn processDependencyOnly(self: *const CookJob) !CookJobResult {
@@ -459,68 +453,6 @@ pub const Executor = struct {
         }
     }
 
-    fn processAsset(self: *Executor, entry: SourceFile, cook_node: std.Progress.Node, force_recook: bool) !ProcessResult {
-        const asset_node = cook_node.start(entry.path, 0);
-        defer asset_node.end();
-
-        if (cookers.get(entry.extension) == null) {
-            return self.processDependencyOnly(entry, force_recook);
-        }
-
-        const start = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
-        const decision = try self.decideAssetAction(entry, force_recook);
-
-        return switch (decision.action) {
-            .cached => .cached,
-            .hash_match => blk: {
-                const cache_entry = decision.cache_entry orelse unreachable;
-                const updated_info = try entry.getFileInfo(self.ctx.source, self.ctx.io);
-                cache_entry.source_mtime = updated_info.modified_ns;
-                log.debug("{s} hash match, updated mtime", .{entry.path});
-                break :blk .hash_match;
-            },
-            .cook => self.cookAndCache(entry, decision.source_size, start),
-        };
-    }
-
-    fn processDependencyOnly(self: *Executor, entry: SourceFile, force_recook: bool) !ProcessResult {
-        const info = try entry.getFileInfo(self.ctx.source, self.ctx.io);
-
-        if (force_recook) {
-            try self.cacheDependencyOnly(entry, info.size);
-            log.debug("{s} dependency changed, propagating to dependents", .{entry.path});
-            return .dependency_changed;
-        }
-
-        if (self.cache.lookupEntryMut(entry)) |cache_entry| {
-            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &entry, self.cache.host_os);
-            if (staleness == .stale_content or staleness == .hash_match) {
-                self.metrics.source_bytes_hashed += info.size;
-            }
-
-            switch (staleness) {
-                .cached => {
-                    log.debug("{s} is dependency-only and cached", .{entry.path});
-                    return .skipped;
-                },
-                .hash_match => {
-                    cache_entry.source_mtime = info.modified_ns;
-                    log.debug("{s} dependency-only hash match, updated mtime", .{entry.path});
-                    return .skipped;
-                },
-                else => {
-                    log.debug("{s} dependency-only source changed, propagating to dependents", .{entry.path});
-                    try self.cacheDependencyOnly(entry, info.size);
-                    return .dependency_changed;
-                },
-            }
-        }
-
-        try self.cacheDependencyOnly(entry, info.size);
-        log.debug("{s} dependency-only source first seen, propagating to dependents", .{entry.path});
-        return .dependency_changed;
-    }
-
     fn cacheDependencyOnly(self: *Executor, entry: SourceFile, source_size: u64) !void {
         self.metrics.source_bytes_hashed += source_size;
         try self.cache.upsertEntry(
@@ -550,134 +482,6 @@ pub const Executor = struct {
             entry,
             try CacheEntry.createErrored(self.allocator, self.ctx.io, self.ctx.source, entry),
         );
-    }
-
-    fn decideAssetAction(self: *Executor, entry: SourceFile, force_recook: bool) !AssetDecision {
-        var decision: AssetDecision = .{};
-
-        if (force_recook) {
-            log.debug("{s} dependency changed, force recooking", .{entry.path});
-            return decision;
-        }
-
-        if (self.cache.lookupEntryMut(entry)) |cache_entry| {
-            const info = try entry.getFileInfo(self.ctx.source, self.ctx.io);
-            decision.source_size = info.size;
-
-            const staleness = try Staleness.check(self.ctx.io, self.ctx.source, cache_entry, &entry, self.cache.host_os);
-            if (staleness == .stale_content or staleness == .hash_match) {
-                self.metrics.source_bytes_hashed += decision.source_size;
-            }
-
-            switch (staleness) {
-                .cached => {
-                    if (self.outputFileExists(cache_entry.cooked_path)) {
-                        log.debug("{s} is cached, not cooking", .{entry.path});
-                        decision.action = .cached;
-                        return decision;
-                    }
-                    log.debug("{s} cached but output file missing, recooking", .{entry.path});
-                },
-                .hash_match => {
-                    if (self.outputFileExists(cache_entry.cooked_path)) {
-                        decision.action = .hash_match;
-                        decision.cache_entry = cache_entry;
-                        return decision;
-                    }
-                    log.debug("{s} hash match but output file missing, recooking", .{entry.path});
-                },
-                .errored => {
-                    log.debug("{s} previously errored, retrying", .{entry.path});
-                },
-                else => {
-                    log.debug("{s} is not cached, staleness: {s}", .{ entry.path, @tagName(staleness) });
-                },
-            }
-        }
-
-        return decision;
-    }
-
-    fn cookAndCache(self: *Executor, entry: SourceFile, initial_source_size: u64, start: std.Io.Clock.Timestamp) !ProcessResult {
-        var source_size = initial_source_size;
-        if (source_size == 0) {
-            const info = try entry.getFileInfo(self.ctx.source, self.ctx.io);
-            source_size = info.size;
-        }
-
-        const cooker = cookers.get(entry.extension) orelse {
-            log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ entry.extension.string(), entry.path });
-            return .skipped;
-        };
-
-        const cooked_path = cooker.outputPath(self.allocator, entry.path) catch |err| {
-            log.err("Failed to compute output path for '{s}': {s}", .{ entry.path, @errorName(err) });
-            return .errored;
-        };
-        defer self.allocator.free(cooked_path);
-
-        const cooked_file = self.ctx.output.createFile(self.ctx.io, cooked_path, .{}) catch |err| {
-            log.err("Failed to create output file for '{s}': {s}", .{ entry.path, @errorName(err) });
-            return .errored;
-        };
-        defer cooked_file.close(self.ctx.io);
-
-        var buf: [8192]u8 = undefined;
-        var file_writer = cooked_file.writer(self.ctx.io, &buf);
-
-        const cook_failed = blk: {
-            cooker.cook(self.allocator, self.ctx.io, self.ctx.source, entry.path, &file_writer.interface) catch |err| {
-                log.err("Failed to cook '{s}': {s}", .{ entry.path, @errorName(err) });
-                break :blk true;
-            };
-            break :blk false;
-        };
-
-        if (cook_failed) {
-            const errored_entry = CacheEntry.createErrored(self.allocator, self.ctx.io, self.ctx.source, entry) catch |err| {
-                log.err("Failed to create errored cache entry for '{s}': {s}", .{ entry.path, @errorName(err) });
-                return .errored;
-            };
-
-            // Cooker attempted a read, and errored cache entry computes a content hash.
-            self.metrics.source_bytes_read += source_size;
-            self.metrics.source_bytes_hashed += source_size;
-            try self.cache.upsertEntry(self.allocator, entry, errored_entry);
-            return .errored;
-        }
-
-        try file_writer.flush();
-
-        const cooked_stat = try cooked_file.stat(self.ctx.io);
-
-        const end = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
-        const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
-        var duration_buf: [32]u8 = undefined;
-        log.debug("Cooked '{s}' in {s}", .{ entry.path, fmtDuration(elapsed_ns, &duration_buf) });
-
-        // Cooker reads source once; cache entry creation hashes source once.
-        self.metrics.source_bytes_read += source_size;
-        self.metrics.source_bytes_hashed += source_size;
-        self.metrics.cooked_bytes_written += cooked_stat.size;
-
-        try self.cache.upsertEntry(
-            self.allocator,
-            entry,
-            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, cooked_path, cooked_stat.size),
-        );
-
-        return .cooked;
-    }
-
-    fn outputFileExists(self: *const Executor, cooked_path: []const u8) bool {
-        if (cooked_path.len == 0) {
-            return false;
-        }
-
-        const file = self.ctx.output.openFile(self.ctx.io, cooked_path, .{}) catch return false;
-        file.close(self.ctx.io);
-
-        return true;
     }
 };
 

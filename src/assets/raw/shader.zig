@@ -141,14 +141,6 @@ pub fn includeUsesAngleBrackets(line: []const u8) bool {
     return after_directive.len > 0 and after_directive[0] == '<';
 }
 
-pub fn resolveIncludePath(allocator: std.mem.Allocator, shader_path: []const u8, include: []const u8) ![]u8 {
-    return path_helpers.resolveShaderInclude(allocator, shader_path, include);
-}
-
-pub fn normalizePath(allocator: std.mem.Allocator, path: []const u8) ![]u8 {
-    return path_helpers.normalizeRelative(allocator, path);
-}
-
 pub fn preprocessShader(
     source: []const u8,
     source_path: []const u8,
@@ -237,7 +229,7 @@ const PreprocessContext = struct {
         line_no: usize,
         include_name: []const u8,
     ) anyerror!void {
-        const include_path = try resolveIncludePath(self.allocator, source_path, include_name);
+        const include_path = try path_helpers.resolveShaderInclude(self.allocator, source_path, include_name);
         var include_path_owned = true;
         errdefer if (include_path_owned) self.allocator.free(include_path);
 
@@ -462,18 +454,6 @@ test "parseIncludeFilename ignores commented-out include" {
 
 test "parseIncludeFilename ignores line without whitespace after directive" {
     try testing.expectEqual(@as(?[]const u8, null), parseIncludeFilename("#includefoo\n"));
-}
-
-test "resolveIncludePath prefixes include with shader directory" {
-    const p = try resolveIncludePath(testing.allocator, "shaders/basic.frag", "common.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("shaders/common.glsl", p);
-}
-
-test "resolveIncludePath resolves parent directory traversal" {
-    const p = try resolveIncludePath(testing.allocator, "shaders/pbr/main.frag", "../shared/utils.glsl");
-    defer testing.allocator.free(p);
-    try testing.expectEqualStrings("shaders/shared/utils.glsl", p);
 }
 
 test "preprocessShader inserts include contents and line directives" {
