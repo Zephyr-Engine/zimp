@@ -24,42 +24,6 @@ pub const DependencyExtractor = struct {
     }
 };
 
-const mesh_extractor = @import("mesh.zig").extractor();
-const shader_extractor = @import("shader.zig").extractor();
-const material_extractor = @import("material.zig").extractor();
-
-pub const extractor_registry = std.EnumArray(AssetType, ?DependencyExtractor).init(.{
-    .mesh = mesh_extractor,
-    .shader = shader_extractor,
-    .texture = null,
-    .material = material_extractor,
-    .unknown = null,
-});
-
-comptime {
-    for (std.meta.fields(AssetType)) |field| {
-        const at: AssetType = @enumFromInt(field.value);
-        if (extractor_registry.get(at)) |ex| {
-            if (ex.asset_type != at) {
-                @compileError("DependencyExtractor for asset type '" ++ field.name ++
-                    "' has asset_type that does not match registry key");
-            }
-        }
-    }
-}
-
-pub fn extractDependencies(
-    source: *const SourceFile,
-    dir: std.Io.Dir,
-    io: std.Io,
-    allocator: std.mem.Allocator,
-) ![]const SourceFile {
-    if (extractor_registry.get(source.assetType)) |e| {
-        return e.extract(source, dir, io, allocator);
-    }
-    return &.{};
-}
-
 const testing = std.testing;
 
 var test_called: bool = false;
@@ -107,52 +71,4 @@ test "DependencyExtractor.extract propagates errors from extractFn" {
 test "DependencyExtractor struct contains extractFn and asset_type" {
     try testing.expect(@hasField(DependencyExtractor, "extractFn"));
     try testing.expect(@hasField(DependencyExtractor, "asset_type"));
-}
-
-test "extractor_registry contains mesh" {
-    try testing.expect(extractor_registry.get(.mesh) != null);
-}
-
-test "extractor_registry contains shader" {
-    try testing.expect(extractor_registry.get(.shader) != null);
-}
-
-test "extractor_registry returns null for texture" {
-    try testing.expectEqual(@as(?DependencyExtractor, null), extractor_registry.get(.texture));
-}
-
-test "extractor_registry returns null for unknown" {
-    try testing.expectEqual(@as(?DependencyExtractor, null), extractor_registry.get(.unknown));
-}
-
-test "extractDependencies returns empty slice for texture" {
-    const sf = SourceFile{ .path = "a.png", .extension = .png, .assetType = .texture };
-    const deps = try extractDependencies(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator);
-    defer testing.allocator.free(deps);
-    try testing.expectEqual(@as(usize, 0), deps.len);
-}
-
-test "extractDependencies returns empty slice for unknown" {
-    const sf = SourceFile{ .path = "a.xyz", .extension = .other, .assetType = .unknown };
-    const deps = try extractDependencies(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator);
-    defer testing.allocator.free(deps);
-    try testing.expectEqual(@as(usize, 0), deps.len);
-}
-
-test "extractDependencies routes to mesh extractor" {
-    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
-    const deps = try extractDependencies(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator);
-    defer testing.allocator.free(deps);
-    try testing.expectEqual(@as(usize, 0), deps.len);
-}
-
-test "extractDependencies routes to shader extractor" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-    const file = try tmp.dir.createFile(testing.io, "a.vert", .{});
-    file.close(testing.io);
-    const sf = SourceFile{ .path = "a.vert", .extension = .vert, .assetType = .shader };
-    const deps = try extractDependencies(&sf, tmp.dir, testing.io, testing.allocator);
-    defer testing.allocator.free(deps);
-    try testing.expectEqual(@as(usize, 0), deps.len);
 }

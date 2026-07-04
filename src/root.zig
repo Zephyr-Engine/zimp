@@ -150,6 +150,7 @@ test "public API exposes format and asset construction types" {
 
 test {
     _ = @import("assets/asset.zig");
+    _ = @import("assets/asset_registry.zig");
     _ = @import("assets/asset_scanner.zig");
     _ = @import("assets/dependency_graph.zig");
     _ = @import("assets/source_file.zig");
