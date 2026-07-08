@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const zob = @import("zob");
-const cookers = @import("../../cookers/cooker.zig").cooker_registry;
+const asset_registry = @import("../../assets/asset_registry.zig");
 const SourceFile = @import("../../assets/source_file.zig").SourceFile;
 const Hash = @import("../../assets/source_file.zig").Hash;
 const Staleness = @import("../../cache/staleness.zig").Staleness;
@@ -49,10 +49,33 @@ const CookJob = struct {
     cook_node: std.Progress.Node,
 
     pub fn execute(self: @This()) !CookJobResult {
+        var runner = CookJobRunner{
+            .allocator = self.allocator,
+            .ctx = self.ctx,
+            .cache = self.cache,
+            .entry = self.entry,
+            .descriptor = asset_registry.descriptorForSource(self.entry),
+            .force_recook = self.force_recook,
+            .cook_node = self.cook_node,
+        };
+        return runner.execute();
+    }
+};
+
+const CookJobRunner = struct {
+    allocator: std.mem.Allocator,
+    ctx: *const CookContext,
+    cache: *const Cache,
+    entry: SourceFile,
+    descriptor: asset_registry.AssetDescriptor,
+    force_recook: bool,
+    cook_node: std.Progress.Node,
+
+    pub fn execute(self: *const CookJobRunner) !CookJobResult {
         const asset_node = self.cook_node.start(self.entry.path, 0);
         defer asset_node.end();
 
-        if (cookers.get(self.entry.extension) == null) {
+        if (self.descriptor.cooker == null) {
             return self.processDependencyOnly();
         }
 
@@ -88,7 +111,7 @@ const CookJob = struct {
         };
     };
 
-    fn processDependencyOnly(self: *const CookJob) !CookJobResult {
+    fn processDependencyOnly(self: *const CookJobRunner) !CookJobResult {
         var result = CookJobResult{
             .entry = self.entry,
             .result = .dependency_changed,
@@ -133,7 +156,7 @@ const CookJob = struct {
         return result;
     }
 
-    fn decideAssetAction(self: *const CookJob) !JobDecision {
+    fn decideAssetAction(self: *const CookJobRunner) !JobDecision {
         var decision: JobDecision = .{};
 
         const info = try self.entry.getFileInfo(self.ctx.source, self.ctx.io);
@@ -180,7 +203,7 @@ const CookJob = struct {
     }
 
     fn cookAndPrepareCache(
-        self: *const CookJob,
+        self: *const CookJobRunner,
         source_size: u64,
         initial_metrics: MetricsDelta,
         start: std.Io.Clock.Timestamp,
@@ -191,7 +214,7 @@ const CookJob = struct {
             .metrics = initial_metrics,
         };
 
-        const cooker = cookers.get(self.entry.extension) orelse {
+        const cooker = self.descriptor.cooker orelse {
             log.warn("No cooker registered for extension '{s}', skipping '{s}'", .{ self.entry.extension.string(), self.entry.path });
             result.result = .skipped;
             return result;
@@ -247,12 +270,12 @@ const CookJob = struct {
         return result;
     }
 
-    fn lookupEntry(self: *const CookJob) ?*const CacheEntry {
+    fn lookupEntry(self: *const CookJobRunner) ?*const CacheEntry {
         const idx = self.cache.getIdx(self.entry) orelse return null;
         return &self.cache.entries.items[idx];
     }
 
-    fn outputFileExists(self: *const CookJob, cooked_path: []const u8) bool {
+    fn outputFileExists(self: *const CookJobRunner, cooked_path: []const u8) bool {
         if (cooked_path.len == 0) {
             return false;
         }
@@ -321,6 +344,125 @@ const LockedAllocator = struct {
     };
 };
 
+const MetricsAccumulator = struct {
+    metrics: *CookMetrics,
+    counting: *CountingAllocator,
+
+    fn recordJobResult(self: *MetricsAccumulator, result: CookJobResult) void {
+        self.metrics.source_bytes_read += result.metrics.source_bytes_read;
+        self.metrics.source_bytes_hashed += result.metrics.source_bytes_hashed;
+        self.metrics.cooked_bytes_written += result.metrics.cooked_bytes_written;
+
+        switch (result.result) {
+            .cached => self.metrics.assets_cached += 1,
+            .hash_match => {
+                self.metrics.assets_cached += 1;
+                self.metrics.assets_hash_match += 1;
+            },
+            .cooked => self.metrics.assets_cooked += 1,
+            .dependency_changed => {},
+            .errored => self.metrics.assets_errored += 1,
+            .skipped => {},
+        }
+    }
+
+    fn markPeak(self: *MetricsAccumulator) void {
+        cook_metrics.markPeak(self.metrics, self.counting.peak_requested_bytes);
+    }
+};
+
+const CookCacheUpdater = struct {
+    allocator: std.mem.Allocator,
+    ctx: *const CookContext,
+    cache: *Cache,
+    metrics: *CookMetrics,
+
+    fn apply(self: *CookCacheUpdater, result: CookJobResult) !void {
+        switch (result.cache_update) {
+            .none => {},
+            .source_mtime => |mtime| {
+                if (self.cache.lookupEntryMut(result.entry)) |cache_entry| {
+                    cache_entry.source_mtime = mtime;
+                }
+            },
+            .cooked => |cooked| {
+                try self.cacheCooked(result.entry, cooked.source_size, cooked.cooked_size);
+            },
+            .dependency_only => |source_size| {
+                try self.cacheDependencyOnly(result.entry, source_size);
+            },
+            .errored => {
+                try self.cacheErrored(result.entry, result.metrics.source_bytes_read);
+            },
+        }
+    }
+
+    fn cacheDependencyOnly(self: *CookCacheUpdater, entry: SourceFile, source_size: u64) !void {
+        self.metrics.source_bytes_hashed += source_size;
+        try self.cache.upsertEntry(
+            self.allocator,
+            entry,
+            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, "", 0),
+        );
+    }
+
+    fn cacheCooked(self: *CookCacheUpdater, entry: SourceFile, source_size: u64, cooked_size: u64) !void {
+        const cooker = asset_registry.cookerFor(entry.extension) orelse return;
+        const cooked_path = try cooker.outputPath(self.allocator, entry.path);
+        defer self.allocator.free(cooked_path);
+
+        self.metrics.source_bytes_hashed += source_size;
+        try self.cache.upsertEntry(
+            self.allocator,
+            entry,
+            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, cooked_path, cooked_size),
+        );
+    }
+
+    fn cacheErrored(self: *CookCacheUpdater, entry: SourceFile, source_size: u64) !void {
+        self.metrics.source_bytes_hashed += source_size;
+        try self.cache.upsertEntry(
+            self.allocator,
+            entry,
+            try CacheEntry.createErrored(self.allocator, self.ctx.io, self.ctx.source, entry),
+        );
+    }
+};
+
+const InvalidationTracker = struct {
+    reverse: *const DependentsMap,
+    forced: std.AutoHashMap(Hash, void),
+
+    fn init(allocator: std.mem.Allocator, reverse: *const DependentsMap) InvalidationTracker {
+        return .{
+            .reverse = reverse,
+            .forced = .init(allocator),
+        };
+    }
+
+    fn deinit(self: *InvalidationTracker) void {
+        self.forced.deinit();
+    }
+
+    fn isForced(self: *const InvalidationTracker, entry: SourceFile) bool {
+        return self.forced.contains(entry.hashPath());
+    }
+
+    fn enqueueIfChanged(self: *InvalidationTracker, result: CookJobResult) !void {
+        if (result.result == .cooked or result.result == .dependency_changed) {
+            try self.enqueueDependents(result.entry.hashPath());
+        }
+    }
+
+    fn enqueueDependents(self: *InvalidationTracker, hash: Hash) !void {
+        if (self.reverse.get(hash)) |dependents| {
+            for (dependents.items) |dep_hash| {
+                try self.forced.put(dep_hash, {});
+            }
+        }
+    }
+};
+
 pub const Executor = struct {
     allocator: std.mem.Allocator,
     ctx: *const CookContext,
@@ -355,8 +497,18 @@ pub const Executor = struct {
         var locked_allocator = LockedAllocator.init(self.allocator);
         const job_allocator = locked_allocator.allocator();
 
-        var force_recook: std.AutoHashMap(Hash, void) = .init(self.allocator);
-        defer force_recook.deinit();
+        var invalidation = InvalidationTracker.init(self.allocator, self.reverse);
+        defer invalidation.deinit();
+        var cache_updater = CookCacheUpdater{
+            .allocator = self.allocator,
+            .ctx = self.ctx,
+            .cache = self.cache,
+            .metrics = self.metrics,
+        };
+        var metrics_accumulator = MetricsAccumulator{
+            .metrics = self.metrics,
+            .counting = self.counting,
+        };
 
         const cook_start = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
         const cook_node = progress.start("Cooking assets", self.totalAssetCount());
@@ -372,7 +524,7 @@ pub const Executor = struct {
                     .ctx = self.ctx,
                     .cache = self.cache,
                     .entry = entry,
-                    .force_recook = force_recook.contains(entry.hashPath()),
+                    .force_recook = invalidation.isForced(entry),
                     .cook_node = cook_node,
                 };
             }
@@ -384,8 +536,10 @@ pub const Executor = struct {
             defer self.allocator.free(results);
 
             for (results) |result| {
-                try self.applyJobResult(result, &force_recook);
-                cook_metrics.markPeak(self.metrics, self.counting.peak_requested_bytes);
+                metrics_accumulator.recordJobResult(result);
+                try cache_updater.apply(result);
+                try invalidation.enqueueIfChanged(result);
+                metrics_accumulator.markPeak();
             }
         }
 
@@ -399,89 +553,6 @@ pub const Executor = struct {
             total += level.len;
         }
         return total;
-    }
-
-    fn recordResult(self: *Executor, result: ProcessResult) void {
-        switch (result) {
-            .cached => self.metrics.assets_cached += 1,
-            .hash_match => {
-                self.metrics.assets_cached += 1;
-                self.metrics.assets_hash_match += 1;
-            },
-            .cooked => self.metrics.assets_cooked += 1,
-            .dependency_changed => {},
-            .errored => self.metrics.assets_errored += 1,
-            .skipped => {},
-        }
-    }
-
-    fn applyJobResult(self: *Executor, result: CookJobResult, force_recook: *std.AutoHashMap(Hash, void)) !void {
-        self.metrics.source_bytes_read += result.metrics.source_bytes_read;
-        self.metrics.source_bytes_hashed += result.metrics.source_bytes_hashed;
-        self.metrics.cooked_bytes_written += result.metrics.cooked_bytes_written;
-
-        self.recordResult(result.result);
-
-        switch (result.cache_update) {
-            .none => {},
-            .source_mtime => |mtime| {
-                if (self.cache.lookupEntryMut(result.entry)) |cache_entry| {
-                    cache_entry.source_mtime = mtime;
-                }
-            },
-            .cooked => |cooked| {
-                try self.cacheCooked(result.entry, cooked.source_size, cooked.cooked_size);
-            },
-            .dependency_only => |source_size| {
-                try self.cacheDependencyOnly(result.entry, source_size);
-            },
-            .errored => {
-                try self.cacheErrored(result.entry, result.metrics.source_bytes_read);
-            },
-        }
-
-        if (result.result == .cooked or result.result == .dependency_changed) {
-            try self.enqueueDependents(result.entry.hashPath(), force_recook);
-        }
-    }
-
-    fn enqueueDependents(self: *Executor, hash: Hash, queue: *std.AutoHashMap(Hash, void)) !void {
-        if (self.reverse.get(hash)) |dependents| {
-            for (dependents.items) |dep_hash| {
-                try queue.put(dep_hash, {});
-            }
-        }
-    }
-
-    fn cacheDependencyOnly(self: *Executor, entry: SourceFile, source_size: u64) !void {
-        self.metrics.source_bytes_hashed += source_size;
-        try self.cache.upsertEntry(
-            self.allocator,
-            entry,
-            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, "", 0),
-        );
-    }
-
-    fn cacheCooked(self: *Executor, entry: SourceFile, source_size: u64, cooked_size: u64) !void {
-        const cooker = cookers.get(entry.extension) orelse return;
-        const cooked_path = try cooker.outputPath(self.allocator, entry.path);
-        defer self.allocator.free(cooked_path);
-
-        self.metrics.source_bytes_hashed += source_size;
-        try self.cache.upsertEntry(
-            self.allocator,
-            entry,
-            try CacheEntry.create(self.allocator, self.ctx.io, self.ctx.source, entry, cooked_path, cooked_size),
-        );
-    }
-
-    fn cacheErrored(self: *Executor, entry: SourceFile, source_size: u64) !void {
-        self.metrics.source_bytes_hashed += source_size;
-        try self.cache.upsertEntry(
-            self.allocator,
-            entry,
-            try CacheEntry.createErrored(self.allocator, self.ctx.io, self.ctx.source, entry),
-        );
     }
 };
 

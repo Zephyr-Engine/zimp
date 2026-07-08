@@ -48,6 +48,7 @@ pub const AssetScanner = struct {
                 });
             } else if (entry.kind == .directory) {
                 const subdir = try std.Io.Dir.openDir(dir, self.io, entry.name, .{ .iterate = true });
+                defer subdir.close(self.io);
                 const subprefix = if (prefix.len > 0)
                     try std.fs.path.join(self.allocator, &.{ prefix, entry.name })
                 else

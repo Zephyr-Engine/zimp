@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const extractDependencies = @import("../../extractors/extractor.zig").extractDependencies;
+const asset_registry = @import("../../assets/asset_registry.zig");
 const AssetScanner = @import("../../assets/asset_scanner.zig").AssetScanner;
 const SourceFile = @import("../../assets/source_file.zig").SourceFile;
 const Hash = @import("../../assets/source_file.zig").Hash;
@@ -107,7 +107,7 @@ fn buildDependencyGraph(
             }
         }
 
-        const deps = extractDependencies(&source, ctx.source, ctx.io, allocator) catch |err| {
+        const deps = asset_registry.extractDependencies(&source, ctx.source, ctx.io, allocator) catch |err| {
             log.warn("Failed to extract dependencies for '{s}': {s}", .{ source.path, @errorName(err) });
             continue;
         };
