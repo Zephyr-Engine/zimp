@@ -1,0 +1,293 @@
+const std = @import("std");
+
+const path = @import("../path.zig");
+const ProjectId = @import("../id/id_types.zig").ProjectId;
+const atomic_file = @import("../shared/atomic_file.zig");
+
+const log = std.log.scoped(.zimp_project);
+
+const MANIFEST_VERSION: u32 = 1;
+const DEFAULT_COOKED_ASSETS_DIR = ".zephyr/cooked";
+const DEFAULT_ASSETS_DIR = ".zephyr/assets";
+const DEFAULT_SCENES_DIR = ".zephyr/scenes";
+const DEFAULT_ASSET_MANIFEST = ".zephyr/assets.zmanifest";
+const DEFAULT_NAME = "Untitled Project";
+const DEFAULT_GENERATED_DIR = ".zephyr";
+const DEFAULT_FORMAT = "zephyr.proj";
+
+/// The manifest always lives at this filename. `format` is a pure identity
+/// string and is never used as a save path (a custom `format` value fails
+/// `validate()` instead of silently relocating the manifest).
+pub const manifest_filename = "zephyr.proj";
+pub const default_manifest_path = DEFAULT_GENERATED_DIR ++ "/" ++ manifest_filename;
+
+pub const max_manifest_bytes: usize = 64 * 1024;
+
+pub const ValidateError = error{
+    InvalidProjectFormat,
+    UnsupportedProjectVersion,
+    InvalidProjectId,
+} || path.Error;
+
+pub const ProjectManifest = struct {
+    format: []const u8 = DEFAULT_FORMAT,
+    version: u32 = MANIFEST_VERSION,
+    name: []const u8 = DEFAULT_NAME,
+    project_id: ProjectId,
+    assets_dir: []const u8 = DEFAULT_ASSETS_DIR,
+    scenes_dir: []const u8 = DEFAULT_SCENES_DIR,
+    generated_dir: []const u8 = DEFAULT_GENERATED_DIR,
+    cooked_assets_dir: []const u8 = DEFAULT_COOKED_ASSETS_DIR,
+    asset_manifest: []const u8 = DEFAULT_ASSET_MANIFEST,
+    default_scene: ?[]const u8 = null,
+
+    pub fn load(allocator: std.mem.Allocator, io: std.Io, file: []const u8) !ProjectManifest {
+        const normalized_path = try path.normalizeVirtual(allocator, file);
+        defer allocator.free(normalized_path);
+
+        const cwd = std.Io.Dir.cwd();
+        const dir = try cwd.openDir(io, ".", .{});
+        defer dir.close(io);
+
+        return loadFromDir(allocator, io, dir, normalized_path);
+    }
+
+    pub fn loadFromDir(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8) !ProjectManifest {
+        const normalized_path = try path.normalizeVirtual(allocator, file);
+        defer allocator.free(normalized_path);
+
+        try path.validateVirtual(normalized_path);
+        const bytes = dir.readFileAlloc(io, normalized_path, allocator, .limited(max_manifest_bytes)) catch |err| switch (err) {
+            error.StreamTooLong => {
+                log.err("project manifest '{s}' exceeds {d} bytes; refusing to load", .{ normalized_path, max_manifest_bytes });
+                return error.ProjectManifestTooLarge;
+            },
+            else => return err,
+        };
+        defer allocator.free(bytes);
+
+        const manifest = try std.json.parseFromSliceLeaky(ProjectManifest, allocator, bytes, .{
+            .allocate = .alloc_always,
+        });
+        manifest.validate() catch |err| {
+            manifest.deinit(allocator);
+            return err;
+        };
+        return manifest;
+    }
+
+    /// Reject manifests whose identity or paths would make later file
+    /// operations unsafe. Called after every load and before every save.
+    pub fn validate(self: *const ProjectManifest) ValidateError!void {
+        if (!std.mem.eql(u8, self.format, DEFAULT_FORMAT)) return error.InvalidProjectFormat;
+        if (self.version == 0 or self.version > MANIFEST_VERSION) return error.UnsupportedProjectVersion;
+        if (self.project_id.isZero()) return error.InvalidProjectId;
+
+        try path.validateVirtual(self.assets_dir);
+        try path.validateVirtual(self.scenes_dir);
+        try path.validateVirtual(self.generated_dir);
+        try path.validateVirtual(self.cooked_assets_dir);
+        try path.validateVirtual(self.asset_manifest);
+        if (self.default_scene) |scene| try path.validateVirtual(scene);
+    }
+
+    pub fn deinit(self: ProjectManifest, allocator: std.mem.Allocator) void {
+        freeIfNotDefault(allocator, self.name, DEFAULT_NAME);
+        freeIfNotDefault(allocator, self.format, DEFAULT_FORMAT);
+        freeIfNotDefault(allocator, self.assets_dir, DEFAULT_ASSETS_DIR);
+        freeIfNotDefault(allocator, self.scenes_dir, DEFAULT_SCENES_DIR);
+        freeIfNotDefault(allocator, self.generated_dir, DEFAULT_GENERATED_DIR);
+        freeIfNotDefault(allocator, self.cooked_assets_dir, DEFAULT_COOKED_ASSETS_DIR);
+        freeIfNotDefault(allocator, self.asset_manifest, DEFAULT_ASSET_MANIFEST);
+        if (self.default_scene) |default_scene| {
+            allocator.free(default_scene);
+        }
+    }
+
+    pub fn assetsPath(self: *const ProjectManifest) []const u8 {
+        return self.assets_dir;
+    }
+
+    pub fn cookedAssetsPath(self: *const ProjectManifest) []const u8 {
+        return self.cooked_assets_dir;
+    }
+
+    pub fn assetManifestPath(self: *const ProjectManifest) []const u8 {
+        return self.asset_manifest;
+    }
+
+    pub fn save(self: *const ProjectManifest, allocator: std.mem.Allocator, io: std.Io, root_dir: std.Io.Dir) !void {
+        try self.validate();
+
+        var generated_dir = try root_dir.createDirPathOpen(io, self.generated_dir, .{});
+        defer generated_dir.close(io);
+
+        const bytes = try std.json.Stringify.valueAlloc(allocator, self, .{ .whitespace = .indent_2 });
+        defer allocator.free(bytes);
+
+        try atomic_file.writeFileAtomic(allocator, io, generated_dir, manifest_filename, bytes);
+    }
+};
+
+fn freeIfNotDefault(allocator: std.mem.Allocator, value: []const u8, default_value: []const u8) void {
+    if (value.ptr != default_value.ptr) {
+        allocator.free(value);
+    }
+}
+
+const testing = std.testing;
+
+const test_project_id = ProjectId.parseComptime("bf5a424f-e93e-4977-9a7a-0c522318dfdc");
+
+test "ProjectManifest.save writes generated manifest file" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const manifest: ProjectManifest = .{
+        .project_id = test_project_id,
+    };
+
+    try manifest.save(testing.allocator, testing.io, tmp.dir);
+
+    const bytes = try tmp.dir.readFileAlloc(testing.io, ".zephyr/zephyr.proj", testing.allocator, .limited(4096));
+    defer testing.allocator.free(bytes);
+    try testing.expect(std.mem.indexOf(u8, bytes, "\"project_id\": \"bf5a424f-e93e-4977-9a7a-0c522318dfdc\"") != null);
+
+    const parsed = try std.json.parseFromSlice(ProjectManifest, testing.allocator, bytes, .{});
+    defer parsed.deinit();
+    try testing.expectEqualStrings(".zephyr", parsed.value.generated_dir);
+    try testing.expectEqualStrings(".zephyr/assets", parsed.value.assets_dir);
+    try testing.expectEqualStrings(".zephyr/cooked", parsed.value.cooked_assets_dir);
+    try testing.expectEqualStrings(".zephyr/assets.zmanifest", parsed.value.asset_manifest);
+    try testing.expectEqualStrings("zephyr.proj", parsed.value.format);
+    try testing.expect(parsed.value.project_id.eql(test_project_id));
+}
+
+test "ProjectManifest.save never uses format as the filename" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const manifest: ProjectManifest = .{
+        .project_id = test_project_id,
+        .format = "custom.proj",
+    };
+    try testing.expectError(error.InvalidProjectFormat, manifest.save(testing.allocator, testing.io, tmp.dir));
+}
+
+test "ProjectManifest round-trips through save and loadFromDir" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const manifest: ProjectManifest = .{
+        .project_id = test_project_id,
+        .asset_manifest = ".zephyr/custom.zmanifest",
+    };
+    try manifest.save(testing.allocator, testing.io, tmp.dir);
+
+    const loaded = try ProjectManifest.loadFromDir(testing.allocator, testing.io, tmp.dir, default_manifest_path);
+    defer loaded.deinit(testing.allocator);
+    try testing.expect(loaded.project_id.eql(test_project_id));
+    try testing.expectEqualStrings(".zephyr/custom.zmanifest", loaded.asset_manifest);
+}
+
+test "ProjectManifest.loadFromDir rejects invalid manifests" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "bad.proj",
+        .data =
+        \\{
+        \\  "format": "custom.proj",
+        \\  "project_id": "bf5a424f-e93e-4977-9a7a-0c522318dfdc"
+        \\}
+        ,
+    });
+    try testing.expectError(error.InvalidProjectFormat, ProjectManifest.loadFromDir(testing.allocator, testing.io, tmp.dir, "bad.proj"));
+}
+
+test "ProjectManifest parses project_id from canonical UUID text" {
+    const bytes =
+        \\{
+        \\  "name": "Test Project",
+        \\  "project_id": "00000000-0000-0000-0000-000000000000"
+        \\}
+    ;
+
+    const parsed = try std.json.parseFromSlice(ProjectManifest, testing.allocator, bytes, .{});
+    defer parsed.deinit();
+    try testing.expect(parsed.value.project_id.eql(ProjectId.zero));
+}
+
+test "ProjectManifest.validate rejects bad identity and paths" {
+    const valid: ProjectManifest = .{ .project_id = test_project_id };
+    try valid.validate();
+
+    var m = valid;
+    m.format = "custom.proj";
+    try testing.expectError(error.InvalidProjectFormat, m.validate());
+
+    m = valid;
+    m.version = 0;
+    try testing.expectError(error.UnsupportedProjectVersion, m.validate());
+    m.version = 99;
+    try testing.expectError(error.UnsupportedProjectVersion, m.validate());
+
+    m = valid;
+    m.project_id = ProjectId.zero;
+    try testing.expectError(error.InvalidProjectId, m.validate());
+
+    m = valid;
+    m.assets_dir = "/absolute/assets";
+    try testing.expectError(error.AbsolutePathNotAllowed, m.validate());
+
+    m = valid;
+    m.cooked_assets_dir = "../escape/cooked";
+    try testing.expectError(error.ParentTraversalNotAllowed, m.validate());
+}
+
+test "ProjectManifest.deinit handles default literal fields" {
+    const manifest: ProjectManifest = .{
+        .project_id = test_project_id,
+    };
+
+    manifest.deinit(testing.allocator);
+}
+
+test "ProjectManifest.deinit frees strings allocated during leaky parsing" {
+    const bytes =
+        \\{
+        \\  "format": "zephyr.proj",
+        \\  "name": "Test Project",
+        \\  "project_id": "bf5a424f-e93e-4977-9a7a-0c522318dfdc",
+        \\  "assets_dir": "game-assets",
+        \\  "scenes_dir": "game-scenes",
+        \\  "generated_dir": ".cache",
+        \\  "cooked_assets_dir": ".cache/cooked",
+        \\  "asset_manifest": ".cache/assets.zmanifest",
+        \\  "default_scene": "game-scenes/main.scene"
+        \\}
+    ;
+
+    const manifest = try std.json.parseFromSliceLeaky(ProjectManifest, testing.allocator, bytes, .{
+        .allocate = .alloc_always,
+    });
+    defer manifest.deinit(testing.allocator);
+
+    try testing.expectEqualStrings("zephyr.proj", manifest.format);
+    try testing.expectEqualStrings("game-scenes/main.scene", manifest.default_scene.?);
+    try testing.expectEqualStrings(".cache/assets.zmanifest", manifest.asset_manifest);
+}
+
+test "ProjectManifest path helpers expose configured asset roots" {
+    const manifest: ProjectManifest = .{
+        .name = "Test Project",
+        .project_id = test_project_id,
+        .assets_dir = "game-assets",
+        .cooked_assets_dir = ".cache/cooked",
+    };
+
+    try testing.expectEqualStrings("game-assets", manifest.assetsPath());
+    try testing.expectEqualStrings(".cache/cooked", manifest.cookedAssetsPath());
+    try testing.expectEqualStrings(".zephyr/assets.zmanifest", manifest.assetManifestPath());
+}

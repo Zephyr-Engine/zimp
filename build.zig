@@ -1,8 +1,7 @@
 const std = @import("std");
 const zimp = @import("src/root.zig");
 
-pub const addCookStep = zimp.addCookStep;
-pub const CookStepOptions = zimp.CookStepOptions;
+pub const addProjectCookStep = zimp.addProjectCookStep;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});

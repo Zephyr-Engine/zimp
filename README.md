@@ -1,20 +1,23 @@
 # zimp (Zephyr Import - IN DEVELOPMENT)
 
-A build-time asset compiler for Zig 0.16 that converts source assets into GPU-optimized binary formats and packs them into archive files for zero-parse runtime loading.
+A build-time asset compiler for Zig 0.16 that converts source assets into GPU-optimized binary formats, maintains durable asset identity, and generates the asset manifest the engine resolves assets through at runtime.
 
 Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but fully standalone — usable in any Zig project that needs an offline asset pipeline.
 
 ## Features
 
-- **Build-time cooking** — converts source assets (GLTF, PNG, GLSL, WAV, TTF) into flat binary formats (`.za*`) optimized for `mmap` and direct GPU upload.
+- **Build-time cooking** — converts source assets (glTF/GLB, OBJ, PNG/JPG/HDR, GLSL, TOML materials) into flat binary formats optimized for direct GPU upload.
+- **Durable asset identity** — every authored asset gets a committed `.zmeta` sidecar carrying its `AssetId` (UUID). IDs survive recooks, cache deletion, and machine changes; renames preserve identity when the sidecar moves with the file.
+- **Asset manifest** — project cooks emit `assets.zmanifest`, a deterministic database mapping `AssetId` → source path, cooked path, kind, and content hash. The runtime resolves assets through it instead of hard-coded paths.
+- **Project mode** — `zimp cook --project <root>` reads `.zephyr/zephyr.proj` and derives all directories from the project manifest; no hand-wired source/output paths.
 - **SoA mesh layout** — vertex streams stored separately (positions, normals, UVs) so the engine binds only what each render pass needs.
-- **Vertex optimization** — deduplication, vertex cache reordering (Forsyth), and quantization (octahedral normals, f16 tangents, normalized u16 UVs).
-- **Texture classification** — automatic format selection (BC7/BC5/BC4) based on filename convention, material slot, or sidecar override.
-- **Block compression** — built-in BC4, BC5, and BC7 encoders written in Zig. No external texture tools required.
-- **Shader preprocessing** — `#include` resolution, `#ifdef` variant expansion, and optional SPIR-V compilation with reflection extraction.
-- **Incremental builds** — content-hashed `.zacache` with dependency graph tracking. Only re-cooks what changed.
-- **Pack files** — combines all cooked assets into a single `.zpak` archive with a sorted TOC for O(log n) lookup and optional LZ4 compression.
-- **Dual interface** — plugs into `build.zig` as a build step or runs as a standalone CLI for ad-hoc usage.
+- **Vertex quantization** — octahedral normals (`[2]i16`), `f16` tangents, normalized `u16` UVs, `u16` indices where they fit.
+- **Texture classification** — automatic format selection (BC7/BC5/BC4) from filename convention (`*_albedo`, `*_normal`, ...) and material slot.
+- **Block compression** — built-in BC4, BC5, BC6H, and BC7 encoders written in Zig. No external texture tools required.
+- **Shader preprocessing** — `#include` resolution and variant expansion; cooked shaders store final GLSL source per stage.
+- **glTF material extraction** — materials and embedded images inside `.glb`/`.gltf` are auto-generated as sources under `generated/` (with deterministic derived ids) and cooked in the same run.
+- **Incremental builds** — content-hashed `.zcache` with dependency graph tracking. Only re-cooks what changed.
+- **Dual interface** — plugs into `build.zig` as a build step (`addProjectCookStep`) or runs as a standalone CLI.
 - **Zero runtime dependencies** — cooked formats are self-contained binary blobs. No third-party parsers at runtime.
 
 ## Pipeline Overview
@@ -22,7 +25,8 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
 ```
   ┌─────────────────────────────────────────────────────────────────────┐
   │                          Source Assets                              │
-  │   .glb  .gltf  .obj  .png  .jpg  .hdr  .glsl  .wav  .ogg  .ttf      │
+  │      .glb  .gltf  .obj  .png  .jpg  .hdr  .vert  .frag  .zamat      │
+  │      (+ committed .zmeta identity sidecars next to each source)     │
   └──────────────────────────────┬──────────────────────────────────────┘
                                  │
                                  ▼
@@ -32,22 +36,20 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
                                  │
                                  ▼
                           ┌────────────┐
-                          │    Cook    │  convert to .za* binary formats (parallel, incremental)
+                          │    Cook    │  convert to binary formats (parallel, incremental)
                           └──────┬─────┘
                                  │
-            ┌──────────┬─────────┼─────────┬──────────┐
-            ▼          ▼         ▼         ▼          ▼
-         .zamesh   .zatex    .zashdr    .zasnd     .zafont
-         .zaskel   .zamat               .zastream
-         .zaanim
+                 ┌───────────┬───┴─────┬───────────┐
+                 ▼           ▼         ▼           ▼
+              .zmesh      .ztex     .zshdr      .zamat
                                  │
-                                 ▼
+                                 ▼  (project mode)
                           ┌────────────┐
-                          │    Pack    │  combine into .zpak archive with TOC + optional LZ4
-                          └──────┬─────┘
+                          │  Identity  │  resolve AssetIds (sidecar / derived / new),
+                          └──────┬─────┘  write assets.zmanifest, flush new sidecars
                                  │
                                  ▼
-                            game.zpak
+                        assets.zmanifest
 ```
 
 ## Requirements
@@ -59,59 +61,63 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
 Add zimp as a dependency in your `build.zig.zon`:
 
 ```sh
-zig fetch --save git+https://github.com/Zephyr-Engine/zimport.git
+zig fetch --save git+https://github.com/Zephyr-Engine/zimp.git
 ```
 
-Then in your `build.zig`:
+Then in your `build.zig`, cook the project as a build step:
 
 ```zig
+const zimp = @import("zimp");
+
 const zimp_dep = b.dependency("zimp", .{
     .target = target,
-    .optimize = optimize,
+    .optimize = .ReleaseFast,
 });
-const zimp_mod = zimp_dep.module("zimp");
 
-const import_step = zimp.addAssetStep(b, .{
-    .source_dir = "assets/",
-    .output_dir = "cooked/",
-    .pack_output = "game.zpak",
-    .incremental = true,
-});
+// Project root = the directory containing .zephyr/zephyr.proj.
+const cook = zimp.addProjectCookStep(b, zimp_dep, b.path("."));
+const cook_step = b.step("cook", "Cook assets with zimp");
+cook_step.dependOn(&cook.step);
 
 // Game exe depends on cooked assets
-exe.step.dependOn(&import_step.step);
+run_cmd.step.dependOn(&cook.step);
 ```
 
 ## Running the CLI
 
 ```sh
-zig build cli
+zig build run -- <command> [flags]
 ```
 
-### Cook assets
+### Cook a project (recommended)
+
+Reads `.zephyr/zephyr.proj`, cooks `assets_dir` into `cooked_assets_dir`, resolves durable ids, and writes `assets.zmanifest`:
 
 ```sh
-# Cook an entire directory
+zimp cook --project path/to/project
+```
+
+### Cook a bare directory
+
+Directory mode cooks without a project: no identity, no manifest. Useful for ad-hoc conversion; the Zephyr runtime requires a manifest and will not load from a dir-mode cook.
+
+```sh
 zimp cook --source assets/ --output cooked/
+
+# Force a full recook, ignoring the incremental cache
+zimp cook --project . --force
 
 # Emit machine-readable metrics for CI parsing
 zimp cook --source assets/ --output cooked/ --metrics-json
 ```
 
-### Pack into archive
-
-```sh
-zimp pack --input cooked/ --output game.zpak
-```
-
 ### Inspect cooked assets
 
 ```sh
-# Dump .zpak table of contents
-zimp inspect game.zpak
-
-# Dump a cooked asset header
-zimp inspect cooked/player.zamesh
+zimp inspect cooked/monkey.zmesh
+zimp inspect cooked/basic.vert.zshdr
+zimp inspect cooked/monkey.zamat
+zimp inspect .zcache
 ```
 
 ## Running tests
@@ -119,6 +125,17 @@ zimp inspect cooked/player.zamesh
 ```sh
 zig build test --summary all
 ```
+
+## Durable asset identity
+
+zimp is the source of truth for asset identity (see `docs/identity.md` in the main repo for the full rules):
+
+- **`.zmeta` sidecars** (`meshes/monkey.glb.zmeta`) carry each authored asset's `AssetId`. They are authored identity, committed to version control; deleting one assigns a NEW id on the next cook and breaks every reference to the asset.
+- **`assets.zmanifest`** is generated output (never committed): a deterministic, validated JSON database of every cooked asset. Identical inputs produce byte-identical manifests.
+- Ids are resolved by three frozen rules, in order: `generated/**` paths get deterministic derived ids (pure function of the path, no sidecar); an existing sidecar wins; otherwise a fresh UUIDv4 is minted and a sidecar written.
+- Duplicate ids (e.g. a file copied together with its sidecar) are a hard cook error naming both paths. Corrupt sidecars are hard errors — zimp never silently re-identifies an asset. Sidecars are flushed only after the manifest write succeeds.
+
+The shared ID types (`Uuid`, `AssetId`, `SceneId`, `SceneEntityId`, `ProjectId`, `ComponentTypeId`, `SchemaId`) live in `zimp.id` as distinct wrapper types, and the project manifest model (`zimp.ProjectManifest`, `zimp.ProjectRoot`) lives in `zimp.project`, so the cooker, runtime, and editor all share one definition.
 
 ## CI performance regression checks
 
@@ -140,61 +157,50 @@ When that label is present, CI still computes and reports regressions but does n
 
 ## Cooked formats
 
-### Meshes (`.zamesh`)
+### Meshes (`.zmesh`)
 
 Source: `.glb`, `.gltf`, `.obj`
 
 Flat binary blob with SoA vertex streams, directly uploadable to the GPU with zero parsing:
 
 ```zig
-const zamesh = @import("zimp").formats.zamesh;
+const ZMesh = @import("zimp").ZMesh;
 
-const mesh = try zamesh.read(allocator, file);
-defer mesh.deinit();
-
-// Bind only the streams you need
-gl.bufferData(gl.ARRAY_BUFFER, mesh.positions, gl.STATIC_DRAW);
+const mesh = try ZMesh.read(allocator, file);
 ```
 
 | Stream | Type | Notes |
 |--------|------|-------|
 | Positions | `[3]f32` | Always present |
-| Normals | `[2]s16` | Octahedral encoding, reconstruct Z in shader |
-| Tangents | `[4]f16` | Mikktspace |
+| Normals | `[2]i16` | Octahedral encoding, reconstruct Z in shader |
+| Tangents | `[4]f16` | Optional |
 | UV0 | `[2]u16` | Normalized to 0–65535 |
 | UV1 | `[2]u16` | Optional second UV set |
 | Joint indices | `[4]u16` | For skinned meshes |
 | Joint weights | `[4]f16` | For skinned meshes |
 
-Includes AABB bounding box, submesh table (per-material index ranges), and optional LOD chain.
+Includes an AABB bounding box; indices are `u16` when they fit, `u32` otherwise.
 
-### Skeletons (`.zaskel`) & Animations (`.zaanim`)
+### Textures (`.ztex`)
 
-Source: embedded in `.glb`/`.gltf`
-
-Skeletons are flat joint arrays ordered parent-before-child for single-pass FK. Animations store per-joint keyframe channels with f16 quaternion compression and delta-encoded translations. Clips include an event track for gameplay triggers (footstep sounds, VFX cues).
-
-### Textures (`.zatex`)
-
-Source: `.png`, `.jpg`, `.hdr`, `.exr`
+Source: `.png`, `.jpg`, `.jpeg`, `.hdr`
 
 Pre-mipmapped and block-compressed. Format is auto-selected by texture classification:
 
 | Usage | Format | Classification |
 |-------|--------|----------------|
-| Color / Albedo | BC7 (sRGB) | `*_albedo.*`, `*_diffuse.*`, `*_color.*` |
+| Color / Albedo | BC7 (sRGB) | `*_albedo.*`, `*_diffuse.*`, `*_basecolor.*` |
 | Normal maps | BC5 (linear) | `*_normal.*`, `*_nrm.*` |
 | Roughness / Metallic / AO (packed) | BC7 (linear) | `*_orm.*`, `*_rm.*` |
 | Single channel (roughness, height, AO) | BC4 (linear) | `*_roughness.*`, `*_height.*`, `*_ao.*` |
-| HDR environment maps | Raw f16 | `*.hdr`, `*.exr` |
 
-Classification priority: sidecar `.zameta` override > material slot name > filename convention > default (BC7 sRGB).
+Classification priority: material slot name > filename convention > default (BC7 sRGB).
 
-### Shaders (`.zashdr`)
+### Shaders (`.zshdr`)
 
-Source: `.glsl`, `.vert`, `.frag`, `.comp`
+Source: `.vert`, `.frag`, `.comp` (with `.glsl` includes)
 
-Preprocessed GLSL with `#include` resolution and `#ifdef` variant expansion. On OpenGL, stores final GLSL source text for runtime compilation. On Vulkan, stores SPIR-V bytecode with extracted reflection data (descriptor sets, push constants, vertex inputs).
+Preprocessed GLSL per stage with `#include` resolution and variant expansion; stores final GLSL source text for runtime compilation. One cooked file per stage (`basic.vert.zshdr`, `basic.frag.zshdr`); the runtime links stage pairs into programs.
 
 ### Materials (`.zamat`)
 
@@ -246,65 +252,32 @@ binding = 1
 
 `[material]` holds metadata. `shader` is a base path that resolves to `<shader>.vert` and `<shader>.frag`; `[render_state]` stores draw-state such as alpha mode, culling, depth, and blending. Each `[texture.<slot>]` maps one semantic texture slot to a source texture path, an exact shader sampler `resource`, and binding metadata; standard slots are `albedo`, `normal`, `roughness`, `metallic`, `ao`, `emissive`, `roughness_metallic`, and `orm`, but custom slots are valid when `resource` names a reflected sampler. Each `[param.<uniform>]` maps one exact shader uniform name to a scalar, boolean, vec2, vec3, or vec4 literal plus binding metadata.
 
-When `.glb` or `.gltf` files contain materials, zimp auto-generates material source files under `generated/materials/` and embedded image files under `generated/textures/`, then rescans so they cook in the same run. Hand-written files in `materials/` with the same generated filename take priority and are never overwritten. GLTF PBR fields map to standard slots and uniforms: base color texture to `albedo`, metallic-roughness texture to `roughness_metallic`, normal to `normal`, occlusion to `ao`, emissive texture to `emissive`, and factors to `u_base_color`, `u_metallic`, `u_roughness`, and `u_emissive`.
-
-### Audio (`.zasnd`, `.zastream`)
-
-Source: `.wav`, `.ogg`, `.flac`
-
-Short clips (< 5s) are stored as uncompressed PCM for instant playback. Long clips are Ogg Vorbis compressed and chunked into ~1s pages for streaming. All audio is loudness-normalized to EBU R128.
-
-### Fonts (`.zafont`)
-
-Source: `.ttf`, `.otf`
-
-MSDF atlas with BC4-compressed distance field texture, glyph metrics, and kerning table. Renders crisply at any size.
-
-## Pack file format (`.zpak`)
-
-All cooked assets combine into a single `.zpak` archive:
-
-```
-┌──────────────────────────────────────────┐
-│ Header: magic, version, TOC offset       │
-├──────────────────────────────────────────┤
-│ Asset data (sequential, page-aligned     │
-│ for streaming assets)                    │
-├──────────────────────────────────────────┤
-│ Table of Contents (sorted by path hash)  │
-├──────────────────────────────────────────┤
-│ Footer checksum                          │
-└──────────────────────────────────────────┘
-```
-
-```zig
-const TocEntry = struct {
-    path_hash: u64,       // FNV-1a of virtual asset path
-    asset_type: u16,      // mesh, texture, shader, ...
-    flags: u16,           // compressed, streaming
-    offset: u64,          // byte offset into data block
-    size_compressed: u32, // on-disk size
-    size_raw: u32,        // decompressed size
-    checksum: u32,        // CRC32
-};
-```
-
-The engine loads the TOC at startup and does O(log n) binary search to find any asset. Individual assets are optionally LZ4-compressed (textures are skipped since BC data doesn't compress further). Multiple `.zpak` files can be layered with priority ordering for mod/DLC support.
+When `.glb` or `.gltf` files contain materials, zimp auto-generates material source files under `generated/materials/` and embedded image files under `generated/textures/`, then rescans so they cook in the same run. Generated sources get deterministic derived `AssetId`s (a pure function of their path — no sidecars) so regenerating them never changes identity. Hand-written files in `materials/` with the same generated filename take priority and are never overwritten. GLTF PBR fields map to standard slots and uniforms: base color texture to `albedo`, metallic-roughness texture to `roughness_metallic`, normal to `normal`, occlusion to `ao`, emissive texture to `emissive`, and factors to `u_base_color`, `u_metallic`, `u_roughness`, and `u_emissive`.
 
 ## Incremental builds
 
-zimp maintains a `.zacache` file that tracks content hashes and dependency relationships. On subsequent runs, only assets whose source files changed (or whose dependencies changed) are re-cooked. A material that references `brick_normal.png` will automatically re-cook when that texture is modified.
+zimp maintains a `.zcache` file that tracks content hashes and dependency relationships. On subsequent runs, only assets whose source files changed (or whose dependencies changed) are re-cooked. A material that references `brick_normal.png` will automatically re-cook when that texture is modified.
 
 ```sh
 # First run: cooks everything
-zimp cook --source assets/ --output cooked/
+zimp cook --project .
 # Cooked 47 assets in 3.2s
 
 # Second run: nothing changed
-zimp cook --source assets/ --output cooked/
+zimp cook --project .
 # 0 assets to cook (47 cached)
 
 # After editing brick_normal.png
-zimp cook --source assets/ --output cooked/
-# Cooked 2 assets in 0.4s (brick_normal.zatex + brick.zamat)
+zimp cook --project .
+# Cooked 2 assets in 0.4s (brick_normal.ztex + brick.zamat)
 ```
+
+Asset identity does not depend on the cache: deleting `.zcache` (or the whole cooked directory and manifest) and recooking reproduces identical `AssetId`s from the committed sidecars.
+
+## Planned
+
+- `zimp pack` — combine cooked assets into a single archive with a sorted TOC for O(log n) lookup (the CLI command exists as a stub).
+- Audio (`.wav`, `.ogg`) and font (`.ttf`) cooking.
+- Skeleton/animation extraction from glTF.
+- SPIR-V shader compilation with reflection extraction for a future Vulkan backend.
+- Per-asset importer settings in `.zmeta` sidecars.
