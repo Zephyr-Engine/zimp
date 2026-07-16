@@ -1,18 +1,15 @@
 const std = @import("std");
 
-pub const CookStepOptions = struct {
-    source_dir: std.Build.LazyPath,
-    output_dir: std.Build.LazyPath,
-};
-
-pub fn addCookStep(b: *std.Build, dep: *std.Build.Dependency, options: CookStepOptions) *std.Build.Step.Run {
+/// Cook a project by its root directory (the one containing
+/// `.zephyr/zephyr.proj`). Source/output dirs come from the project
+/// manifest, and the cook maintains durable asset identity
+/// (`.zmeta` sidecars + `assets.zmanifest`).
+pub fn addProjectCookStep(b: *std.Build, dep: *std.Build.Dependency, project_root: std.Build.LazyPath) *std.Build.Step.Run {
     const exe = dep.artifact("zimp");
     const run = b.addRunArtifact(exe);
     run.addArg("cook");
-    run.addArg("--source");
-    run.addDirectoryArg(options.source_dir);
-    run.addArg("--output");
-    run.addDirectoryArg(options.output_dir);
+    run.addArg("--project");
+    run.addDirectoryArg(project_root);
     return run;
 }
 
@@ -54,6 +51,51 @@ pub const runtime = @import("runtime.zig");
 
 /// Path normalization, cooked output path naming, and virtual asset path checks.
 pub const path = @import("path.zig");
+
+/// Stable persisted identity: UUIDs and the typed ids built on them.
+/// These are file-format data shared by the cooker, runtime, and editor.
+pub const id = struct {
+    pub const uuid = @import("id/uuid.zig");
+    pub const types = @import("id/id_types.zig");
+};
+
+/// Project manifest and opened-project root. The manifest is persisted data
+/// shared by the cooker, runtime, and editor.
+pub const project = struct {
+    pub const manifest = @import("project/manifest.zig");
+    pub const root = @import("project/project_root.zig");
+};
+
+pub const ProjectManifest = project.manifest.ProjectManifest;
+pub const ProjectRoot = project.root.ProjectRoot;
+
+pub const shared = struct {
+    pub const atomic_file = @import("shared/atomic_file.zig");
+};
+
+/// Asset identity: `.zmeta` sidecars, the generated asset manifest, and its
+/// codec. See docs/identity.md in the main repo for the identity rules.
+pub const manifest = struct {
+    pub const kind = @import("manifest/kind.zig");
+    pub const derive = @import("manifest/derive.zig");
+    pub const errors = @import("manifest/errors.zig");
+    pub const meta = @import("manifest/meta.zig");
+    pub const meta_store = @import("manifest/meta_store.zig");
+    pub const model = @import("manifest/model.zig");
+    pub const codec = @import("manifest/codec.zig");
+    pub const builder = @import("manifest/builder.zig");
+};
+pub const AssetKind = manifest.kind.AssetKind;
+pub const AssetManifest = manifest.model.AssetManifest;
+pub const AssetManifestEntry = manifest.model.AssetManifestEntry;
+
+pub const Uuid = id.uuid.Uuid;
+pub const ProjectId = id.types.ProjectId;
+pub const AssetId = id.types.AssetId;
+pub const SceneId = id.types.SceneId;
+pub const SceneEntityId = id.types.SceneEntityId;
+pub const ComponentTypeId = id.types.ComponentTypeId;
+pub const SchemaId = id.types.SchemaId;
 
 // Convenient top-level aliases retained for existing users.
 pub const ZMesh = formats.zmesh.ZMesh;
@@ -199,4 +241,17 @@ test {
     _ = @import("shared/file_read.zig");
     _ = @import("runtime.zig");
     _ = @import("path.zig");
+    _ = @import("id/uuid.zig");
+    _ = @import("id/id_types.zig");
+    _ = @import("project/manifest.zig");
+    _ = @import("project/project_root.zig");
+    _ = @import("shared/atomic_file.zig");
+    _ = @import("manifest/kind.zig");
+    _ = @import("manifest/derive.zig");
+    _ = @import("manifest/errors.zig");
+    _ = @import("manifest/meta.zig");
+    _ = @import("manifest/meta_store.zig");
+    _ = @import("manifest/model.zig");
+    _ = @import("manifest/codec.zig");
+    _ = @import("manifest/builder.zig");
 }

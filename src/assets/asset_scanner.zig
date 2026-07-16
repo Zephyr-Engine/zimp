@@ -3,6 +3,7 @@ const std = @import("std");
 const SourceFile = @import("source_file.zig").SourceFile;
 const log = @import("../logger.zig");
 const asset = @import("asset.zig");
+const meta_mod = @import("../manifest/meta.zig");
 
 pub const SourceFileList = std.ArrayList(SourceFile);
 
@@ -31,6 +32,11 @@ pub const AssetScanner = struct {
         var iter = dir.iterate();
         while (try iter.next(self.io)) |entry| {
             if (entry.kind == .file) {
+                // Sidecars are identity metadata, never assets or
+                // dependency-only sources.
+                if (meta_mod.isMetaPath(entry.name)) {
+                    continue;
+                }
                 const ext = asset.Extension.processEntry(entry);
                 if (ext == .other) {
                     continue;
