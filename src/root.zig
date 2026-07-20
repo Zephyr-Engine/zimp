@@ -89,6 +89,23 @@ pub const AssetKind = manifest.kind.AssetKind;
 pub const AssetManifest = manifest.model.AssetManifest;
 pub const AssetManifestEntry = manifest.model.AssetManifestEntry;
 
+pub const scene = struct {
+    pub const schema = @import("scene/schema.zig");
+    pub const value = @import("scene/value.zig");
+    pub const descriptor = @import("scene/schema_descriptor.zig");
+
+    pub const FieldKind = schema.FieldKind;
+    pub const ComponentSchema = schema.ComponentSchema;
+    pub const FieldSchema = schema.FieldSchema;
+    pub const SchemaMeta = schema.SchemaMeta;
+    pub const FieldMeta = schema.FieldMeta;
+    pub const EditorFieldHints = schema.EditorFieldHints;
+    pub const validateSchema = schema.validateSchema;
+    pub const Value = value.Value;
+    pub const SceneField = value.SceneField;
+    pub const SceneComponentData = value.SceneComponentData;
+};
+
 pub const Uuid = id.uuid.Uuid;
 pub const ProjectId = id.types.ProjectId;
 pub const AssetId = id.types.AssetId;
@@ -185,6 +202,19 @@ test "public API exposes format and asset construction types" {
     _ = parseAlphaMode;
     _ = LoadedMaterial;
     _ = loadMaterial;
+    _ = scene.schema;
+    _ = scene.value;
+    _ = scene.descriptor;
+    _ = scene.FieldKind;
+    _ = scene.ComponentSchema;
+    _ = scene.FieldSchema;
+    _ = scene.SchemaMeta;
+    _ = scene.FieldMeta;
+    _ = scene.EditorFieldHints;
+    _ = scene.validateSchema;
+    _ = scene.Value;
+    _ = scene.SceneField;
+    _ = scene.SceneComponentData;
     _ = path.normalizeVirtual;
     _ = path.resolveShaderInclude;
     _ = path.cookedOutput;
@@ -254,4 +284,7 @@ test {
     _ = @import("manifest/model.zig");
     _ = @import("manifest/codec.zig");
     _ = @import("manifest/builder.zig");
+    _ = @import("scene/schema.zig");
+    _ = @import("scene/value.zig");
+    _ = @import("scene/schema_descriptor.zig");
 }
