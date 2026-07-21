@@ -5,8 +5,9 @@ const inspectors = @import("../inspectors/inspect.zig").inspector_registry;
 
 pub const InspectError = error{
     NotEnoughArguments,
+    TooManyArguments,
     FileNotFound,
-    UnkownFormat,
+    UnknownFormat,
 };
 
 pub const InspectCommand = struct {
@@ -21,6 +22,7 @@ pub const InspectCommand = struct {
             log.err("inspect: not enough arguments (got {d}, need at least 3). Usage: zimp inspect <file_path>", .{args.len});
             return InspectError.NotEnoughArguments;
         }
+        if (args.len > 3) return InspectError.TooManyArguments;
 
         const file = cwd.openFile(io, args[2], .{}) catch |err| {
             log.err("inspect: failed to open file '{s}': {s}. Ensure the file exists and has the correct permissions", .{ args[2], @errorName(err) });
@@ -46,7 +48,7 @@ pub const InspectCommand = struct {
 
         const inspector = inspectors.get(&magic) orelse {
             log.err("No inspector found for file with magic '{s}'", .{magic});
-            return InspectError.UnkownFormat;
+            return InspectError.UnknownFormat;
         };
 
         try inspector.inspect(self.allocator, reader);
@@ -90,11 +92,11 @@ test "InspectCommand.parseFromArgs stores allocator" {
     try testing.expectEqual(testing.allocator, cmd.allocator);
 }
 
-test "InspectCommand.run returns UnkownFormat for non-asset file" {
+test "InspectCommand.run returns UnknownFormat for non-asset file" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
     const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     defer cmd.deinit();
-    try testing.expectError(InspectError.UnkownFormat, cmd.run());
+    try testing.expectError(InspectError.UnknownFormat, cmd.run());
 }
 
 test "InspectCommand.run succeeds for valid zmesh file" {
@@ -165,6 +167,11 @@ test "InspectCommand.parseFromArgs errors with NotEnoughArguments for single arg
     const args: []const [:0]const u8 = &.{"zimp"};
     const result = InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     try testing.expectError(InspectError.NotEnoughArguments, result);
+}
+
+test "InspectCommand.parseFromArgs rejects extra operands" {
+    const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig", "extra" };
+    try testing.expectError(InspectError.TooManyArguments, InspectCommand.parseFromArgs(testing.allocator, testing.io, args));
 }
 
 test "InspectCommand.deinit cleans up without error" {

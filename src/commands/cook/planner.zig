@@ -57,6 +57,8 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
     metrics.scan_ns = @intCast(scan_start.durationTo(scan_end).raw.nanoseconds);
     metrics.assets_total = @intCast(source_files.items.len);
 
+    try validateUniqueOutputs(allocator, source_files.items);
+
     const dep_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     var dep_graph = DepGraph.init(allocator);
     defer dep_graph.deinit();
@@ -82,6 +84,33 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         .levels = levels,
         .reverse = reverse,
     };
+}
+
+fn validateUniqueOutputs(allocator: std.mem.Allocator, source_files: []const SourceFile) !void {
+    var outputs = std.StringHashMap([]const u8).init(allocator);
+    defer {
+        var iter = outputs.iterator();
+        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
+        outputs.deinit();
+    }
+
+    for (source_files) |source| {
+        const cooker = asset_registry.cookerFor(source.extension) orelse continue;
+        const output_path = try cooker.outputPath(allocator, source.path);
+        errdefer allocator.free(output_path);
+
+        const gop = try outputs.getOrPut(output_path);
+        if (gop.found_existing) {
+            log.err("Cooked output collision: '{s}' and '{s}' both map to '{s}'", .{
+                gop.value_ptr.*,
+                source.path,
+                output_path,
+            });
+            return error.DuplicateCookedOutput;
+        }
+        gop.key_ptr.* = output_path;
+        gop.value_ptr.* = source.path;
+    }
 }
 
 fn buildDependencyGraph(
@@ -217,4 +246,20 @@ test "buildDependencyGraph refreshes stale cached dependency rows" {
 
     const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
     try testing.expectEqual(SourceFile.fromPath("new.glsl").hashPath(), deps.items[0]);
+}
+
+test "validateUniqueOutputs rejects sources with the same cooked path" {
+    const sources = [_]SourceFile{
+        SourceFile.fromPath("textures/hero.png"),
+        SourceFile.fromPath("textures/hero.jpg"),
+    };
+    try testing.expectError(error.DuplicateCookedOutput, validateUniqueOutputs(testing.allocator, &sources));
+}
+
+test "validateUniqueOutputs allows repeated stems in different directories" {
+    const sources = [_]SourceFile{
+        SourceFile.fromPath("characters/hero.png"),
+        SourceFile.fromPath("ui/hero.png"),
+    };
+    try validateUniqueOutputs(testing.allocator, &sources);
 }

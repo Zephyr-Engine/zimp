@@ -14,17 +14,18 @@ pub const CommandError = error{
 };
 
 pub const Command = union(enum) {
-    Cook: CookCommand,
-    Pack: PackCommand,
-    Inspect: InspectCommand,
+    cook: CookCommand,
+    pack: PackCommand,
+    inspect: InspectCommand,
 
     pub fn parse(allocator: std.mem.Allocator, io: std.Io, args: []const [:0]const u8) (CommandError || CookError || PackError || InspectError)!Command {
+        if (args.len < 2) return CommandError.UnknownCommand;
         if (std.mem.eql(u8, args[1], "cook")) {
             const cmd = CookCommand.parseFromArgs(allocator, io, args) catch |err| {
                 log.err("command: failed to parse 'cook' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
-            return .{ .Cook = cmd };
+            return .{ .cook = cmd };
         }
 
         if (std.mem.eql(u8, args[1], "pack")) {
@@ -32,7 +33,7 @@ pub const Command = union(enum) {
                 log.err("command: failed to parse 'pack' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
-            return .{ .Pack = cmd };
+            return .{ .pack = cmd };
         }
 
         if (std.mem.eql(u8, args[1], "inspect")) {
@@ -40,7 +41,7 @@ pub const Command = union(enum) {
                 log.err("command: failed to parse 'inspect' subcommand: {s}", .{@errorName(err)});
                 return err;
             };
-            return .{ .Inspect = cmd };
+            return .{ .inspect = cmd };
         }
 
         log.err("command: unknown command '{s}'. Available commands are: 'cook', 'pack', 'inspect'", .{args[1]});
@@ -49,25 +50,25 @@ pub const Command = union(enum) {
 
     pub fn run(self: Command, progress: std.Progress.Node) !void {
         return switch (self) {
-            .Cook => |cmd| cmd.run(progress),
-            .Pack => |cmd| cmd.run(),
-            .Inspect => |cmd| cmd.run(),
+            .cook => |cmd| cmd.run(progress),
+            .pack => |cmd| cmd.run(),
+            .inspect => |cmd| cmd.run(),
         };
     }
 
     pub fn toString(self: Command) []const u8 {
         return switch (self) {
-            .Cook => "cook",
-            .Pack => "pack",
-            .Inspect => "inspect",
+            .cook => "cook",
+            .pack => "pack",
+            .inspect => "inspect",
         };
     }
 
     pub fn deinit(self: Command) void {
         return switch (self) {
-            .Cook => |cmd| cmd.deinit(),
-            .Pack => |cmd| cmd.deinit(),
-            .Inspect => |cmd| cmd.deinit(),
+            .cook => |cmd| cmd.deinit(),
+            .pack => |cmd| cmd.deinit(),
+            .inspect => |cmd| cmd.deinit(),
         };
     }
 };
@@ -98,7 +99,7 @@ test "Command.parse routes to Cook variant" {
     const cmd = try Command.parse(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
-    try testing.expect(std.meta.activeTag(cmd) == .Cook);
+    try testing.expect(std.meta.activeTag(cmd) == .cook);
     try testing.expectEqualStrings("cook", cmd.toString());
 }
 
@@ -107,7 +108,7 @@ test "Command.parse routes to Pack variant" {
     const cmd = try Command.parse(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
-    try testing.expect(std.meta.activeTag(cmd) == .Pack);
+    try testing.expect(std.meta.activeTag(cmd) == .pack);
     try testing.expectEqualStrings("pack", cmd.toString());
 }
 
@@ -116,7 +117,7 @@ test "Command.parse routes to Inspect variant" {
     const cmd = try Command.parse(testing.allocator, testing.io, args);
     defer cmd.deinit();
 
-    try testing.expect(std.meta.activeTag(cmd) == .Inspect);
+    try testing.expect(std.meta.activeTag(cmd) == .inspect);
     try testing.expectEqualStrings("inspect", cmd.toString());
 }
 
@@ -151,15 +152,25 @@ test "Command.parse propagates InspectError.FileNotFound" {
 }
 
 test "Command.run dispatches to correct subcommand" {
-    const cook_args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", "examples/output", "--output", "examples/output" };
-    const cook = try Command.parse(testing.allocator, testing.io, cook_args);
+    var source_tmp = testing.tmpDir(.{});
+    defer source_tmp.cleanup();
+    var output_tmp = testing.tmpDir(.{});
+    defer output_tmp.cleanup();
+    const source_dir = try source_tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
+    const output_dir = try output_tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
+    const cook: Command = .{ .cook = .{
+        .source = source_dir,
+        .output = output_dir,
+        .io = testing.io,
+        .allocator = testing.allocator,
+    } };
     defer cook.deinit();
     try cook.run(.none);
 
     const pack_args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
     const pack = try Command.parse(testing.allocator, testing.io, pack_args);
     defer pack.deinit();
-    try pack.run(.none);
+    try testing.expectError(error.PackNotImplemented, pack.run(.none));
 
     // Inspect: write a temp zmesh file since examples/output may not exist on CI
     var tmp = testing.tmpDir(.{});
@@ -173,7 +184,7 @@ test "Command.run dispatches to correct subcommand" {
     zmesh_file.close(testing.io);
 
     const inspect_file = try tmp.dir.openFile(testing.io, "test.zmesh", .{});
-    const inspect: Command = .{ .Inspect = .{
+    const inspect: Command = .{ .inspect = .{
         .allocator = testing.allocator,
         .file = inspect_file,
         .io = testing.io,

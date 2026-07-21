@@ -56,7 +56,7 @@ fn createTestFile(tmp: std.testing.TmpDir, name: []const u8, content: []const u8
 }
 
 fn makeSourceFile(path: []const u8) SourceFile {
-    return .{ .path = path, .extension = .glb, .assetType = .mesh };
+    return .{ .path = path, .extension = .glb };
 }
 
 fn makeCacheEntryFromFile(tmp: std.testing.TmpDir, sf: *const SourceFile) !CacheEntry {
@@ -138,7 +138,7 @@ test "check returns stale_host_os for OS-sensitive cached asset from different h
     defer tmp.cleanup();
 
     try createTestFile(tmp, "a.zamat", "hello");
-    const sf = SourceFile{ .path = "a.zamat", .extension = .zamat, .assetType = .material };
+    const sf = SourceFile{ .path = "a.zamat", .extension = .zamat };
     var entry = try makeCacheEntryFromFile(tmp, &sf);
     entry.asset_type = .material;
 

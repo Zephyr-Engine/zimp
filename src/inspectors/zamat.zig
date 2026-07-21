@@ -4,6 +4,7 @@ const log = @import("../logger.zig");
 const fmt = @import("utils.zig");
 const FormatInspector = @import("inspect.zig").FormatInspector;
 const zamat = @import("../formats/zamat.zig");
+const wire = @import("../shared/wire.zig");
 
 fn alphaModeName(mode: zamat.AlphaMode) []const u8 {
     return switch (mode) {
@@ -77,11 +78,11 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
             .sampler = .{
-                .min_filter = @enumFromInt(try reader.takeInt(u8, .little)),
-                .mag_filter = @enumFromInt(try reader.takeInt(u8, .little)),
-                .mip_filter = @enumFromInt(try reader.takeInt(u8, .little)),
-                .wrap_s = @enumFromInt(try reader.takeInt(u8, .little)),
-                .wrap_t = @enumFromInt(try reader.takeInt(u8, .little)),
+                .min_filter = try wire.readEnum(reader, zamat.FilterMode, u8),
+                .mag_filter = try wire.readEnum(reader, zamat.FilterMode, u8),
+                .mip_filter = try wire.readEnum(reader, zamat.MipFilterMode, u8),
+                .wrap_s = try wire.readEnum(reader, zamat.WrapMode, u8),
+                .wrap_t = try wire.readEnum(reader, zamat.WrapMode, u8),
                 .max_anisotropy = undefined,
             },
             .uv_offset = undefined,
@@ -118,7 +119,7 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .name = undefined,
             .name_offset = try reader.takeInt(u16, .little),
             .name_len = try reader.takeInt(u16, .little),
-            .param_type = @enumFromInt(try reader.takeInt(u16, .little)),
+            .param_type = try wire.readEnum(reader, zamat.ParamType, u16),
             .shader_set = try reader.takeInt(u16, .little),
             .shader_binding = try reader.takeInt(u16, .little),
             .data_offset = try reader.takeInt(u16, .little),
@@ -257,7 +258,7 @@ fn readF32FromReader(reader: *std.Io.Reader) !f32 {
 }
 
 pub fn inspector() FormatInspector {
-    return .{ .inspectFn = inspectZamat };
+    return .{ .inspect_fn = inspectZamat };
 }
 
 const testing = std.testing;
@@ -266,7 +267,7 @@ const CookedMaterial = @import("../assets/cooked/material.zig").CookedMaterial;
 
 test "inspector returns a valid FormatInspector" {
     const insp = inspector();
-    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZamat), insp.inspectFn);
+    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZamat), insp.inspect_fn);
 }
 
 test "inspectZamat runs on a valid material file" {

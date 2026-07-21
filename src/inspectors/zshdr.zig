@@ -4,6 +4,7 @@ const log = @import("../logger.zig");
 const fmt = @import("utils.zig");
 const FormatInspector = @import("inspect.zig").FormatInspector;
 const zshdr = @import("../formats/zshdr.zig");
+const wire = @import("../shared/wire.zig");
 
 fn stageName(stage: zshdr.ShaderStage) []const u8 {
     return switch (stage) {
@@ -60,7 +61,7 @@ fn inspectZshdr(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     const version = try reader.takeInt(u32, .little);
     if (version != zshdr.ZSHDR_VERSION) return error.UnsupportedVersion;
 
-    const stage: zshdr.ShaderStage = @enumFromInt(try reader.takeInt(u8, .little));
+    const stage = try wire.readEnum(reader, zshdr.ShaderStage, u8);
     const variant_name_count = try reader.takeInt(u16, .little);
     const include_count = try reader.takeInt(u16, .little);
     const permutation_count = try reader.takeInt(u32, .little);
@@ -156,7 +157,7 @@ fn freeStringList(allocator: std.mem.Allocator, strings: []const []const u8) voi
 }
 
 pub fn inspector() FormatInspector {
-    return .{ .inspectFn = inspectZshdr };
+    return .{ .inspect_fn = inspectZshdr };
 }
 
 const testing = std.testing;
@@ -164,7 +165,7 @@ const CookedShader = @import("../assets/cooked/shader.zig").CookedShader;
 
 test "inspector returns a valid FormatInspector" {
     const insp = inspector();
-    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZshdr), insp.inspectFn);
+    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZshdr), insp.inspect_fn);
 }
 
 test "inspectZshdr runs on a valid shader file" {

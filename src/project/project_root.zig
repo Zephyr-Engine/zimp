@@ -29,12 +29,15 @@ pub const ProjectRoot = struct {
             return error.ProjectNotFound;
         errdefer root_dir.close(io);
 
-        const manifest = try ProjectManifest.loadFromDir(alloc, io, root_dir, manifest_mod.default_manifest_path);
+        const manifest = try ProjectManifest.loadFromDirLeaky(alloc, io, root_dir, manifest_mod.default_manifest_path);
+
+        var real_path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
+        const real_path_len = try root_dir.realPathFile(io, ".", &real_path_buf);
 
         return .{
             .arena = arena,
             .io = io,
-            .root_path = try alloc.dupe(u8, root_fs_path),
+            .root_path = try alloc.dupe(u8, real_path_buf[0..real_path_len]),
             .root_dir = root_dir,
             .manifest = manifest,
         };
@@ -85,6 +88,7 @@ test "ProjectRoot opens a project and resolves manifest directories" {
     defer root.deinit();
 
     try testing.expectEqualStrings("Root Test Project", root.manifest.name);
+    try testing.expectEqualStrings(root_path, root.root_path);
 
     var cooked = try root.makeOpenDir(root.manifest.cooked_assets_dir);
     defer cooked.close(testing.io);

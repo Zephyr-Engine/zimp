@@ -24,6 +24,10 @@ pub const CacheEntry = struct {
         return self.flags & FLAG_ERRORED != 0;
     }
 
+    pub fn hasCookedOutput(self: *const CacheEntry) bool {
+        return !self.isErrored() and self.cooked_path.len != 0;
+    }
+
     pub fn create(
         allocator: std.mem.Allocator,
         io: std.Io,
@@ -50,7 +54,7 @@ pub const CacheEntry = struct {
             .cooked_path_hash = fnv1a(cooked_path),
             .cooked_size = cooked_size,
             .cooked_at = now.raw.nanoseconds,
-            .asset_type = source_file.assetType,
+            .asset_type = source_file.assetType(),
         };
     }
 
@@ -77,7 +81,7 @@ pub const CacheEntry = struct {
             .cooked_size = 0,
             .cooked_at = 0,
             .flags = FLAG_ERRORED,
-            .asset_type = source_file.assetType,
+            .asset_type = source_file.assetType(),
         };
     }
 };
@@ -99,7 +103,6 @@ test "create populates all fields from source file" {
     const source_file = SourceFile{
         .path = "model.glb",
         .extension = .glb,
-        .assetType = .mesh,
     };
 
     const entry = try CacheEntry.create(
@@ -141,7 +144,6 @@ test "create owns copies of paths" {
     const source_file = SourceFile{
         .path = mutable_path,
         .extension = .glb,
-        .assetType = .mesh,
     };
 
     const entry = try CacheEntry.create(
@@ -171,7 +173,6 @@ test "create with unknown asset type" {
     const source_file = SourceFile{
         .path = "data.bin",
         .extension = .other,
-        .assetType = .unknown,
     };
 
     const entry = try CacheEntry.create(

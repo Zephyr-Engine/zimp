@@ -67,23 +67,17 @@ pub const project = struct {
 };
 
 pub const ProjectManifest = project.manifest.ProjectManifest;
+pub const LoadedProjectManifest = project.manifest.LoadedProjectManifest;
 pub const ProjectRoot = project.root.ProjectRoot;
-
-pub const shared = struct {
-    pub const atomic_file = @import("shared/atomic_file.zig");
-};
 
 /// Asset identity: `.zmeta` sidecars, the generated asset manifest, and its
 /// codec. See docs/identity.md in the main repo for the identity rules.
 pub const manifest = struct {
     pub const kind = @import("manifest/kind.zig");
     pub const derive = @import("manifest/derive.zig");
-    pub const errors = @import("manifest/errors.zig");
     pub const meta = @import("manifest/meta.zig");
-    pub const meta_store = @import("manifest/meta_store.zig");
     pub const model = @import("manifest/model.zig");
     pub const codec = @import("manifest/codec.zig");
-    pub const builder = @import("manifest/builder.zig");
 };
 pub const AssetKind = manifest.kind.AssetKind;
 pub const AssetManifest = manifest.model.AssetManifest;
@@ -276,6 +270,7 @@ test {
     _ = @import("project/manifest.zig");
     _ = @import("project/project_root.zig");
     _ = @import("shared/atomic_file.zig");
+    _ = @import("shared/wire.zig");
     _ = @import("manifest/kind.zig");
     _ = @import("manifest/derive.zig");
     _ = @import("manifest/errors.zig");

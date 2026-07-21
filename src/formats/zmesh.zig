@@ -1,8 +1,10 @@
 const std = @import("std");
 const mesh = @import("../assets/cooked/mesh.zig");
+const wire = @import("../shared/wire.zig");
 
 pub const MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH;
 pub const ZMESH_VERSION: u32 = 1;
+const SUBMESH_ENTRY_SIZE: u64 = @sizeOf(u32) * 2 + @sizeOf(u16) * 2;
 
 pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u32) // version
@@ -83,7 +85,7 @@ pub const ZMeshHeader = struct {
 
         const vertex_count = try reader.takeInt(u32, .little);
         const index_count = try reader.takeInt(u32, .little);
-        const index_format: mesh.IndexFormat = @enumFromInt(try reader.takeInt(u8, .little));
+        const index_format = try wire.readEnum(reader, mesh.IndexFormat, u8);
         const format_flags: mesh.FormatFlags = @bitCast(try reader.takeInt(u8, .little));
 
         var aabb_min: [3]f32 = undefined;
@@ -99,6 +101,22 @@ pub const ZMeshHeader = struct {
         const submesh_table_offset = try reader.takeInt(u32, .little);
         const lod_count = try reader.takeInt(u16, .little);
         const lod_table_offset = try reader.takeInt(u32, .little);
+
+        if (lod_count != 0 or lod_table_offset != 0) return error.UnsupportedLods;
+        var vertex_stride: u64 = @sizeOf([3]f32);
+        if (format_flags.has_normals) vertex_stride += @sizeOf([2]i16);
+        if (format_flags.has_tangents) vertex_stride += @sizeOf([4]f16);
+        if (format_flags.has_uv0) vertex_stride += @sizeOf([2]u16);
+        if (format_flags.has_uv1) vertex_stride += @sizeOf([2]u16);
+        if (format_flags.has_joints) vertex_stride += @sizeOf([4]u16);
+        if (format_flags.has_weights) vertex_stride += @sizeOf([4]f16);
+        const index_size: u64 = if (index_format == .u16) 2 else 4;
+        const index_bytes = @as(u64, index_count) * index_size;
+        const expected_submesh_offset = @as(u64, HEADER_SIZE) +
+            @as(u64, vertex_count) * vertex_stride + index_bytes + (4 - (index_bytes % 4)) % 4;
+        const total_size = expected_submesh_offset + @as(u64, submesh_count) * SUBMESH_ENTRY_SIZE;
+        if (expected_submesh_offset != submesh_table_offset) return error.InvalidLayout;
+        if (total_size > wire.max_asset_bytes) return error.AssetTooLarge;
 
         return .{
             .vertex_count = vertex_count,
@@ -161,7 +179,7 @@ pub const ZMesh = struct {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
         const reader = &file_reader.interface;
-        return read(allocator, reader);
+        return ZMesh.read(allocator, reader);
     }
 
     pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ZMesh {
@@ -291,6 +309,8 @@ pub const ZMesh = struct {
             s.index_count = try reader.takeInt(u32, .little);
             s.material_index = try reader.takeInt(u16, .little);
             _ = try reader.takeInt(u16, .little); // padding
+            if (s.index_offset > index_count or s.index_count > index_count - s.index_offset)
+                return error.InvalidSubmeshRange;
         }
 
         return .{
@@ -393,6 +413,19 @@ pub const ZMesh = struct {
         }
     }
 };
+
+/// Preferred format-neutral names. The `ZMesh` names remain compatibility
+/// aliases for existing callers and the persisted format name.
+pub const Mesh = ZMesh;
+pub const Header = ZMeshHeader;
+
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Mesh {
+    return Mesh.read(allocator, reader);
+}
+
+pub fn write(writer: *std.Io.Writer, cooked_mesh: mesh.CookedMesh) !void {
+    return Mesh.write(writer, cooked_mesh);
+}
 
 const testing = std.testing;
 const raw_mesh = @import("../assets/raw/mesh.zig");

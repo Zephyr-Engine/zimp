@@ -23,40 +23,18 @@ pub const AssetType = enum {
             .mesh, .texture, .shader, .unknown => false,
         };
     }
+
+    pub fn fromCookedPath(path: []const u8) ?AssetType {
+        for (std.enums.values(AssetType)) |asset_type| {
+            if (asset_type == .unknown) continue;
+            const extension = asset_type.cookedExtension();
+            if (std.mem.endsWith(u8, path, extension) and
+                path.len > extension.len and path[path.len - extension.len - 1] == '.')
+                return asset_type;
+        }
+        return null;
+    }
 };
-
-const asset_map = std.EnumArray(Extension, AssetType).init(.{
-    .gltf = .mesh,
-    .glb = .mesh,
-    .obj = .mesh,
-    .bin = .unknown,
-    .png = .texture,
-    .jpg = .texture,
-    .jpeg = .texture,
-    .hdr = .texture,
-    .vert = .shader,
-    .frag = .shader,
-    .comp = .shader,
-    .glsl = .shader,
-    .zamat = .material,
-    .other = .unknown,
-});
-
-const extension_map = std.StaticStringMap(Extension).initComptime(.{
-    .{ "gltf", .gltf },
-    .{ "glb", .glb },
-    .{ "obj", .obj },
-    .{ "bin", .bin },
-    .{ "png", .png },
-    .{ "jpg", .jpg },
-    .{ "jpeg", .jpeg },
-    .{ "hdr", .hdr },
-    .{ "vert", .vert },
-    .{ "frag", .frag },
-    .{ "comp", .comp },
-    .{ "glsl", .glsl },
-    .{ "zamat", .zamat },
-});
 
 pub const Extension = enum {
     gltf,
@@ -75,32 +53,23 @@ pub const Extension = enum {
     other,
 
     pub fn string(self: Extension) []const u8 {
-        return switch (self) {
-            .gltf => "gltf",
-            .glb => "glb",
-            .obj => "obj",
-            .bin => "bin",
-            .png => "png",
-            .jpg => "jpg",
-            .jpeg => "jpeg",
-            .hdr => "hdr",
-            .vert => "vert",
-            .frag => "frag",
-            .comp => "comp",
-            .glsl => "glsl",
-            .zamat => "zamat",
-            .other => "other",
-        };
+        return @tagName(self);
     }
 
     pub fn assetType(self: Extension) AssetType {
-        return asset_map.get(self);
+        return switch (self) {
+            .gltf, .glb, .obj => .mesh,
+            .png, .jpg, .jpeg, .hdr => .texture,
+            .vert, .frag, .comp, .glsl => .shader,
+            .zamat => .material,
+            .bin, .other => .unknown,
+        };
     }
 
     pub fn fromName(name: []const u8) Extension {
         const dotted_ext = std.fs.path.extension(name);
         if (dotted_ext.len > 1) {
-            if (extension_map.get(dotted_ext[1..])) |ex| return ex;
+            return std.meta.stringToEnum(Extension, dotted_ext[1..]) orelse .other;
         }
         return .other;
     }

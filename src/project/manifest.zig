@@ -41,7 +41,7 @@ pub const ProjectManifest = struct {
     asset_manifest: []const u8 = DEFAULT_ASSET_MANIFEST,
     default_scene: ?[]const u8 = null,
 
-    pub fn load(allocator: std.mem.Allocator, io: std.Io, file: []const u8) !ProjectManifest {
+    pub fn load(allocator: std.mem.Allocator, io: std.Io, file: []const u8) !LoadedProjectManifest {
         const normalized_path = try path.normalizeVirtual(allocator, file);
         defer allocator.free(normalized_path);
 
@@ -52,27 +52,30 @@ pub const ProjectManifest = struct {
         return loadFromDir(allocator, io, dir, normalized_path);
     }
 
-    pub fn loadFromDir(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8) !ProjectManifest {
+    pub fn loadFromDir(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8) !LoadedProjectManifest {
         const normalized_path = try path.normalizeVirtual(allocator, file);
         defer allocator.free(normalized_path);
 
-        try path.validateVirtual(normalized_path);
-        const bytes = dir.readFileAlloc(io, normalized_path, allocator, .limited(max_manifest_bytes)) catch |err| switch (err) {
-            error.StreamTooLong => {
-                log.err("project manifest '{s}' exceeds {d} bytes; refusing to load", .{ normalized_path, max_manifest_bytes });
-                return error.ProjectManifestTooLarge;
-            },
-            else => return err,
-        };
+        const bytes = try readManifestBytes(allocator, io, dir, normalized_path);
         defer allocator.free(bytes);
 
+        const parsed = try std.json.parseFromSlice(ProjectManifest, allocator, bytes, .{
+            .allocate = .alloc_always,
+        });
+        errdefer parsed.deinit();
+        try parsed.value.validate();
+        return parsed;
+    }
+
+    /// Arena-oriented loader for aggregate owners such as `ProjectRoot`.
+    /// Every returned string lives until `allocator` is deinitialized.
+    pub fn loadFromDirLeaky(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8) !ProjectManifest {
+        const normalized_path = try path.normalizeVirtual(allocator, file);
+        const bytes = try readManifestBytes(allocator, io, dir, normalized_path);
         const manifest = try std.json.parseFromSliceLeaky(ProjectManifest, allocator, bytes, .{
             .allocate = .alloc_always,
         });
-        manifest.validate() catch |err| {
-            manifest.deinit(allocator);
-            return err;
-        };
+        try manifest.validate();
         return manifest;
     }
 
@@ -89,19 +92,6 @@ pub const ProjectManifest = struct {
         try path.validateVirtual(self.cooked_assets_dir);
         try path.validateVirtual(self.asset_manifest);
         if (self.default_scene) |scene| try path.validateVirtual(scene);
-    }
-
-    pub fn deinit(self: ProjectManifest, allocator: std.mem.Allocator) void {
-        freeIfNotDefault(allocator, self.name, DEFAULT_NAME);
-        freeIfNotDefault(allocator, self.format, DEFAULT_FORMAT);
-        freeIfNotDefault(allocator, self.assets_dir, DEFAULT_ASSETS_DIR);
-        freeIfNotDefault(allocator, self.scenes_dir, DEFAULT_SCENES_DIR);
-        freeIfNotDefault(allocator, self.generated_dir, DEFAULT_GENERATED_DIR);
-        freeIfNotDefault(allocator, self.cooked_assets_dir, DEFAULT_COOKED_ASSETS_DIR);
-        freeIfNotDefault(allocator, self.asset_manifest, DEFAULT_ASSET_MANIFEST);
-        if (self.default_scene) |default_scene| {
-            allocator.free(default_scene);
-        }
     }
 
     pub fn assetsPath(self: *const ProjectManifest) []const u8 {
@@ -129,10 +119,17 @@ pub const ProjectManifest = struct {
     }
 };
 
-fn freeIfNotDefault(allocator: std.mem.Allocator, value: []const u8, default_value: []const u8) void {
-    if (value.ptr != default_value.ptr) {
-        allocator.free(value);
-    }
+pub const LoadedProjectManifest = std.json.Parsed(ProjectManifest);
+
+fn readManifestBytes(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, normalized_path: []const u8) ![]u8 {
+    try path.validateVirtual(normalized_path);
+    return dir.readFileAlloc(io, normalized_path, allocator, .limited(max_manifest_bytes)) catch |err| switch (err) {
+        error.StreamTooLong => {
+            log.err("project manifest '{s}' exceeds {d} bytes; refusing to load", .{ normalized_path, max_manifest_bytes });
+            return error.ProjectManifestTooLarge;
+        },
+        else => return err,
+    };
 }
 
 const testing = std.testing;
@@ -185,9 +182,9 @@ test "ProjectManifest round-trips through save and loadFromDir" {
     try manifest.save(testing.allocator, testing.io, tmp.dir);
 
     const loaded = try ProjectManifest.loadFromDir(testing.allocator, testing.io, tmp.dir, default_manifest_path);
-    defer loaded.deinit(testing.allocator);
-    try testing.expect(loaded.project_id.eql(test_project_id));
-    try testing.expectEqualStrings(".zephyr/custom.zmanifest", loaded.asset_manifest);
+    defer loaded.deinit();
+    try testing.expect(loaded.value.project_id.eql(test_project_id));
+    try testing.expectEqualStrings(".zephyr/custom.zmanifest", loaded.value.asset_manifest);
 }
 
 test "ProjectManifest.loadFromDir rejects invalid manifests" {
@@ -246,15 +243,7 @@ test "ProjectManifest.validate rejects bad identity and paths" {
     try testing.expectError(error.ParentTraversalNotAllowed, m.validate());
 }
 
-test "ProjectManifest.deinit handles default literal fields" {
-    const manifest: ProjectManifest = .{
-        .project_id = test_project_id,
-    };
-
-    manifest.deinit(testing.allocator);
-}
-
-test "ProjectManifest.deinit frees strings allocated during leaky parsing" {
+test "LoadedProjectManifest owns strings allocated during parsing" {
     const bytes =
         \\{
         \\  "format": "zephyr.proj",
@@ -269,14 +258,14 @@ test "ProjectManifest.deinit frees strings allocated during leaky parsing" {
         \\}
     ;
 
-    const manifest = try std.json.parseFromSliceLeaky(ProjectManifest, testing.allocator, bytes, .{
+    const loaded = try std.json.parseFromSlice(ProjectManifest, testing.allocator, bytes, .{
         .allocate = .alloc_always,
     });
-    defer manifest.deinit(testing.allocator);
+    defer loaded.deinit();
 
-    try testing.expectEqualStrings("zephyr.proj", manifest.format);
-    try testing.expectEqualStrings("game-scenes/main.scene", manifest.default_scene.?);
-    try testing.expectEqualStrings(".cache/assets.zmanifest", manifest.asset_manifest);
+    try testing.expectEqualStrings("zephyr.proj", loaded.value.format);
+    try testing.expectEqualStrings("game-scenes/main.scene", loaded.value.default_scene.?);
+    try testing.expectEqualStrings(".cache/assets.zmanifest", loaded.value.asset_manifest);
 }
 
 test "ProjectManifest path helpers expose configured asset roots" {

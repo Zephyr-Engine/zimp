@@ -1,16 +1,16 @@
 const std = @import("std");
-const ZMesh = @import("formats/zmesh.zig").ZMesh;
-const Zatex = @import("formats/ztex.zig").Zatex;
-const ZShader = @import("formats/zshdr.zig").ZShader;
-const Zamat = @import("formats/zamat.zig").Zamat;
+const mesh_format = @import("formats/zmesh.zig");
+const texture_format = @import("formats/ztex.zig");
+const shader_format = @import("formats/zshdr.zig");
+const material_format = @import("formats/zamat.zig");
 const path_helpers = @import("path.zig");
 pub const AssetType = @import("assets/asset.zig").AssetType;
 
 pub const Asset = union(enum) {
-    mesh: ZMesh,
-    texture: Zatex,
-    shader: ZShader,
-    material: Zamat,
+    mesh: mesh_format.Mesh,
+    texture: texture_format.Texture,
+    shader: shader_format.Shader,
+    material: material_format.MaterialFile,
 
     pub fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -59,11 +59,7 @@ pub const CookedStore = struct {
 };
 
 pub fn detectType(path: []const u8) ?AssetType {
-    if (std.mem.endsWith(u8, path, ".zmesh")) return .mesh;
-    if (std.mem.endsWith(u8, path, ".ztex")) return .texture;
-    if (std.mem.endsWith(u8, path, ".zshdr")) return .shader;
-    if (std.mem.endsWith(u8, path, ".zamat")) return .material;
-    return null;
+    return AssetType.fromCookedPath(path);
 }
 
 pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !Asset {
@@ -86,10 +82,10 @@ pub fn loadFromReader(
     asset_type: AssetType,
 ) !Asset {
     switch (asset_type) {
-        .mesh => return .{ .mesh = try ZMesh.read(allocator, reader) },
-        .texture => return .{ .texture = try Zatex.read(allocator, reader) },
-        .shader => return .{ .shader = try ZShader.read(allocator, reader) },
-        .material => return .{ .material = try Zamat.read(allocator, reader) },
+        .mesh => return .{ .mesh = try mesh_format.read(allocator, reader) },
+        .texture => return .{ .texture = try texture_format.read(allocator, reader) },
+        .shader => return .{ .shader = try shader_format.read(allocator, reader) },
+        .material => return .{ .material = try material_format.read(allocator, reader) },
         .unknown => return error.UnsupportedAssetType,
     }
 }
@@ -131,7 +127,7 @@ test "loadFromFile loads zmesh" {
     const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    try ZMesh.write(&writer.interface, cooked);
+    try mesh_format.write(&writer.interface, cooked);
     try writer.flush();
     file.close(testing.io);
 
@@ -171,7 +167,7 @@ test "Asset deinit frees resources" {
     const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    try ZMesh.write(&writer.interface, cooked);
+    try mesh_format.write(&writer.interface, cooked);
     try writer.flush();
     file.close(testing.io);
 

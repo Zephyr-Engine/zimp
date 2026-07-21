@@ -13,6 +13,7 @@ const CountingAllocator = @import("../../shared/counting_allocator.zig").Countin
 const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
 const DependentsMap = @import("planner.zig").DependentsMap;
+const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
 
 pub const ProcessResult = enum { cached, hash_match, cooked, dependency_changed, skipped, errored };
 
@@ -226,14 +227,21 @@ const CookJobRunner = struct {
         };
         defer self.allocator.free(cooked_path);
 
-        const cooked_file = self.ctx.output.createFile(self.ctx.io, cooked_path, .{}) catch |err| {
+        if (std.fs.path.dirname(cooked_path)) |parent| {
+            self.ctx.output.createDirPath(self.ctx.io, parent) catch |err| {
+                log.err("Failed to create output directory for '{s}': {s}", .{ self.entry.path, @errorName(err) });
+                return result;
+            };
+        }
+
+        var pending_file = AtomicFile.create(self.allocator, self.ctx.io, self.ctx.output, cooked_path) catch |err| {
             log.err("Failed to create output file for '{s}': {s}", .{ self.entry.path, @errorName(err) });
             return result;
         };
-        defer cooked_file.close(self.ctx.io);
+        defer pending_file.deinit();
 
         var buf: [8192]u8 = undefined;
-        var file_writer = cooked_file.writer(self.ctx.io, &buf);
+        var file_writer = pending_file.file.writer(self.ctx.io, &buf);
 
         const cook_failed = blk: {
             cooker.cook(self.allocator, self.ctx.io, self.ctx.source, self.entry.path, &file_writer.interface) catch |err| {
@@ -246,13 +254,18 @@ const CookJobRunner = struct {
         result.metrics.source_bytes_read += source_size;
 
         if (cook_failed) {
+            self.ctx.output.deleteFile(self.ctx.io, cooked_path) catch |err| {
+                if (err != error.FileNotFound)
+                    log.warn("Failed to remove stale output '{s}': {s}", .{ cooked_path, @errorName(err) });
+            };
             result.cache_update = .errored;
             return result;
         }
 
         try file_writer.flush();
 
-        const cooked_stat = try cooked_file.stat(self.ctx.io);
+        const cooked_stat = try pending_file.file.stat(self.ctx.io);
+        try pending_file.commit();
 
         const end = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
         const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);

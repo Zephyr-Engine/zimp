@@ -3,6 +3,7 @@ const std = @import("std");
 const constants = @import("../shared/constants.zig");
 const cooked_material = @import("../assets/cooked/material.zig");
 const raw_material = @import("../assets/raw/material.zig");
+const wire = @import("../shared/wire.zig");
 const file_read = @import("../shared/file_read.zig");
 
 pub const MAGIC = constants.FORMAT_MAGIC.ZAMAT;
@@ -131,9 +132,9 @@ pub const ZamatHeader = struct {
         const vertex_shader_path_len = try reader.takeInt(u16, .little);
         const fragment_shader_path_offset = try reader.takeInt(u16, .little);
         const fragment_shader_path_len = try reader.takeInt(u16, .little);
-        const alpha_mode: AlphaMode = @enumFromInt(try reader.takeInt(u16, .little));
-        const cull_mode: CullMode = @enumFromInt(try reader.takeInt(u16, .little));
-        const blend_mode: BlendMode = @enumFromInt(try reader.takeInt(u16, .little));
+        const alpha_mode = try wire.readEnum(reader, AlphaMode, u16);
+        const cull_mode = try wire.readEnum(reader, CullMode, u16);
+        const blend_mode = try wire.readEnum(reader, BlendMode, u16);
         const flags = try reader.takeInt(u8, .little);
         _ = try reader.takeInt(u8, .little);
         const alpha_cutoff = readF32Int(try reader.takeInt(u32, .little));
@@ -149,6 +150,14 @@ pub const ZamatHeader = struct {
         if (texture_slot_count > 32) return error.TooManyTextureSlots;
         if (param_count > 64) return error.TooManyParams;
         if (variant_count > 64) return error.TooManyVariants;
+        const expected_param_offset = @as(u64, HEADER_SIZE) + @as(u64, texture_slot_count) * TEXTURE_SLOT_ENTRY_SIZE;
+        const expected_variant_offset = expected_param_offset + @as(u64, param_count) * PARAM_ENTRY_SIZE;
+        const expected_data_offset = expected_variant_offset + @as(u64, variant_count) * VARIANT_ENTRY_SIZE;
+        if (texture_table_offset != HEADER_SIZE or
+            param_table_offset != expected_param_offset or
+            variant_table_offset != expected_variant_offset or
+            param_data_offset != expected_data_offset)
+            return error.InvalidLayout;
 
         return .{
             .shader_path_hash = shader_path_hash,
@@ -324,6 +333,13 @@ pub const Zamat = struct {
     }
 };
 
+pub const MaterialFile = Zamat;
+pub const Header = ZamatHeader;
+
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !MaterialFile {
+    return MaterialFile.read(allocator, reader);
+}
+
 pub const Material = struct {
     shader_path_hash: u64,
     vertex_shader_path: []const u8,
@@ -465,11 +481,11 @@ fn readTextureSlots(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
             .sampler = .{
-                .min_filter = @enumFromInt(try reader.takeInt(u8, .little)),
-                .mag_filter = @enumFromInt(try reader.takeInt(u8, .little)),
-                .mip_filter = @enumFromInt(try reader.takeInt(u8, .little)),
-                .wrap_s = @enumFromInt(try reader.takeInt(u8, .little)),
-                .wrap_t = @enumFromInt(try reader.takeInt(u8, .little)),
+                .min_filter = try wire.readEnum(reader, FilterMode, u8),
+                .mag_filter = try wire.readEnum(reader, FilterMode, u8),
+                .mip_filter = try wire.readEnum(reader, MipFilterMode, u8),
+                .wrap_s = try wire.readEnum(reader, WrapMode, u8),
+                .wrap_t = try wire.readEnum(reader, WrapMode, u8),
                 .max_anisotropy = undefined,
             },
             .uv_offset = undefined,
@@ -506,7 +522,7 @@ fn readParamEntries(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .data_size = undefined,
         };
         entry.name_len = try reader.takeInt(u16, .little);
-        entry.param_type = @enumFromInt(try reader.takeInt(u16, .little));
+        entry.param_type = try wire.readEnum(reader, ParamType, u16);
         entry.shader_set = try reader.takeInt(u16, .little);
         entry.shader_binding = try reader.takeInt(u16, .little);
         entry.data_offset = try reader.takeInt(u16, .little);
@@ -625,14 +641,14 @@ test "Zamat write and read round trips" {
     defer loaded.deinit(testing.allocator);
 
     try testing.expectEqual(fnv1a("shaders/basic"), loaded.shader_path_hash);
-    try testing.expectEqualStrings("basic.vert.zshdr", loaded.vertex_shader_path);
-    try testing.expectEqualStrings("basic.frag.zshdr", loaded.fragment_shader_path);
+    try testing.expectEqualStrings("shaders/basic.vert.zshdr", loaded.vertex_shader_path);
+    try testing.expectEqualStrings("shaders/basic.frag.zshdr", loaded.fragment_shader_path);
     try testing.expectEqual(AlphaMode.alpha_test, loaded.render_state.alpha_mode);
     try testing.expectEqual(@as(usize, 1), loaded.texture_slots.len);
     try testing.expectEqual(fnv1a("albedo"), loaded.texture_slots[0].slot_name_hash);
     try testing.expectEqual(fnv1a("textures/test_albedo.png"), loaded.texture_slots[0].texture_path_hash);
     try testing.expectEqualStrings("u_albedo", loaded.texture_slots[0].resource_name);
-    try testing.expectEqualStrings("test_albedo.ztex", loaded.texture_slots[0].cooked_path);
+    try testing.expectEqualStrings("textures/test_albedo.ztex", loaded.texture_slots[0].cooked_path);
     try testing.expectEqual(@as(usize, 2), loaded.param_entries.len);
     try testing.expectEqualStrings("u_enabled", loaded.param_entries[0].name);
     try testing.expectEqualStrings("u_mode", loaded.param_entries[1].name);

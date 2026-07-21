@@ -16,5 +16,6 @@
         "external",
         "LICENSE",
         "README.md",
+        "docs",
     },
 }

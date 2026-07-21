@@ -96,7 +96,7 @@ pub const RawVertex = struct {
             }
 
             const clamped = std.math.clamp(uv[i], 0.0, 1.0);
-            result[i] = @intFromFloat(clamped * 65525.0);
+            result[i] = @intFromFloat(clamped * 65535.0);
         }
 
         return result;
@@ -1153,17 +1153,16 @@ test "vertices differing only in optional fields are not deduplicated" {
     try std.testing.expectEqual(@as(usize, 2), mesh.vertices.len);
 }
 
-test "quantizeUV maps 0.0 to 0 and 1.0 to 65525" {
+test "quantizeUV maps the normalized range to all u16 values" {
     const result = RawVertex.quantizeUV(.{ 0.0, 1.0 });
     try std.testing.expectEqual(@as(u16, 0), result[0]);
-    try std.testing.expectEqual(@as(u16, 65525), result[1]);
+    try std.testing.expectEqual(@as(u16, 65535), result[1]);
 }
 
 test "quantizeUV maps 0.5 to midpoint" {
     const result = RawVertex.quantizeUV(.{ 0.5, 0.5 });
-    // 0.5 * 65525 = 32762.5 → truncated to 32762
-    try std.testing.expectEqual(@as(u16, 32762), result[0]);
-    try std.testing.expectEqual(@as(u16, 32762), result[1]);
+    try std.testing.expectEqual(@as(u16, 32767), result[0]);
+    try std.testing.expectEqual(@as(u16, 32767), result[1]);
 }
 
 test "quantizeUV clamps values below 0" {
@@ -1174,16 +1173,14 @@ test "quantizeUV clamps values below 0" {
 
 test "quantizeUV clamps values above 1" {
     const result = RawVertex.quantizeUV(.{ 1.5, 2.0 });
-    try std.testing.expectEqual(@as(u16, 65525), result[0]);
-    try std.testing.expectEqual(@as(u16, 65525), result[1]);
+    try std.testing.expectEqual(@as(u16, 65535), result[0]);
+    try std.testing.expectEqual(@as(u16, 65535), result[1]);
 }
 
 test "quantizeUV handles independent channels" {
     const result = RawVertex.quantizeUV(.{ 0.25, 0.75 });
-    // 0.25 * 65525 = 16381.25 → 16381
-    // 0.75 * 65525 = 49143.75 → 49143
-    try std.testing.expectEqual(@as(u16, 16381), result[0]);
-    try std.testing.expectEqual(@as(u16, 49143), result[1]);
+    try std.testing.expectEqual(@as(u16, 16383), result[0]);
+    try std.testing.expectEqual(@as(u16, 49151), result[1]);
 }
 
 test "quantizeUV0 returns quantized value when present" {
@@ -1191,7 +1188,7 @@ test "quantizeUV0 returns quantized value when present" {
     v.uv0 = .{ 0.0, 1.0 };
     const result = v.quantizeUV0().?;
     try std.testing.expectEqual(@as(u16, 0), result[0]);
-    try std.testing.expectEqual(@as(u16, 65525), result[1]);
+    try std.testing.expectEqual(@as(u16, 65535), result[1]);
 }
 
 test "quantizeUV0 returns null when absent" {
@@ -1203,8 +1200,8 @@ test "quantizeUV1 returns quantized value when present" {
     var v = makeVertex(0, 0, 0);
     v.uv1 = .{ 0.5, 0.25 };
     const result = v.quantizeUV1().?;
-    try std.testing.expectEqual(@as(u16, 32762), result[0]);
-    try std.testing.expectEqual(@as(u16, 16381), result[1]);
+    try std.testing.expectEqual(@as(u16, 32767), result[0]);
+    try std.testing.expectEqual(@as(u16, 16383), result[1]);
 }
 
 test "quantizeUV1 returns null when absent" {

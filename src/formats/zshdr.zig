@@ -2,6 +2,7 @@ const std = @import("std");
 
 const constants = @import("../shared/constants.zig");
 const cooked_shader = @import("../assets/cooked/shader.zig");
+const wire = @import("../shared/wire.zig");
 
 pub const MAGIC = constants.FORMAT_MAGIC.ZSHDR;
 pub const ZSHDR_VERSION: u32 = 1;
@@ -70,10 +71,13 @@ pub const ZShader = struct {
             return error.UnsupportedVersion;
         }
 
-        const stage: ShaderStage = @enumFromInt(try reader.takeInt(u8, .little));
+        const stage = try wire.readEnum(reader, ShaderStage, u8);
         const variant_count = try reader.takeInt(u16, .little);
         const include_count = try reader.takeInt(u16, .little);
         const permutation_count = try reader.takeInt(u32, .little);
+        if (variant_count > 32) return error.TooManyVariants;
+        if (include_count > 4096) return error.TooManyIncludes;
+        if (permutation_count > 65536) return error.TooManyPermutations;
 
         const variant_names = try readStringList(allocator, reader, variant_count);
         errdefer freeStringList(allocator, variant_names);
@@ -87,9 +91,11 @@ pub const ZShader = struct {
         var loaded: usize = 0;
         errdefer for (permutations[0..loaded]) |perm| allocator.free(perm.source);
 
+        var total_source_bytes: usize = 0;
         for (permutations) |*perm| {
             const key = VariantKey.fromBits(try reader.takeInt(u32, .little));
             const source_len = try reader.takeInt(u32, .little);
+            try wire.checkedAddWithinLimit(&total_source_bytes, source_len, wire.max_asset_bytes);
             const source = try allocator.alloc(u8, source_len);
             errdefer allocator.free(source);
             try reader.readSliceAll(source);
@@ -112,6 +118,12 @@ pub const ZShader = struct {
         allocator.free(self.permutations);
     }
 };
+
+pub const Shader = ZShader;
+
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Shader {
+    return Shader.read(allocator, reader);
+}
 
 pub fn write(writer: *std.Io.Writer, cooked: CookedShader) !void {
     try writer.writeAll(MAGIC);

@@ -8,10 +8,10 @@ const file_read = @import("../shared/file_read.zig");
 const Cooker = @import("cooker.zig").Cooker;
 
 pub fn cooker() Cooker {
-    return .{ .cookFn = cookObj, .asset_type = .texture };
+    return .{ .cook_fn = cookTexture, .asset_type = .texture };
 }
 
-fn cookObj(
+fn cookTexture(
     allocator: std.mem.Allocator,
     io: std.Io,
     source_dir: std.Io.Dir,

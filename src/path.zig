@@ -156,15 +156,25 @@ pub fn resolveShaderInclude(
 }
 
 pub fn cookedOutput(allocator: std.mem.Allocator, file_path: []const u8, asset_type: AssetType) ![]u8 {
-    const name = if (asset_type == .shader)
-        std.fs.path.basename(file_path)
-    else
-        std.fs.path.stem(file_path);
+    const normalized = try normalizeVirtual(allocator, file_path);
+    defer allocator.free(normalized);
 
-    return std.fmt.allocPrint(allocator, "{s}.{s}", .{
+    const basename = std.fs.path.basename(normalized);
+    const name = if (asset_type == .shader)
+        basename
+    else
+        std.fs.path.stem(basename);
+
+    const filename = try std.fmt.allocPrint(allocator, "{s}.{s}", .{
         name,
         asset_type.cookedExtension(),
     });
+    errdefer allocator.free(filename);
+
+    const parent = std.fs.path.dirname(normalized) orelse return filename;
+    const output = try std.fmt.allocPrint(allocator, "{s}/{s}", .{ parent, filename });
+    allocator.free(filename);
+    return output;
 }
 
 const testing = std.testing;
@@ -228,13 +238,19 @@ test "resolveShaderInclude returns normalized include when shader has no directo
 test "cooked output paths use standardized naming" {
     const shader = try cookedOutput(testing.allocator, "shaders/basic.vert", .shader);
     defer testing.allocator.free(shader);
-    try testing.expectEqualStrings("basic.vert.zshdr", shader);
+    try testing.expectEqualStrings("shaders/basic.vert.zshdr", shader);
 
     const mesh = try cookedOutput(testing.allocator, "meshes/triangle.glb", .mesh);
     defer testing.allocator.free(mesh);
-    try testing.expectEqualStrings("triangle.zmesh", mesh);
+    try testing.expectEqualStrings("meshes/triangle.zmesh", mesh);
 
     const texture = try cookedOutput(testing.allocator, "textures/test_albedo.png", .texture);
     defer testing.allocator.free(texture);
-    try testing.expectEqualStrings("test_albedo.ztex", texture);
+    try testing.expectEqualStrings("textures/test_albedo.ztex", texture);
+}
+
+test "cooked output paths normalize platform separators" {
+    const mesh = try cookedOutput(testing.allocator, "meshes\\characters\\hero.glb", .mesh);
+    defer testing.allocator.free(mesh);
+    try testing.expectEqualStrings("meshes/characters/hero.zmesh", mesh);
 }
