@@ -90,6 +90,8 @@ pub const AssetManifest = manifest.model.AssetManifest;
 pub const AssetManifestEntry = manifest.model.AssetManifestEntry;
 
 pub const scene = struct {
+    pub const document = @import("scene/document.zig");
+    pub const json_codec = @import("scene/json_codec.zig");
     pub const schema = @import("scene/schema.zig");
     pub const value = @import("scene/value.zig");
     pub const descriptor = @import("scene/schema_descriptor.zig");
@@ -104,6 +106,9 @@ pub const scene = struct {
     pub const Value = value.Value;
     pub const SceneField = value.SceneField;
     pub const SceneComponentData = value.SceneComponentData;
+    pub const SceneDocument = document.SceneDocument;
+    pub const SceneEntity = document.SceneEntity;
+    pub const SceneComponent = document.SceneComponent;
 };
 
 pub const Uuid = id.uuid.Uuid;
