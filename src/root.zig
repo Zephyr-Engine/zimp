@@ -92,6 +92,7 @@ pub const AssetManifestEntry = manifest.model.AssetManifestEntry;
 pub const scene = struct {
     pub const document = @import("scene/document.zig");
     pub const json_codec = @import("scene/json_codec.zig");
+    pub const binary_codec = @import("scene/binary_codec.zig");
     pub const schema = @import("scene/schema.zig");
     pub const value = @import("scene/value.zig");
     pub const descriptor = @import("scene/schema_descriptor.zig");
@@ -292,4 +293,7 @@ test {
     _ = @import("scene/schema.zig");
     _ = @import("scene/value.zig");
     _ = @import("scene/schema_descriptor.zig");
+    _ = @import("scene/document.zig");
+    _ = @import("scene/json_codec.zig");
+    _ = @import("scene/binary_codec.zig");
 }

@@ -82,26 +82,29 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !document.SceneDo
         return error.UnsupportedSceneVersion;
     }
 
-    var scene = document.SceneDocument{
-        .format = try allocator.dupe(u8, format),
-        .version = version,
-        .scene_id = try parseId(id.SceneId, try string(try required(obj, "scene_id"))),
-        .project_id = try parseId(id.ProjectId, try string(try required(obj, "project_id"))),
-        .name = try allocator.dupe(u8, try string(try required(obj, "name"))),
-        .schema_hash = try optionalU64(obj, "schema_hash"),
-        .asset_manifest_hash = try optionalU64(obj, "asset_manifest_hash"),
-        .active_camera = try optionalId(id.SceneEntityId, obj, "active_camera"),
-        .entities = &.{},
-    };
-    errdefer scene.deinit(allocator);
+    const scene_id = try parseId(id.SceneId, try string(try required(obj, "scene_id")));
+    const project_id = try parseId(id.ProjectId, try string(try required(obj, "project_id")));
+    const name = try string(try required(obj, "name"));
+    const schema_hash = try optionalU64(obj, "schema_hash");
+    const asset_manifest_hash = try optionalU64(obj, "asset_manifest_hash");
+    const active_camera = try optionalId(id.SceneEntityId, obj, "active_camera");
+
+    var scene = try document.SceneDocument.init(allocator, scene_id, project_id, name);
+    errdefer scene.deinit();
+
+    const storage = scene.arena.allocator();
+    scene.version = version;
+    scene.schema_hash = schema_hash;
+    scene.asset_manifest_hash = asset_manifest_hash;
+    scene.active_camera = active_camera;
 
     const items = try array(try required(obj, "entities"));
-    scene.entities = try allocator.alloc(document.SceneEntity, items.len);
+    scene.entities = try storage.alloc(document.SceneEntity, items.len);
 
     var count: usize = 0;
     errdefer scene.entities = scene.entities[0..count];
     for (items, 0..) |item, i| {
-        scene.entities[i] = try entityFromJson(allocator, item);
+        scene.entities[i] = try entityFromJson(storage, item);
         count += 1;
     }
     return scene;
@@ -471,16 +474,18 @@ test "load save load preserves a source scene and canonicalizes ordering" {
         .{ .id = entity_a, .name = "A", .components = &.{}, .prefab = .{} },
         .{ .id = entity_b, .name = "B", .components = components[0..], .prefab = .{} },
     };
-    const source = document.SceneDocument{ .scene_id = scene_id, .project_id = project_id, .name = "Sandbox", .entities = entities[0..] };
+    var source = try document.SceneDocument.init(testing.allocator, scene_id, project_id, "Sandbox");
+    defer source.deinit();
+    source.entities = entities[0..];
 
     const encoded = try encodeAlloc(testing.allocator, &source);
     defer testing.allocator.free(encoded);
     var decoded = try decode(testing.allocator, encoded);
-    defer decoded.deinit(testing.allocator);
+    defer decoded.deinit();
     const encoded_again = try encodeAlloc(testing.allocator, &decoded);
     defer testing.allocator.free(encoded_again);
     var decoded_again = try decode(testing.allocator, encoded_again);
-    defer decoded_again.deinit(testing.allocator);
+    defer decoded_again.deinit();
 
     try testing.expectEqualStrings(encoded, encoded_again);
     try testing.expect(decoded.scene_id.eql(source.scene_id));
