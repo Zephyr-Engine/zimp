@@ -253,7 +253,7 @@ fn entityFromJson(allocator: std.mem.Allocator, item: std.json.Value) !document.
     }
 
     if (obj.get("prefab")) |p| {
-        result.prefab = try prefabFromJson(p.*);
+        result.prefab = try prefabFromJson(p);
     }
     const items = try array(try required(obj, "components"));
     result.components = try allocator.alloc(document.SceneComponent, items.len);
@@ -367,7 +367,7 @@ fn u32Value(item: std.json.Value) !u32 {
 
 fn optionalU64(obj: std.json.ObjectMap, key: []const u8) !u64 {
     const item = obj.get(key) orelse return 0;
-    return intValue(u64, item.*);
+    return intValue(u64, item);
 }
 
 fn floatValue(item: std.json.Value) !f32 {
@@ -376,7 +376,7 @@ fn floatValue(item: std.json.Value) !f32 {
         .float => |x| x,
         else => return error.InvalidValue,
     };
-    return std.math.cast(f32, raw) orelse error.InvalidValue;
+    return @floatCast(raw);
 }
 
 fn vector(comptime N: usize, item: std.json.Value) ![N]f32 {
@@ -393,11 +393,11 @@ fn parseId(comptime T: type, text: []const u8) !T {
 
 fn optionalId(comptime T: type, obj: std.json.ObjectMap, key: []const u8) !?T {
     const item = obj.get(key) orelse return null;
-    if (item.* == .null) {
+    if (item == .null) {
         return null;
     }
 
-    return parseId(T, try string(item.*));
+    return @as(?T, try parseId(T, try string(item)));
 }
 
 fn rejectUnknown(obj: std.json.ObjectMap, allowed: []const []const u8) !void {
@@ -459,15 +459,15 @@ test "load save load preserves a source scene and canonicalizes ordering" {
     const entity_b = id.SceneEntityId.parseComptime("00000000-0000-4000-8000-000000000000");
     const component_a = id.ComponentTypeId.parseComptime("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
     const component_b = id.ComponentTypeId.parseComptime("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
-    const fields = [_]value.SceneField{
+    var fields = [_]value.SceneField{
         .{ .number = 9, .value = .{ .string = "owned after decoding" } },
         .{ .number = 2, .value = .{ .vec3 = .{ 1, 2, 3 } } },
     };
-    const components = [_]document.SceneComponent{
+    var components = [_]document.SceneComponent{
         .{ .type_id = component_b, .fields = fields[0..] },
         .{ .type_id = component_a, .fields = &.{} },
     };
-    const entities = [_]document.SceneEntity{
+    var entities = [_]document.SceneEntity{
         .{ .id = entity_a, .name = "A", .components = &.{}, .prefab = .{} },
         .{ .id = entity_b, .name = "B", .components = components[0..], .prefab = .{} },
     };
