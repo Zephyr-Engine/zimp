@@ -9,10 +9,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = .ReleaseFast,
     });
-    const cook = zimp.addCookStep(b, zimp_dep, .{
-        .source_dir = b.path("assets"),
-        .output_dir = b.path("output"),
-    });
+    const cook = zimp.addProjectCookStep(b, zimp_dep, b.path("."));
     const cook_step = b.step("cook", "Cook assets with zimp");
     cook_step.dependOn(&cook.step);
 
@@ -22,7 +19,9 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/main.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{},
+            .imports = &.{
+                .{ .name = "zimp", .module = zimp_dep.module("zimp") },
+            },
         }),
     });
 

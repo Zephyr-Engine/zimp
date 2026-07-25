@@ -3,13 +3,13 @@ const std = @import("std");
 const FORMAT_MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC;
 
 pub const FormatInspector = struct {
-    inspectFn: *const fn (
+    inspect_fn: *const fn (
         allocator: std.mem.Allocator,
         reader: *std.Io.Reader,
     ) anyerror!void,
 
     pub fn inspect(self: FormatInspector, allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
-        return self.inspectFn(allocator, reader);
+        return self.inspect_fn(allocator, reader);
     }
 };
 
@@ -41,7 +41,7 @@ fn failingInspect(_: std.mem.Allocator, _: *std.Io.Reader) anyerror!void {
 
 test "FormatInspector.inspect calls the provided function pointer" {
     test_called = false;
-    const inspector = FormatInspector{ .inspectFn = stubInspect };
+    const inspector = FormatInspector{ .inspect_fn = stubInspect };
 
     var buf: [1]u8 = .{0};
     var reader = std.Io.Reader.fixed(&buf);
@@ -50,8 +50,8 @@ test "FormatInspector.inspect calls the provided function pointer" {
     try testing.expect(test_called);
 }
 
-test "FormatInspector.inspect propagates errors from inspectFn" {
-    const inspector = FormatInspector{ .inspectFn = failingInspect };
+test "FormatInspector.inspect propagates errors from inspect_fn" {
+    const inspector = FormatInspector{ .inspect_fn = failingInspect };
 
     var buf: [1]u8 = .{0};
     var reader = std.Io.Reader.fixed(&buf);
@@ -80,10 +80,10 @@ test "inspector_registry returns null for unknown magic" {
 
 test "inspector_registry maps ZMESH to zamesh_inspector" {
     const found = inspector_registry.get(FORMAT_MAGIC.ZMESH).?;
-    try testing.expectEqual(zamesh_inspector.inspectFn, found.inspectFn);
+    try testing.expectEqual(zamesh_inspector.inspect_fn, found.inspect_fn);
 }
 
 test "inspector_registry maps ZSHDR to zshdr_inspector" {
     const found = inspector_registry.get(FORMAT_MAGIC.ZSHDR).?;
-    try testing.expectEqual(zshdr_inspector.inspectFn, found.inspectFn);
+    try testing.expectEqual(zshdr_inspector.inspect_fn, found.inspect_fn);
 }

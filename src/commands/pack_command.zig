@@ -6,6 +6,9 @@ pub const PackError = error{
     NotEnoughArguments,
     SourceDirNotFound,
     OutputDirNotFound,
+    MissingFlagValue,
+    UnknownFlag,
+    DuplicateFlag,
 };
 
 pub const PackCommand = struct {
@@ -15,41 +18,46 @@ pub const PackCommand = struct {
 
     pub fn parseFromArgs(io: std.Io, args: []const [:0]const u8) PackError!PackCommand {
         const cwd = std.Io.Dir.cwd();
-        var command: PackCommand = .{
-            .source = cwd,
-            .output = cwd,
-            .io = io,
-        };
-
-        if (args.len < 6) {
-            log.err("pack: not enough arguments (got {d}, need at least 6). Usage: zimp pack --source <source_dir> --output <output_dir>", .{args.len});
-            return PackError.NotEnoughArguments;
-        }
+        var source_arg: ?[]const u8 = null;
+        var output_arg: ?[]const u8 = null;
 
         var i: usize = 2;
         while (i < args.len) {
             if (std.mem.eql(u8, "--source", args[i])) {
-                command.source = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    log.err("pack: failed to open source directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
-                    return PackError.SourceDirNotFound;
-                };
+                if (source_arg != null) return PackError.DuplicateFlag;
+                if (i + 1 >= args.len) return PackError.MissingFlagValue;
+                source_arg = args[i + 1];
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
-                command.output = std.Io.Dir.openDir(cwd, io, args[i + 1], .{ .iterate = true }) catch |err| {
-                    log.err("pack: failed to open output directory '{s}': {s}. Ensure the directory exists and has the correct permissions", .{ args[i + 1], @errorName(err) });
-                    return PackError.OutputDirNotFound;
-                };
+                if (output_arg != null) return PackError.DuplicateFlag;
+                if (i + 1 >= args.len) return PackError.MissingFlagValue;
+                output_arg = args[i + 1];
                 i += 1;
+            } else {
+                return PackError.UnknownFlag;
             }
 
             i += 1;
         }
 
-        return command;
+        if (source_arg == null or output_arg == null) return PackError.NotEnoughArguments;
+
+        const source = std.Io.Dir.openDir(cwd, io, source_arg.?, .{ .iterate = true }) catch |err| {
+            log.err("pack: failed to open source directory '{s}': {s}", .{ source_arg.?, @errorName(err) });
+            return PackError.SourceDirNotFound;
+        };
+        errdefer source.close(io);
+        const output = std.Io.Dir.openDir(cwd, io, output_arg.?, .{ .iterate = true }) catch |err| {
+            log.err("pack: failed to open output directory '{s}': {s}", .{ output_arg.?, @errorName(err) });
+            return PackError.OutputDirNotFound;
+        };
+
+        return .{ .source = source, .output = output, .io = io };
     }
 
     pub fn run(_: PackCommand) !void {
-        log.info("Running pack command", .{});
+        log.err("pack: archive packing is not implemented", .{});
+        return error.PackNotImplemented;
     }
 
     pub fn deinit(self: PackCommand) void {
@@ -108,11 +116,16 @@ test "PackCommand.parseFromArgs accepts flags in any order" {
     try testing.expect(cmd.output.handle != 0);
 }
 
-test "PackCommand.run executes without error" {
+test "PackCommand.run reports that packing is not implemented" {
     const args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output", "." };
     const cmd = try PackCommand.parseFromArgs(testing.io, args);
     defer cmd.deinit();
-    try cmd.run();
+    try testing.expectError(error.PackNotImplemented, cmd.run());
+}
+
+test "PackCommand.parseFromArgs rejects a missing trailing flag value" {
+    const args: []const [:0]const u8 = &.{ "zimp", "pack", "--source", ".", "--output" };
+    try testing.expectError(PackError.MissingFlagValue, PackCommand.parseFromArgs(testing.io, args));
 }
 
 test "PackCommand.deinit cleans up without error" {

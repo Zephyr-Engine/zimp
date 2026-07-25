@@ -17,6 +17,8 @@ pub const CookError = error{
     ConflictingFlags,
     ProjectOpenFailed,
     OutOfMemory,
+    UnknownFlag,
+    DuplicateFlag,
 };
 
 pub const CookCommand = struct {
@@ -47,6 +49,7 @@ pub const CookCommand = struct {
         var i: usize = 2;
         while (i < args.len) {
             if (std.mem.eql(u8, "--source", args[i])) {
+                if (source_arg != null) return CookError.DuplicateFlag;
                 if (i + 1 >= args.len) {
                     log.err("cook: missing value for --source", .{});
                     return CookError.MissingFlagValue;
@@ -54,6 +57,7 @@ pub const CookCommand = struct {
                 source_arg = args[i + 1];
                 i += 1;
             } else if (std.mem.eql(u8, "--output", args[i])) {
+                if (output_arg != null) return CookError.DuplicateFlag;
                 if (i + 1 >= args.len) {
                     log.err("cook: missing value for --output", .{});
                     return CookError.MissingFlagValue;
@@ -61,6 +65,7 @@ pub const CookCommand = struct {
                 output_arg = args[i + 1];
                 i += 1;
             } else if (std.mem.eql(u8, "--project", args[i])) {
+                if (project_arg != null) return CookError.DuplicateFlag;
                 if (i + 1 >= args.len) {
                     log.err("cook: missing value for --project", .{});
                     return CookError.MissingFlagValue;
@@ -68,9 +73,14 @@ pub const CookCommand = struct {
                 project_arg = args[i + 1];
                 i += 1;
             } else if (std.mem.eql(u8, "--force", args[i])) {
+                if (command.force) return CookError.DuplicateFlag;
                 command.force = true;
             } else if (std.mem.eql(u8, "--metrics-json", args[i])) {
+                if (command.emit_ci_metrics_json) return CookError.DuplicateFlag;
                 command.emit_ci_metrics_json = true;
+            } else {
+                log.err("cook: unknown flag '{s}'", .{args[i]});
+                return CookError.UnknownFlag;
             }
 
             i += 1;
@@ -84,8 +94,8 @@ pub const CookCommand = struct {
             return parseProjectMode(&command, allocator, io, project_path);
         }
 
-        if (args.len < 6) {
-            log.err("cook: not enough arguments (got {d}, need at least 6). Usage: zimp cook --source <source_dir> --output <output_dir> (or zimp cook --project <root>)", .{args.len});
+        if (source_arg == null or output_arg == null) {
+            log.err("cook: both --source and --output are required. Usage: zimp cook --source <source_dir> --output <output_dir> (or zimp cook --project <root>)", .{});
             return CookError.NotEnoughArguments;
         }
 
@@ -189,6 +199,7 @@ pub const CookCommand = struct {
         if (self.emit_ci_metrics_json) {
             try cook_metrics.emitCiJson(allocator, &metrics);
         }
+        if (metrics.assets_errored > 0) return error.AssetCookFailed;
     }
 
     pub fn deinit(self: *const CookCommand) void {
@@ -272,6 +283,16 @@ test "CookCommand.parseFromArgs accepts flags in any order" {
     try testing.expect(cmd.output.handle != 0);
 }
 
+test "CookCommand.parseFromArgs rejects unknown flags even when argument count is sufficient" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--foo", "a", "--bar", "b" };
+    try testing.expectError(CookError.UnknownFlag, CookCommand.parseFromArgs(testing.allocator, testing.io, args));
+}
+
+test "CookCommand.parseFromArgs rejects duplicate flags" {
+    const args: []const [:0]const u8 = &.{ "zimp", "cook", "--source", ".", "--source", ".", "--output", "." };
+    try testing.expectError(CookError.DuplicateFlag, CookCommand.parseFromArgs(testing.allocator, testing.io, args));
+}
+
 test "CookCommand.run executes without error" {
     var source_tmp = testing.tmpDir(.{});
     defer source_tmp.cleanup();
@@ -289,6 +310,48 @@ test "CookCommand.run executes without error" {
         .allocator = testing.allocator,
     };
     try cmd.run(.none);
+
+    const cache_file = try output_tmp.dir.openFile(testing.io, ".zcache", .{});
+    cache_file.close(testing.io);
+    try testing.expectError(error.FileNotFound, source_tmp.dir.openFile(testing.io, ".zcache", .{}));
+}
+
+test "CookCommand.run reports failures without leaving stale output" {
+    var source_tmp = testing.tmpDir(.{});
+    defer source_tmp.cleanup();
+    var output_tmp = testing.tmpDir(.{});
+    defer output_tmp.cleanup();
+
+    const source_file = try source_tmp.dir.createFile(testing.io, "bad.zamat", .{});
+    var source_buf: [64]u8 = undefined;
+    var source_writer = source_file.writer(testing.io, &source_buf);
+    try source_writer.interface.writeAll("this is not valid material toml");
+    try source_writer.interface.flush();
+    source_file.close(testing.io);
+
+    const stale_file = try output_tmp.dir.createFile(testing.io, "bad.zamat", .{});
+    var stale_buf: [16]u8 = undefined;
+    var stale_writer = stale_file.writer(testing.io, &stale_buf);
+    try stale_writer.interface.writeAll("stale");
+    try stale_writer.interface.flush();
+    stale_file.close(testing.io);
+
+    const source_dir = try std.Io.Dir.openDir(source_tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer source_dir.close(testing.io);
+    const output_dir = try std.Io.Dir.openDir(output_tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer output_dir.close(testing.io);
+
+    const cmd: CookCommand = .{
+        .source = source_dir,
+        .output = output_dir,
+        .io = testing.io,
+        .allocator = testing.allocator,
+    };
+    try testing.expectError(error.AssetCookFailed, cmd.run(.none));
+    try testing.expectError(error.FileNotFound, output_tmp.dir.openFile(testing.io, "bad.zamat", .{}));
+
+    const cache_file = try output_tmp.dir.openFile(testing.io, ".zcache", .{});
+    cache_file.close(testing.io);
 }
 
 test "CookCommand.deinit cleans up without error" {

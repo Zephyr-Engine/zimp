@@ -117,7 +117,8 @@ zimp cook --source assets/ --output cooked/ --metrics-json
 zimp inspect cooked/monkey.zmesh
 zimp inspect cooked/basic.vert.zshdr
 zimp inspect cooked/monkey.zamat
-zimp inspect .zcache
+zimp inspect cooked/.zcache          # directory mode
+zimp inspect .zephyr/.zcache         # project mode
 ```
 
 ## Running tests
@@ -128,7 +129,7 @@ zig build test --summary all
 
 ## Durable asset identity
 
-zimp is the source of truth for asset identity (see `docs/identity.md` in the main repo for the full rules):
+zimp is the source of truth for asset identity (see [`docs/identity.md`](docs/identity.md) for the full rules):
 
 - **`.zmeta` sidecars** (`meshes/monkey.glb.zmeta`) carry each authored asset's `AssetId`. They are authored identity, committed to version control; deleting one assigns a NEW id on the next cook and breaks every reference to the asset.
 - **`assets.zmanifest`** is generated output (never committed): a deterministic, validated JSON database of every cooked asset. Identical inputs produce byte-identical manifests.
@@ -161,12 +162,15 @@ When that label is present, CI still computes and reports regressions but does n
 
 Source: `.glb`, `.gltf`, `.obj`
 
-Flat binary blob with SoA vertex streams, directly uploadable to the GPU with zero parsing:
+Flat binary blob with SoA vertex streams, directly uploadable to the GPU with minimal parsing:
 
 ```zig
-const ZMesh = @import("zimp").ZMesh;
+const zmesh = @import("zimp").formats.zmesh;
 
-const mesh = try ZMesh.read(allocator, file);
+var read_buffer: [8192]u8 = undefined;
+var file_reader = file.reader(io, &read_buffer);
+var mesh = try zmesh.read(allocator, &file_reader.interface);
+defer mesh.deinit(allocator);
 ```
 
 | Stream | Type | Notes |
@@ -180,6 +184,8 @@ const mesh = try ZMesh.read(allocator, file);
 | Joint weights | `[4]f16` | For skinned meshes |
 
 Includes an AABB bounding box; indices are `u16` when they fit, `u32` otherwise.
+
+Each source mesh file currently must contain exactly one glTF mesh. Files containing multiple glTF meshes fail with `MultipleMeshesUnsupported` instead of producing an ambiguous concatenated output.
 
 ### Textures (`.ztex`)
 
@@ -256,7 +262,7 @@ When `.glb` or `.gltf` files contain materials, zimp auto-generates material sou
 
 ## Incremental builds
 
-zimp maintains a `.zcache` file that tracks content hashes and dependency relationships. On subsequent runs, only assets whose source files changed (or whose dependencies changed) are re-cooked. A material that references `brick_normal.png` will automatically re-cook when that texture is modified.
+zimp maintains a `.zcache` file that tracks content hashes and dependency relationships. Project mode stores it at `<project>/.zephyr/.zcache`; directory mode stores it inside the selected output directory. This keeps independent projects and output roots from sharing mutable cache state. On subsequent runs, only assets whose source files changed (or whose dependencies changed) are re-cooked. A material that references `brick_normal.png` will automatically re-cook when that texture is modified.
 
 ```sh
 # First run: cooks everything
@@ -273,6 +279,8 @@ zimp cook --project .
 ```
 
 Asset identity does not depend on the cache: deleting `.zcache` (or the whole cooked directory and manifest) and recooking reproduces identical `AssetId`s from the committed sidecars.
+
+Cooked paths preserve the source directory structure and replace the source extension. For example, `meshes/characters/hero.glb` becomes `meshes/characters/hero.zmesh`. Shader stage extensions are retained (`shaders/basic.vert` becomes `shaders/basic.vert.zshdr`). This prevents assets in different directories from colliding; two source files in the same directory that would map to one output are rejected during planning.
 
 ## Planned
 

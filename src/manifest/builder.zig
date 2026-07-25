@@ -27,6 +27,7 @@ pub const BuildStats = struct {
     ids_derived: usize = 0,
     ids_new: usize = 0,
     skipped_errored: usize = 0,
+    skipped_dependency_only: usize = 0,
     skipped_unknown_kind: usize = 0,
 };
 
@@ -48,6 +49,10 @@ pub fn build(gpa: std.mem.Allocator, inputs: BuildInputs, stats: *BuildStats) !m
     for (inputs.cache.entries.items) |*cache_entry| {
         if (cache_entry.isErrored()) {
             stats.skipped_errored += 1;
+            continue;
+        }
+        if (!cache_entry.hasCookedOutput()) {
+            stats.skipped_dependency_only += 1;
             continue;
         }
         const kind = kind_mod.AssetKind.fromAssetType(cache_entry.asset_type) orelse {
@@ -210,7 +215,7 @@ test "build over an empty cache yields an empty valid manifest" {
     try testing.expectEqual(@as(usize, 0), stats.entries);
 }
 
-test "fresh assets get v4 ids and sidecars; errored and unknown entries are skipped" {
+test "fresh assets get v4 ids and sidecars; non-assets are skipped" {
     var fx = try TestFixture.init();
     defer fx.deinit();
     var prng = std.Random.DefaultPrng.init(7);
@@ -218,7 +223,8 @@ test "fresh assets get v4 ids and sidecars; errored and unknown entries are skip
     try fx.tmp.dir.createDirPath(testing.io, "meshes");
     try fx.addCacheEntry("meshes/monkey.glb", "meshes/monkey.zmesh", .mesh, 0);
     try fx.addCacheEntry("tex/broken.png", "tex/broken.zatex", .texture, @import("../cache/entry.zig").FLAG_ERRORED);
-    try fx.addCacheEntry("includes/common.glsl", "includes/common.glsl", .unknown, 0);
+    try fx.addCacheEntry("includes/common.glsl", "", .shader, 0);
+    try fx.addCacheEntry("data/unknown.bin", "data/unknown.bin", .unknown, 0);
 
     var stats = BuildStats{};
     var m = try build(testing.allocator, fx.inputs(prng.random()), &stats);
@@ -227,6 +233,7 @@ test "fresh assets get v4 ids and sidecars; errored and unknown entries are skip
     try testing.expectEqual(@as(usize, 1), m.entries.len);
     try testing.expectEqual(@as(usize, 1), stats.ids_new);
     try testing.expectEqual(@as(usize, 1), stats.skipped_errored);
+    try testing.expectEqual(@as(usize, 1), stats.skipped_dependency_only);
     try testing.expectEqual(@as(usize, 1), stats.skipped_unknown_kind);
 
     const entry = m.findBySourcePath("meshes/monkey.glb").?;

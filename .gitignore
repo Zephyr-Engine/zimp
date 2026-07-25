@@ -2,6 +2,9 @@ zig-out/
 zig-pkg/
 .zig-cache/
 *.zmesh
-examples/output/*.zmesh
+examples/output/*
+!examples/output/.gitkeep
+examples/assets/generated/
+examples/.zephyr/assets.zmanifest
 .DS_Store
 .zcache

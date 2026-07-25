@@ -10,7 +10,7 @@ const zamat = @import("../formats/zamat.zig");
 const log = @import("../logger.zig");
 
 pub fn cooker() Cooker {
-    return .{ .cookFn = cookMaterial, .asset_type = .material };
+    return .{ .cook_fn = cookMaterial, .asset_type = .material };
 }
 
 fn cookMaterial(

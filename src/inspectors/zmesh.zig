@@ -194,14 +194,14 @@ fn inspectZmesh(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
 }
 
 pub fn inspector() FormatInspector {
-    return .{ .inspectFn = inspectZmesh };
+    return .{ .inspect_fn = inspectZmesh };
 }
 
 const testing = std.testing;
 
 test "inspector returns a valid FormatInspector" {
     const insp = inspector();
-    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZmesh), insp.inspectFn);
+    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZmesh), insp.inspect_fn);
 }
 
 test "inspector can be called through FormatInspector trait" {

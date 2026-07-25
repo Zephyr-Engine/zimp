@@ -7,6 +7,10 @@ const cooked_texture = @import("../assets/cooked/texture.zig");
 const CookedTexture = cooked_texture.CookedTexture;
 const TexelFormat = cooked_texture.TexelFormat;
 const ColorSpace = @import("../assets/raw/texture.zig").ColorSpace;
+const wire = @import("../shared/wire.zig");
+
+const max_dimension: u32 = 32 * 1024;
+const max_mip_count: u16 = 32;
 
 pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u32) // version
@@ -53,9 +57,13 @@ pub const ZatexHeader = struct {
         const width = try reader.takeInt(u32, .little);
         const height = try reader.takeInt(u32, .little);
         const mip_count = try reader.takeInt(u16, .little);
-        const format: TexelFormat = @enumFromInt(try reader.takeInt(u16, .little));
-        const texture_type: TextureType = @enumFromInt(try reader.takeInt(u8, .little));
-        const color_space: ColorSpace = @enumFromInt(try reader.takeInt(u8, .little));
+        const format = try wire.readEnum(reader, TexelFormat, u16);
+        const texture_type = try wire.readEnum(reader, TextureType, u8);
+        const color_space = try wire.readEnum(reader, ColorSpace, u8);
+
+        if (width == 0 or height == 0 or width > max_dimension or height > max_dimension)
+            return error.InvalidDimensions;
+        if (mip_count == 0 or mip_count > max_mip_count) return error.InvalidMipCount;
 
         return .{
             .width = width,
@@ -97,7 +105,7 @@ pub const Zatex = struct {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
         const reader = &file_reader.interface;
-        return read(allocator, reader);
+        return Zatex.read(allocator, reader);
     }
 
     pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Zatex {
@@ -115,10 +123,15 @@ pub const Zatex = struct {
         var loaded: usize = 0;
         errdefer for (mips[0..loaded]) |mip| allocator.free(mip.data);
 
+        var expected_width = header.width;
+        var expected_height = header.height;
+        var total_data_bytes: usize = 0;
         for (0..header.mip_count) |i| {
             const width = try reader.takeInt(u32, .little);
             const height = try reader.takeInt(u32, .little);
+            if (width != expected_width or height != expected_height) return error.InvalidMipDimensions;
             const size = header.format.imageSize(width, height);
+            try wire.checkedAddWithinLimit(&total_data_bytes, size, wire.max_asset_bytes);
 
             const data = try allocator.alloc(u8, size);
             errdefer allocator.free(data);
@@ -130,6 +143,8 @@ pub const Zatex = struct {
                 .data = data,
             };
             loaded += 1;
+            expected_width = @max(1, expected_width / 2);
+            expected_height = @max(1, expected_height / 2);
         }
 
         return .{
@@ -161,6 +176,19 @@ pub const Zatex = struct {
         }
     }
 };
+
+/// Preferred names for the `.ztex` format. `Zatex` is retained because it is
+/// part of the existing API and matches the legacy on-disk magic.
+pub const Texture = Zatex;
+pub const Header = ZatexHeader;
+
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Texture {
+    return Texture.read(allocator, reader);
+}
+
+pub fn write(writer: *std.Io.Writer, cooked: CookedTexture) !void {
+    return Texture.write(writer, cooked);
+}
 
 const testing = std.testing;
 const CookedMip = cooked_texture.CookedMip;
@@ -490,4 +518,28 @@ test "Zatex.read returns UnsupportedVersion on bad version" {
     defer read_file.close(testing.io);
 
     try testing.expectError(error.UnsupportedVersion, Zatex.readFromFile(testing.allocator, testing.io, read_file));
+}
+
+test "Zatex.read rejects invalid enum values" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(testing.io, "bad-enum.ztex", .{});
+    var buf: [64]u8 = undefined;
+    var writer = file.writer(testing.io, &buf);
+    try writer.interface.writeAll(MAGIC);
+    try writer.interface.writeInt(u32, ZATEX_VERSION, .little);
+    try writer.interface.writeInt(u32, 1, .little);
+    try writer.interface.writeInt(u32, 1, .little);
+    try writer.interface.writeInt(u16, 1, .little);
+    try writer.interface.writeInt(u16, std.math.maxInt(u16), .little);
+    try writer.interface.writeInt(u8, @intFromEnum(TextureType.texture_2d), .little);
+    try writer.interface.writeInt(u8, @intFromEnum(ColorSpace.linear), .little);
+    try writer.flush();
+    file.close(testing.io);
+
+    const read_file = try tmp.dir.openFile(testing.io, "bad-enum.ztex", .{});
+    defer read_file.close(testing.io);
+
+    try testing.expectError(error.InvalidEnumValue, Zatex.readFromFile(testing.allocator, testing.io, read_file));
 }

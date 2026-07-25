@@ -10,7 +10,7 @@ const zshdr = @import("../formats/zshdr.zig");
 
 pub fn cooker() Cooker {
     return .{
-        .cookFn = cookShader,
+        .cook_fn = cookShader,
         .asset_type = .shader,
     };
 }

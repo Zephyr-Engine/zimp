@@ -9,7 +9,7 @@ const path_helpers = @import("../path.zig");
 const parseIncludeFilename = shader_source.parseIncludeFilename;
 
 pub fn extractor() DependencyExtractor {
-    return .{ .extractFn = extractShaderDeps, .asset_type = .shader };
+    return .{ .extract_fn = extractShaderDeps, .asset_type = .shader };
 }
 
 fn extractShaderDeps(
@@ -109,7 +109,7 @@ test "extractShaderDeps returns #include paths from a shader file" {
     try writer.interface.flush();
     file.close(testing.io);
 
-    const sf = SourceFile{ .path = "basic.frag", .extension = .frag, .assetType = .shader };
+    const sf = SourceFile{ .path = "basic.frag", .extension = .frag };
     const deps = try extractShaderDeps(&sf, tmp.dir, testing.io, testing.allocator);
     defer {
         for (deps) |d| testing.allocator.free(d.path);
@@ -119,10 +119,10 @@ test "extractShaderDeps returns #include paths from a shader file" {
     try testing.expectEqual(@as(usize, 2), deps.len);
     try testing.expectEqualStrings("common.glsl", deps[0].path);
     try testing.expectEqual(.glsl, deps[0].extension);
-    try testing.expectEqual(.shader, deps[0].assetType);
+    try testing.expectEqual(.shader, deps[0].assetType());
     try testing.expectEqualStrings("angle.glsl", deps[1].path);
     try testing.expectEqual(.glsl, deps[1].extension);
-    try testing.expectEqual(.shader, deps[1].assetType);
+    try testing.expectEqual(.shader, deps[1].assetType());
 }
 
 test "extractShaderDeps resolves includes relative to shader directory" {
@@ -141,7 +141,7 @@ test "extractShaderDeps resolves includes relative to shader directory" {
     try writer.interface.flush();
     file.close(testing.io);
 
-    const sf = SourceFile{ .path = "shaders/basic.frag", .extension = .frag, .assetType = .shader };
+    const sf = SourceFile{ .path = "shaders/basic.frag", .extension = .frag };
     const deps = try extractShaderDeps(&sf, tmp.dir, testing.io, testing.allocator);
     defer {
         for (deps) |d| testing.allocator.free(d.path);

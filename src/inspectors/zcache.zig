@@ -131,14 +131,14 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 }
 
 pub fn inspector() FormatInspector {
-    return .{ .inspectFn = inspectZCache };
+    return .{ .inspect_fn = inspectZCache };
 }
 
 const testing = std.testing;
 
 test "inspector returns a valid FormatInspector" {
     const insp = inspector();
-    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZCache), insp.inspectFn);
+    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZCache), insp.inspect_fn);
 }
 
 test "inspector can be called through FormatInspector trait" {

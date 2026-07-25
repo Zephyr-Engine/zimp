@@ -7,7 +7,7 @@ const gltf_document = @import("../parsers/gltf/document.zig");
 const file_read = @import("../shared/file_read.zig");
 
 pub fn extractor() DependencyExtractor {
-    return .{ .extractFn = extractMeshDeps, .asset_type = .mesh };
+    return .{ .extract_fn = extractMeshDeps, .asset_type = .mesh };
 }
 
 fn extractMeshDeps(
@@ -69,7 +69,7 @@ test "extractMeshDeps returns external gltf buffer and image dependencies" {
         \\}
     );
 
-    const sf = SourceFile{ .path = "meshes/quad/textured_quad.gltf", .extension = .gltf, .assetType = .mesh };
+    const sf = SourceFile{ .path = "meshes/quad/textured_quad.gltf", .extension = .gltf };
     const deps = try extractMeshDeps(&sf, tmp.dir, testing.io, testing.allocator);
     defer {
         for (deps) |d| testing.allocator.free(d.path);
@@ -79,14 +79,14 @@ test "extractMeshDeps returns external gltf buffer and image dependencies" {
     try testing.expectEqual(@as(usize, 2), deps.len);
     try testing.expectEqualStrings("meshes/quad/textured_quad.bin", deps[0].path);
     try testing.expectEqual(.bin, deps[0].extension);
-    try testing.expectEqual(.unknown, deps[0].assetType);
+    try testing.expectEqual(.unknown, deps[0].assetType());
     try testing.expectEqualStrings("meshes/quad/textured_quad_albedo.png", deps[1].path);
     try testing.expectEqual(.png, deps[1].extension);
-    try testing.expectEqual(.texture, deps[1].assetType);
+    try testing.expectEqual(.texture, deps[1].assetType());
 }
 
 test "extractMeshDeps returns empty dependencies for embedded glb" {
-    const sf = SourceFile{ .path = "meshes/triangle.glb", .extension = .glb, .assetType = .mesh };
+    const sf = SourceFile{ .path = "meshes/triangle.glb", .extension = .glb };
     const deps = try extractMeshDeps(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator);
     defer testing.allocator.free(deps);
 

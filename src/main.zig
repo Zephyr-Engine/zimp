@@ -13,16 +13,20 @@ pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(arena);
     if (args.len < 2) {
         log.err("Not enough arguments, must provide a command of 'cook', 'pack', or 'inspect'", .{});
-        return;
+        std.process.exit(1);
     }
 
     const command = Command.parse(init.gpa, init.io, args) catch |err| {
         log.err("Failed to parse command: {s}", .{@errorName(err)});
-        return;
+        std.process.exit(1);
     };
+    defer command.deinit();
 
     const progress_node = std.Progress.start(init.io, .{});
     defer progress_node.end();
 
-    try command.run(progress_node);
+    command.run(progress_node) catch |err| {
+        log.err("Command '{s}' failed: {s}", .{ command.toString(), @errorName(err) });
+        std.process.exit(1);
+    };
 }

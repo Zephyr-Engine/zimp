@@ -200,8 +200,13 @@ pub const RawTexture = struct {
             return null;
         }
 
-        const idx = @as(usize, (y * self.width + x) * self.channels);
-        return self.pixels.ldr[idx .. idx + self.channels];
+        return switch (self.pixels) {
+            .ldr => |pixels| blk: {
+                const idx = @as(usize, (y * self.width + x) * self.channels);
+                break :blk pixels[idx .. idx + self.channels];
+            },
+            .hdr => null,
+        };
     }
 
     /// LDR-only pixel write. Call only on textures with `pixels == .ldr`.

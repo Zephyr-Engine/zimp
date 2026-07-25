@@ -6,7 +6,7 @@ const raw_material = @import("../assets/raw/material.zig");
 const file_read = @import("../shared/file_read.zig");
 
 pub fn extractor() DependencyExtractor {
-    return .{ .extractFn = extractMaterialDeps, .asset_type = .material };
+    return .{ .extract_fn = extractMaterialDeps, .asset_type = .material };
 }
 
 fn extractMaterialDeps(

@@ -50,7 +50,6 @@ pub const AssetScanner = struct {
                 try files.append(self.allocator, .{
                     .extension = ext,
                     .path = path,
-                    .assetType = ext.assetType(),
                 });
             } else if (entry.kind == .directory) {
                 const subdir = try std.Io.Dir.openDir(dir, self.io, entry.name, .{ .iterate = true });
@@ -68,7 +67,7 @@ pub const AssetScanner = struct {
     fn logResults(files: SourceFileList) void {
         var counts = std.EnumArray(asset.AssetType, usize).initFill(0);
         for (files.items) |file| {
-            counts.getPtr(file.assetType).* += 1;
+            counts.getPtr(file.assetType()).* += 1;
         }
 
         log.debug("Found {d} assets", .{files.items.len});
@@ -137,7 +136,7 @@ test "AssetScanner.scan assigns correct asset type" {
 
     for (list.items) |file| {
         if (std.mem.eql(u8, file.path, "meshes/triangle.glb")) {
-            try testing.expectEqual(.mesh, file.assetType);
+            try testing.expectEqual(.mesh, file.assetType());
             return;
         }
     }
@@ -186,13 +185,14 @@ test "AssetScanner.deinit frees all memory" {
 }
 
 test "AssetScanner.scan returns empty list for directory with no matching files" {
-    const cwd = std.Io.Dir.cwd();
-    const dir = std.Io.Dir.openDir(cwd, testing.io, "examples/output", .{ .iterate = true }) catch unreachable;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const dir = try std.Io.Dir.openDir(tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer dir.close(testing.io);
     const scanner = AssetScanner.init(testing.allocator, testing.io, dir);
     var list = try scanner.scan();
     defer scanner.deinit(&list);
 
-    for (list.items) |file| {
-        try testing.expect(file.extension != .other);
-    }
+    try testing.expectEqual(@as(usize, 0), list.items.len);
 }

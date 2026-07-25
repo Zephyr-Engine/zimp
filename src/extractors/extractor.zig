@@ -5,7 +5,7 @@ const AssetType = asset.AssetType;
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
 
 pub const DependencyExtractor = struct {
-    extractFn: *const fn (
+    extract_fn: *const fn (
         source: *const SourceFile,
         dir: std.Io.Dir,
         io: std.Io,
@@ -20,7 +20,7 @@ pub const DependencyExtractor = struct {
         io: std.Io,
         allocator: std.mem.Allocator,
     ) ![]const SourceFile {
-        return self.extractFn(source, dir, io, allocator);
+        return self.extract_fn(source, dir, io, allocator);
     }
 };
 
@@ -49,26 +49,26 @@ fn failingExtract(
 
 test "DependencyExtractor.extract calls the provided function pointer" {
     test_called = false;
-    const ex = DependencyExtractor{ .extractFn = stubExtract, .asset_type = .mesh };
+    const ex = DependencyExtractor{ .extract_fn = stubExtract, .asset_type = .mesh };
 
-    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb };
     const deps = try ex.extract(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator);
     defer testing.allocator.free(deps);
 
     try testing.expect(test_called);
 }
 
-test "DependencyExtractor.extract propagates errors from extractFn" {
-    const ex = DependencyExtractor{ .extractFn = failingExtract, .asset_type = .mesh };
+test "DependencyExtractor.extract propagates errors from extract_fn" {
+    const ex = DependencyExtractor{ .extract_fn = failingExtract, .asset_type = .mesh };
 
-    const sf = SourceFile{ .path = "a.glb", .extension = .glb, .assetType = .mesh };
+    const sf = SourceFile{ .path = "a.glb", .extension = .glb };
     try testing.expectError(
         error.TestExtractFailed,
         ex.extract(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator),
     );
 }
 
-test "DependencyExtractor struct contains extractFn and asset_type" {
-    try testing.expect(@hasField(DependencyExtractor, "extractFn"));
+test "DependencyExtractor struct contains extract_fn and asset_type" {
+    try testing.expect(@hasField(DependencyExtractor, "extract_fn"));
     try testing.expect(@hasField(DependencyExtractor, "asset_type"));
 }

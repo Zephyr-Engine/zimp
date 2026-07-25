@@ -121,7 +121,7 @@ test "shader cooker output path preserves shader stage extension" {
     const path = try c.outputPath(testing.allocator, "shaders/basic.vert");
     defer testing.allocator.free(path);
 
-    try testing.expectEqualStrings("basic.vert.zshdr", path);
+    try testing.expectEqualStrings("shaders/basic.vert.zshdr", path);
 }
 
 test "default cooker output path uses source stem" {
@@ -129,22 +129,22 @@ test "default cooker output path uses source stem" {
     const path = try c.outputPath(testing.allocator, "meshes/triangle.glb");
     defer testing.allocator.free(path);
 
-    try testing.expectEqualStrings("triangle.zmesh", path);
+    try testing.expectEqualStrings("meshes/triangle.zmesh", path);
 }
 
 test "glb and gltf keep distinct cookers" {
     const glb = cookerFor(.glb).?;
     const gltf = cookerFor(.gltf).?;
-    try testing.expect(glb.cookFn != gltf.cookFn);
+    try testing.expect(glb.cook_fn != gltf.cook_fn);
 }
 
 test "extractDependencies returns empty slice for texture and unknown assets" {
-    const texture = SourceFile{ .path = "a.png", .extension = .png, .assetType = .texture };
+    const texture = SourceFile{ .path = "a.png", .extension = .png };
     const texture_deps = try extractDependencies(&texture, std.Io.Dir.cwd(), testing.io, testing.allocator);
     defer testing.allocator.free(texture_deps);
     try testing.expectEqual(@as(usize, 0), texture_deps.len);
 
-    const unknown = SourceFile{ .path = "a.xyz", .extension = .other, .assetType = .unknown };
+    const unknown = SourceFile{ .path = "a.xyz", .extension = .other };
     const unknown_deps = try extractDependencies(&unknown, std.Io.Dir.cwd(), testing.io, testing.allocator);
     defer testing.allocator.free(unknown_deps);
     try testing.expectEqual(@as(usize, 0), unknown_deps.len);
@@ -159,12 +159,12 @@ test "extractDependencies routes shader stages and glsl includes through shader 
     const include_file = try tmp.dir.createFile(testing.io, "common.glsl", .{});
     include_file.close(testing.io);
 
-    const shader = SourceFile{ .path = "a.vert", .extension = .vert, .assetType = .shader };
+    const shader = SourceFile{ .path = "a.vert", .extension = .vert };
     const shader_deps = try extractDependencies(&shader, tmp.dir, testing.io, testing.allocator);
     defer testing.allocator.free(shader_deps);
     try testing.expectEqual(@as(usize, 0), shader_deps.len);
 
-    const include = SourceFile{ .path = "common.glsl", .extension = .glsl, .assetType = .shader };
+    const include = SourceFile{ .path = "common.glsl", .extension = .glsl };
     const include_deps = try extractDependencies(&include, tmp.dir, testing.io, testing.allocator);
     defer testing.allocator.free(include_deps);
     try testing.expectEqual(@as(usize, 0), include_deps.len);

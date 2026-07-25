@@ -86,14 +86,14 @@ fn inspectZtex(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
 }
 
 pub fn inspector() FormatInspector {
-    return .{ .inspectFn = inspectZtex };
+    return .{ .inspect_fn = inspectZtex };
 }
 
 const testing = std.testing;
 
 test "inspector returns a valid FormatInspector" {
     const insp = inspector();
-    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZtex), insp.inspectFn);
+    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZtex), insp.inspect_fn);
 }
 
 test "inspectZtex runs without error on a minimal valid ztex payload" {

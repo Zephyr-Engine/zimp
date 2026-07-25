@@ -24,7 +24,7 @@ jobs:
 
   test:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    container: jackpar/zig:0.16.0-dev.2694
+    container: jackpar/zig:0.16.0
 
     steps:
       - name: Checkout code
@@ -33,9 +33,16 @@ jobs:
       - name: Test project
         run: zig build test --summary all
 
+      - name: Check formatting
+        run: zig fmt --check build.zig src examples/build.zig examples/src/main.zig
+
+      - name: Build consumer example
+        working-directory: examples
+        run: zig build
+
   perf:
     runs-on: blacksmith-4vcpu-ubuntu-2404
-    container: jackpar/zig:0.16.0-dev.2694
+    container: jackpar/zig:0.16.0
 
     steps:
       - name: Checkout code

@@ -91,6 +91,8 @@ pub const CookedMesh = struct {
     pub fn deinit(self: *CookedMesh, allocator: std.mem.Allocator) void {
         allocator.free(self.vertices);
         self.indices.deinit(allocator);
+        allocator.free(self.submeshes);
+        if (self.name) |name| allocator.free(name);
     }
 
     pub fn cook(allocator: std.mem.Allocator, mesh: *RawMesh) !CookedMesh {
@@ -122,15 +124,20 @@ pub const CookedMesh = struct {
             }
         }
 
-        const indices = try IndexBuffer.compute(allocator, mesh.indices, mesh.vertices.len);
+        var indices = try IndexBuffer.compute(allocator, mesh.indices, mesh.vertices.len);
+        errdefer indices.deinit(allocator);
+        const submeshes = try allocator.dupe(raw_mesh.RawSubmesh, mesh.submeshes);
+        errdefer allocator.free(submeshes);
+        const name = if (mesh.name) |name| try allocator.dupe(u8, name) else null;
+        errdefer if (name) |owned_name| allocator.free(owned_name);
 
         return .{
             .vertices = cooked_verts,
             .indices = indices,
-            .submeshes = mesh.submeshes,
+            .submeshes = submeshes,
             .format_flags = flags,
             .bounds = bounds,
-            .name = mesh.name,
+            .name = name,
         };
     }
 };

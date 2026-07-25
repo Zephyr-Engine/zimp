@@ -178,18 +178,18 @@ pub const DepGraph = struct {
     }
 
     pub fn buildReverse(self: *const DepGraph, allocator: std.mem.Allocator) !ReverseEdges {
-        var reverseMap: ReverseEdges = .init(allocator);
+        var reverse_map: ReverseEdges = .init(allocator);
         errdefer {
-            var iter = reverseMap.iterator();
+            var iter = reverse_map.iterator();
             while (iter.next()) |entry| entry.value_ptr.deinit(allocator);
-            reverseMap.deinit();
+            reverse_map.deinit();
         }
 
         var iter = self.edges.iterator();
         while (iter.next()) |entry| {
             const from = entry.key_ptr.*;
             for (entry.value_ptr.items) |to| {
-                const gop = try reverseMap.getOrPut(to);
+                const gop = try reverse_map.getOrPut(to);
                 if (!gop.found_existing) {
                     gop.value_ptr.* = .empty;
                 }
@@ -197,7 +197,7 @@ pub const DepGraph = struct {
             }
         }
 
-        return reverseMap;
+        return reverse_map;
     }
 };
 
