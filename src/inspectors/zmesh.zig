@@ -45,10 +45,32 @@ fn streamEnabled(flags: mesh.FormatFlags, index: usize) bool {
 }
 
 fn inspectZmesh(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
-    const header = try zmesh.ZMeshHeader.read(reader);
+    const version = try reader.takeInt(u32, .little);
+    if (version != zmesh.ZMESH_VERSION) return error.UnsupportedVersion;
+    const part_count = try reader.takeInt(u32, .little);
+    if (part_count == 0) return error.InvalidSubmeshCount;
+
+    log.info("zmesh v{d}", .{version});
+    log.info("Mesh parts: {d}", .{part_count});
+    for (0..part_count) |part_index| {
+        var transform: zmesh.Transform = undefined;
+        for (&transform) |*value| value.* = @bitCast(try reader.takeInt(u32, .little));
+
+        var magic: [zmesh.MAGIC.len]u8 = undefined;
+        try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, zmesh.MAGIC)) return error.InvalidMagic;
+        const header = try zmesh.ZMeshHeader.read(reader);
+
+        log.info("", .{});
+        log.info("Part {d}:", .{part_index});
+        log.info("  Translation: [{d:.4}, {d:.4}, {d:.4}]", .{ transform[12], transform[13], transform[14] });
+        try inspectPart(reader, header);
+    }
+}
+
+fn inspectPart(reader: *std.Io.Reader, header: zmesh.ZMeshHeader) !void {
     const flags = header.format_flags;
 
-    log.info("zmesh v{d}", .{header.version});
     log.info("  Vertices:  {d}", .{header.vertex_count});
     log.info("  Indices:   {d}", .{header.index_count});
     log.info("  Triangles: {d}", .{header.index_count / 3});
@@ -276,6 +298,13 @@ fn writeTestZmesh(writer: *std.Io.Writer, opts: TestZmeshOpts) !void {
     const index_data_size = opts.index_count * idx_size;
     const index_padding = (4 - (index_data_size % 4)) % 4;
     const submesh_table_offset = zmesh.HEADER_SIZE + vertex_data_size + index_data_size + index_padding;
+
+    try writer.writeAll(zmesh.MAGIC);
+    try writer.writeInt(u32, zmesh.ZMESH_VERSION, .little);
+    try writer.writeInt(u32, 1, .little);
+    for (zmesh.identity_transform) |value| {
+        try writer.writeInt(u32, @bitCast(value), .little);
+    }
 
     try writer.writeAll(zmesh.MAGIC);
     try writer.writeInt(u32, zmesh.ZMESH_VERSION, .little);

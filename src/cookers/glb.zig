@@ -1,12 +1,10 @@
 const std = @import("std");
 
 const Cooker = @import("cooker.zig").Cooker;
-const validateSingleMesh = @import("cooker.zig").validateSingleMesh;
 const ZMesh = @import("../formats/zmesh.zig").ZMesh;
 const GLBFile = @import("../parsers/gltf/glb_parser.zig").GLBFile;
 const Gltf = @import("../parsers/gltf/gltf_json_parser.zig").Gltf;
-const GltfMesh = @import("../parsers/gltf/mesh.zig").GltfMesh;
-const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
+const CookedModel = @import("../parsers/gltf/model.zig").CookedModel;
 const file_read = @import("../shared/file_read.zig");
 
 pub fn cooker() Cooker {
@@ -31,14 +29,8 @@ fn cookGlb(
     var gltf = try Gltf.parse(glb_file.json, allocator);
     defer gltf.deinit();
 
-    try validateSingleMesh(gltf.value.meshes.len);
-
     const buffers = [_][]const u8{glb_file.bin};
-    var gltf_mesh = try GltfMesh.buildMesh(allocator, &gltf.value, 0, &buffers);
-    defer gltf_mesh.deinit();
-
-    var cooked_mesh = try CookedMesh.cook(allocator, &gltf_mesh.raw);
-    defer cooked_mesh.deinit(allocator);
-
-    try ZMesh.write(writer, cooked_mesh);
+    var model = try CookedModel.build(allocator, &gltf.value, &buffers);
+    defer model.deinit();
+    try ZMesh.write(writer, model.parts);
 }

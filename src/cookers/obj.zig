@@ -1,7 +1,7 @@
 const std = @import("std");
 
 const Cooker = @import("cooker.zig").Cooker;
-const ZMesh = @import("../formats/zmesh.zig").ZMesh;
+const zmesh = @import("../formats/zmesh.zig");
 const ObjParser = @import("../parsers/obj/obj_parser.zig").ObjParser;
 const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
 
@@ -27,5 +27,12 @@ fn cookObj(
     var cooked_mesh = try CookedMesh.cook(allocator, &raw_mesh);
     defer cooked_mesh.deinit(allocator);
 
-    try ZMesh.write(writer, cooked_mesh);
+    const parts = [_]struct {
+        mesh: CookedMesh,
+        transform: zmesh.Transform,
+    }{.{
+        .mesh = cooked_mesh,
+        .transform = zmesh.identity_transform,
+    }};
+    try zmesh.ZMesh.write(writer, &parts);
 }

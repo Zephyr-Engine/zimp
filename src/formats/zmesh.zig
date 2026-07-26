@@ -3,7 +3,14 @@ const mesh = @import("../assets/cooked/mesh.zig");
 const wire = @import("../shared/wire.zig");
 
 pub const MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH;
-pub const ZMESH_VERSION: u32 = 1;
+pub const ZMESH_VERSION: u32 = 2;
+pub const Transform = [16]f32;
+pub const identity_transform: Transform = .{
+    1, 0, 0, 0,
+    0, 1, 0, 0,
+    0, 0, 1, 0,
+    0, 0, 0, 1,
+};
 const SUBMESH_ENTRY_SIZE: u64 = @sizeOf(u32) * 2 + @sizeOf(u16) * 2;
 
 pub const HEADER_SIZE: u32 = MAGIC.len // magic
@@ -79,6 +86,10 @@ pub const ZMeshHeader = struct {
 
     pub fn read(reader: *std.Io.Reader) !ZMeshHeader {
         const version = try reader.takeInt(u32, .little);
+        return readAfterVersion(reader, version);
+    }
+
+    fn readAfterVersion(reader: *std.Io.Reader, version: u32) !ZMeshHeader {
         if (version != ZMESH_VERSION) {
             return error.UnsupportedVersion;
         }
@@ -119,6 +130,7 @@ pub const ZMeshHeader = struct {
         if (total_size > wire.max_asset_bytes) return error.AssetTooLarge;
 
         return .{
+            .version = version,
             .vertex_count = vertex_count,
             .index_count = index_count,
             .index_format = index_format,
@@ -151,7 +163,7 @@ pub const ZMeshHeader = struct {
     }
 };
 
-pub const ZMesh = struct {
+pub const MeshPart = struct {
     vertex_count: u32,
     index_count: u32,
     aabb_min: [3]f32,
@@ -175,21 +187,26 @@ pub const ZMesh = struct {
         material_index: u16,
     };
 
-    pub fn readFromFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !ZMesh {
+    pub fn readFromFile(allocator: std.mem.Allocator, io: std.Io, file: std.Io.File) !MeshPart {
         var buf: [8192]u8 = undefined;
         var file_reader = file.reader(io, &buf);
         const reader = &file_reader.interface;
-        return ZMesh.read(allocator, reader);
+        return MeshPart.read(allocator, reader);
     }
 
-    pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ZMesh {
+    pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !MeshPart {
         var magic: [5]u8 = undefined;
         try reader.readSliceAll(&magic);
         if (!std.mem.eql(u8, &magic, MAGIC)) {
             return error.InvalidMagic;
         }
 
-        const header = try ZMeshHeader.read(reader);
+        const version = try reader.takeInt(u32, .little);
+        return readAfterVersion(allocator, reader, version);
+    }
+
+    fn readAfterVersion(allocator: std.mem.Allocator, reader: *std.Io.Reader, version: u32) !MeshPart {
+        const header = try ZMeshHeader.readAfterVersion(reader, version);
         const vertex_count = header.vertex_count;
         const index_count = header.index_count;
         const format_flags = header.format_flags;
@@ -331,7 +348,7 @@ pub const ZMesh = struct {
         };
     }
 
-    pub fn deinit(self: *ZMesh, allocator: std.mem.Allocator) void {
+    pub fn deinit(self: *MeshPart, allocator: std.mem.Allocator) void {
         allocator.free(self.positions);
         if (self.normals) |n| allocator.free(n);
         if (self.tangents) |t| allocator.free(t);
@@ -414,8 +431,67 @@ pub const ZMesh = struct {
     }
 };
 
-/// Preferred format-neutral names. The `ZMesh` names remain compatibility
-/// aliases for existing callers and the persisted format name.
+/// A cooked model is one or more independently drawable meshes with
+/// local-to-model transforms.
+pub const ZMesh = struct {
+    parts: []Part,
+
+    pub const Part = struct {
+        mesh: MeshPart,
+        transform: Transform,
+    };
+
+    pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ZMesh {
+        var magic: [MAGIC.len]u8 = undefined;
+        try reader.readSliceAll(&magic);
+        if (!std.mem.eql(u8, &magic, MAGIC)) return error.InvalidMagic;
+
+        const version = try reader.takeInt(u32, .little);
+        if (version != ZMESH_VERSION) return error.UnsupportedVersion;
+
+        const part_count = try reader.takeInt(u32, .little);
+        if (part_count == 0) return error.NoMeshes;
+        const minimum_part_size = @sizeOf(Transform) + HEADER_SIZE;
+        if (@as(u64, part_count) * minimum_part_size > wire.max_asset_bytes)
+            return error.AssetTooLarge;
+
+        const parts = try allocator.alloc(Part, part_count);
+        errdefer allocator.free(parts);
+        var initialized: usize = 0;
+        errdefer for (parts[0..initialized]) |*part| part.mesh.deinit(allocator);
+
+        for (parts) |*part| {
+            for (&part.transform) |*value| {
+                value.* = @bitCast(try reader.takeInt(u32, .little));
+            }
+            part.mesh = try MeshPart.read(allocator, reader);
+            initialized += 1;
+        }
+
+        return .{ .parts = parts };
+    }
+
+    pub fn write(writer: *std.Io.Writer, parts: anytype) !void {
+        if (parts.len == 0) return error.NoMeshes;
+
+        try writer.writeAll(MAGIC);
+        try writer.writeInt(u32, ZMESH_VERSION, .little);
+        try writer.writeInt(u32, @intCast(parts.len), .little);
+        for (parts) |part| {
+            for (part.transform) |value| {
+                try writer.writeInt(u32, @bitCast(value), .little);
+            }
+            try MeshPart.write(writer, part.mesh);
+        }
+    }
+
+    pub fn deinit(self: *ZMesh, allocator: std.mem.Allocator) void {
+        for (self.parts) |*part| part.mesh.deinit(allocator);
+        allocator.free(self.parts);
+        self.* = undefined;
+    }
+};
+
 pub const Mesh = ZMesh;
 pub const Header = ZMeshHeader;
 
@@ -423,8 +499,8 @@ pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Mesh {
     return Mesh.read(allocator, reader);
 }
 
-pub fn write(writer: *std.Io.Writer, cooked_mesh: mesh.CookedMesh) !void {
-    return Mesh.write(writer, cooked_mesh);
+pub fn write(writer: *std.Io.Writer, parts: anytype) !void {
+    return Mesh.write(writer, parts);
 }
 
 const testing = std.testing;
@@ -456,7 +532,7 @@ fn makeCookedMesh(vertices: []const mesh.CookedVertex, indices: mesh.IndexBuffer
 fn writeToBuffer(cooked: mesh.CookedMesh) !struct { buf: [4096]u8, len: usize } {
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
-    try ZMesh.write(&writer, cooked);
+    try MeshPart.write(&writer, cooked);
     return .{ .buf = buf, .len = writer.end };
 }
 
@@ -773,6 +849,68 @@ test "ZMesh.write total size matches expected" {
     try testing.expectEqual(expected, result.len);
 }
 
+test "ZMesh round-trips multiple mesh parts and transforms" {
+    const verts_a = [_]mesh.CookedVertex{
+        makeVertex(0, 0, 0),
+        makeVertex(1, 0, 0),
+        makeVertex(0, 1, 0),
+    };
+    const verts_b = [_]mesh.CookedVertex{
+        makeVertex(0, 0, 0),
+        makeVertex(0, 0, 1),
+        makeVertex(0, 1, 0),
+    };
+    const indices = [_]u16{ 0, 1, 2 };
+    const submeshes = [_]raw_mesh.RawSubmesh{
+        .{ .index_offset = 0, .index_count = 3, .material_index = 0 },
+    };
+    const Part = struct {
+        mesh: mesh.CookedMesh,
+        transform: Transform,
+    };
+    const translated: Transform = .{
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, 1, 0,
+        2, 3, 4, 1,
+    };
+    const parts = [_]Part{
+        .{
+            .mesh = makeCookedMesh(&verts_a, .{ .u16 = @constCast(&indices), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } }),
+            .transform = identity_transform,
+        },
+        .{
+            .mesh = makeCookedMesh(&verts_b, .{ .u16 = @constCast(&indices), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 1, 1 } }),
+            .transform = translated,
+        },
+    };
+
+    var bytes: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&bytes);
+    try ZMesh.write(&writer, &parts);
+    try testing.expectEqual(ZMESH_VERSION, readU32(&bytes, MAGIC.len));
+
+    var reader = std.Io.Reader.fixed(bytes[0..writer.end]);
+    var model = try ZMesh.read(testing.allocator, &reader);
+    defer model.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(usize, 2), model.parts.len);
+    try testing.expectEqual(@as(u32, 3), model.parts[0].mesh.vertex_count);
+    try testing.expectEqual(@as(f32, 2), model.parts[1].transform[12]);
+    try testing.expectEqual(@as(f32, 3), model.parts[1].transform[13]);
+    try testing.expectEqual(@as(f32, 4), model.parts[1].transform[14]);
+}
+
+test "ZMesh rejects pre-migration versions" {
+    var bytes: [16]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&bytes);
+    try writer.writeAll(MAGIC);
+    try writer.writeInt(u32, ZMESH_VERSION - 1, .little);
+
+    var reader = std.Io.Reader.fixed(bytes[0..writer.end]);
+    try testing.expectError(error.UnsupportedVersion, ZMesh.read(testing.allocator, &reader));
+}
+
 pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
     const flags: mesh.FormatFlags = .{ .has_normals = true, .has_uv0 = true };
     const vertex_count: u32 = 3;
@@ -782,6 +920,13 @@ pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
     const index_data_size: u32 = index_count * 2; // u16
     const index_padding: u32 = (4 - (index_data_size % 4)) % 4;
     const submesh_table_offset: u32 = HEADER_SIZE + vertex_data_size + index_data_size + index_padding;
+
+    try writer.writeAll(MAGIC);
+    try writer.writeInt(u32, ZMESH_VERSION, .little);
+    try writer.writeInt(u32, 1, .little);
+    for (identity_transform) |value| {
+        try writer.writeInt(u32, @bitCast(value), .little);
+    }
 
     try writer.writeAll(MAGIC);
     try writer.writeInt(u32, ZMESH_VERSION, .little);
@@ -812,7 +957,7 @@ fn writeCookedToTmpFile(tmp: *testing.TmpDir, cooked: mesh.CookedMesh) !std.Io.F
     const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    try ZMesh.write(&writer.interface, cooked);
+    try MeshPart.write(&writer.interface, cooked);
     try writer.flush();
     file.close(testing.io);
     return try tmp.dir.openFile(testing.io, "test.zmesh", .{});
@@ -949,7 +1094,7 @@ test "ZMesh.read reads positions" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1, 2 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 1, 2, 3 }, .max = .{ 7, 8, 9 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -967,7 +1112,7 @@ test "ZMesh.read reads u16 indices" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 2, 1, 0 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -984,7 +1129,7 @@ test "ZMesh.read reads u32 indices" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = null, .u32 = @constCast(&[_]u32{ 0, 2, 1 }) }, &.{.{ .index_offset = 0, .index_count = 3, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1004,7 +1149,7 @@ test "ZMesh.read reads normals when present" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1020,7 +1165,7 @@ test "ZMesh.read sets normals to null when absent" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1043,7 +1188,7 @@ test "ZMesh.read reads uv0 when present" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, flags, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 0, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1060,7 +1205,7 @@ test "ZMesh.read reads AABB" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{0}), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 1, .material_index = 0 }}, .{}, bounds);
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1080,7 +1225,7 @@ test "ZMesh.read reads submeshes" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1, 2, 0, 1, 2 }), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1108,7 +1253,7 @@ test "ZMesh.read roundtrips normals and uv0 together" {
     const cooked = makeCookedMesh(&verts, .{ .u16 = @constCast(&[_]u16{ 0, 1 }), .u32 = null }, &.{.{ .index_offset = 0, .index_count = 2, .material_index = 0 }}, flags, .{ .min = .{ 1, 2, 3 }, .max = .{ 4, 5, 6 } });
     const file = try writeCookedToTmpFile(&tmp, cooked);
 
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, file);
+    var zmesh = try MeshPart.readFromFile(testing.allocator, testing.io, file);
     defer zmesh.deinit(testing.allocator);
     file.close(testing.io);
 
@@ -1130,16 +1275,19 @@ test "ZMesh.read with writeTestZmeshFile" {
     file.close(testing.io);
 
     const read_file = try tmp.dir.openFile(testing.io, "test.zmesh", .{});
-    var zmesh = try ZMesh.readFromFile(testing.allocator, testing.io, read_file);
+    var read_buf: [4096]u8 = undefined;
+    var file_reader = read_file.reader(testing.io, &read_buf);
+    var zmesh = try ZMesh.read(testing.allocator, &file_reader.interface);
     defer zmesh.deinit(testing.allocator);
     read_file.close(testing.io);
 
-    try testing.expectEqual(@as(u32, 3), zmesh.vertex_count);
-    try testing.expectEqual(@as(u32, 3), zmesh.index_count);
-    try testing.expect(zmesh.normals != null);
-    try testing.expect(zmesh.uv0 != null);
-    try testing.expect(zmesh.indices_u16 != null);
-    try testing.expectEqual(@as(usize, 1), zmesh.submeshes.len);
+    try testing.expectEqual(@as(usize, 1), zmesh.parts.len);
+    try testing.expectEqual(@as(u32, 3), zmesh.parts[0].mesh.vertex_count);
+    try testing.expectEqual(@as(u32, 3), zmesh.parts[0].mesh.index_count);
+    try testing.expect(zmesh.parts[0].mesh.normals != null);
+    try testing.expect(zmesh.parts[0].mesh.uv0 != null);
+    try testing.expect(zmesh.parts[0].mesh.indices_u16 != null);
+    try testing.expectEqual(@as(usize, 1), zmesh.parts[0].mesh.submeshes.len);
 }
 
 test "ZMesh.write with normals writes normal stream after positions" {

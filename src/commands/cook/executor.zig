@@ -14,6 +14,11 @@ const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
 const DependentsMap = @import("planner.zig").DependentsMap;
 const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
+const AssetType = @import("../../assets/asset.zig").AssetType;
+const zmesh = @import("../../formats/zmesh.zig");
+const ztex = @import("../../formats/ztex.zig");
+const zshdr = @import("../../formats/zshdr.zig");
+const zamat = @import("../../formats/zamat.zig");
 
 pub const ProcessResult = enum { cached, hash_match, cooked, dependency_changed, skipped, errored };
 
@@ -177,19 +182,19 @@ const CookJobRunner = struct {
 
             switch (staleness) {
                 .cached => {
-                    if (self.outputFileExists(cache_entry.cooked_path)) {
+                    if (self.outputFileIsCurrent(cache_entry.cooked_path)) {
                         log.debug("{s} is cached, not cooking", .{self.entry.path});
                         decision.action = .cached;
                         return decision;
                     }
-                    log.debug("{s} cached but output file missing, recooking", .{self.entry.path});
+                    log.debug("{s} cached output is missing or uses an outdated format, recooking", .{self.entry.path});
                 },
                 .hash_match => {
-                    if (self.outputFileExists(cache_entry.cooked_path)) {
+                    if (self.outputFileIsCurrent(cache_entry.cooked_path)) {
                         decision.action = .hash_match;
                         return decision;
                     }
-                    log.debug("{s} hash match but output file missing, recooking", .{self.entry.path});
+                    log.debug("{s} hash match but output is missing or uses an outdated format, recooking", .{self.entry.path});
                 },
                 .errored => {
                     log.debug("{s} previously errored, retrying", .{self.entry.path});
@@ -288,17 +293,40 @@ const CookJobRunner = struct {
         return &self.cache.entries.items[idx];
     }
 
-    fn outputFileExists(self: *const CookJobRunner, cooked_path: []const u8) bool {
-        if (cooked_path.len == 0) {
-            return false;
-        }
-
-        const file = self.ctx.output.openFile(self.ctx.io, cooked_path, .{}) catch return false;
-        file.close(self.ctx.io);
-
-        return true;
+    fn outputFileIsCurrent(self: *const CookJobRunner, cooked_path: []const u8) bool {
+        return cookedFileIsCurrent(self.ctx.io, self.ctx.output, cooked_path, self.descriptor.asset_type);
     }
 };
+
+const CookedHeader = struct {
+    magic: []const u8,
+    version: u32,
+};
+
+fn currentCookedHeader(asset_type: AssetType) ?CookedHeader {
+    return switch (asset_type) {
+        .mesh => .{ .magic = zmesh.MAGIC, .version = zmesh.ZMESH_VERSION },
+        .texture => .{ .magic = ztex.MAGIC, .version = ztex.ZATEX_VERSION },
+        .shader => .{ .magic = zshdr.MAGIC, .version = zshdr.ZSHDR_VERSION },
+        .material => .{ .magic = zamat.MAGIC, .version = zamat.ZAMAT_VERSION },
+        .unknown => null,
+    };
+}
+
+fn cookedFileIsCurrent(io: std.Io, output: std.Io.Dir, cooked_path: []const u8, asset_type: AssetType) bool {
+    if (cooked_path.len == 0) return false;
+
+    const file = output.openFile(io, cooked_path, .{}) catch return false;
+    defer file.close(io);
+
+    var buf: [16]u8 = undefined;
+    var file_reader = file.reader(io, &buf);
+    var magic: [5]u8 = undefined;
+    file_reader.interface.readSliceAll(&magic) catch return false;
+    const version = file_reader.interface.takeInt(u32, .little) catch return false;
+    const expected = currentCookedHeader(asset_type) orelse return false;
+    return std.mem.eql(u8, &magic, expected.magic) and version == expected.version;
+}
 
 const LockedAllocator = struct {
     backing_allocator: std.mem.Allocator,
@@ -577,4 +605,29 @@ fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
     } else {
         return std.fmt.bufPrint(buf, "{d}ns", .{nanoseconds}) catch unreachable;
     }
+}
+
+test "cooked file version mismatch invalidates only that cached output" {
+    var tmp = std.testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(std.testing.io, "mesh.zmesh", .{});
+    var buf: [32]u8 = undefined;
+    var writer = file.writer(std.testing.io, &buf);
+    try writer.interface.writeAll(zmesh.MAGIC);
+    try writer.interface.writeInt(u32, zmesh.ZMESH_VERSION - 1, .little);
+    try writer.interface.flush();
+    file.close(std.testing.io);
+
+    try std.testing.expect(!cookedFileIsCurrent(std.testing.io, tmp.dir, "mesh.zmesh", .mesh));
+
+    const current = try tmp.dir.createFile(std.testing.io, "mesh.zmesh", .{ .truncate = true });
+    var current_buf: [32]u8 = undefined;
+    var current_writer = current.writer(std.testing.io, &current_buf);
+    try current_writer.interface.writeAll(zmesh.MAGIC);
+    try current_writer.interface.writeInt(u32, zmesh.ZMESH_VERSION, .little);
+    try current_writer.interface.flush();
+    current.close(std.testing.io);
+
+    try std.testing.expect(cookedFileIsCurrent(std.testing.io, tmp.dir, "mesh.zmesh", .mesh));
 }

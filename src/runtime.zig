@@ -7,7 +7,7 @@ const path_helpers = @import("path.zig");
 pub const AssetType = @import("assets/asset.zig").AssetType;
 
 pub const Asset = union(enum) {
-    mesh: mesh_format.Mesh,
+    mesh: mesh_format.ZMesh,
     texture: texture_format.Texture,
     shader: shader_format.Shader,
     material: material_format.MaterialFile,
@@ -127,7 +127,11 @@ test "loadFromFile loads zmesh" {
     const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    try mesh_format.write(&writer.interface, cooked);
+    const parts = [_]struct {
+        mesh: mesh_mod.CookedMesh,
+        transform: mesh_format.Transform,
+    }{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
+    try mesh_format.write(&writer.interface, &parts);
     try writer.flush();
     file.close(testing.io);
 
@@ -135,7 +139,8 @@ test "loadFromFile loads zmesh" {
     defer asset.deinit(testing.allocator);
 
     try testing.expect(asset == .mesh);
-    try testing.expectEqual(@as(u32, 3), asset.mesh.vertex_count);
+    try testing.expectEqual(@as(usize, 1), asset.mesh.parts.len);
+    try testing.expectEqual(@as(u32, 3), asset.mesh.parts[0].mesh.vertex_count);
 }
 
 test "loadFromFile rejects unknown extension" {
@@ -167,7 +172,11 @@ test "Asset deinit frees resources" {
     const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    try mesh_format.write(&writer.interface, cooked);
+    const parts = [_]struct {
+        mesh: mesh_mod.CookedMesh,
+        transform: mesh_format.Transform,
+    }{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
+    try mesh_format.write(&writer.interface, &parts);
     try writer.flush();
     file.close(testing.io);
 

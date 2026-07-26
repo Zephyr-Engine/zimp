@@ -41,7 +41,7 @@ pub const ProjectManifest = struct {
     asset_manifest: []const u8 = DEFAULT_ASSET_MANIFEST,
     default_scene: ?[]const u8 = null,
 
-    pub fn load(allocator: std.mem.Allocator, io: std.Io, file: []const u8) !LoadedProjectManifest {
+    pub fn load(allocator: std.mem.Allocator, io: std.Io, file: []const u8) !ProjectManifest {
         const normalized_path = try path.normalizeVirtual(allocator, file);
         defer allocator.free(normalized_path);
 
@@ -52,7 +52,7 @@ pub const ProjectManifest = struct {
         return loadFromDir(allocator, io, dir, normalized_path);
     }
 
-    pub fn loadFromDir(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8) !LoadedProjectManifest {
+    pub fn loadFromDir(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8) !ProjectManifest {
         const normalized_path = try path.normalizeVirtual(allocator, file);
         defer allocator.free(normalized_path);
 
@@ -62,9 +62,9 @@ pub const ProjectManifest = struct {
         const parsed = try std.json.parseFromSlice(ProjectManifest, allocator, bytes, .{
             .allocate = .alloc_always,
         });
-        errdefer parsed.deinit();
+        defer parsed.deinit();
         try parsed.value.validate();
-        return parsed;
+        return parsed.value.cloneOwned(allocator);
     }
 
     /// Arena-oriented loader for aggregate owners such as `ProjectRoot`.
@@ -106,6 +106,50 @@ pub const ProjectManifest = struct {
         return self.asset_manifest;
     }
 
+    pub fn cloneOwned(self: *const ProjectManifest, allocator: std.mem.Allocator) !ProjectManifest {
+        const format = try allocator.dupe(u8, self.format);
+        errdefer allocator.free(format);
+        const name = try allocator.dupe(u8, self.name);
+        errdefer allocator.free(name);
+        const assets_dir = try allocator.dupe(u8, self.assets_dir);
+        errdefer allocator.free(assets_dir);
+        const scenes_dir = try allocator.dupe(u8, self.scenes_dir);
+        errdefer allocator.free(scenes_dir);
+        const generated_dir = try allocator.dupe(u8, self.generated_dir);
+        errdefer allocator.free(generated_dir);
+        const cooked_assets_dir = try allocator.dupe(u8, self.cooked_assets_dir);
+        errdefer allocator.free(cooked_assets_dir);
+        const asset_manifest = try allocator.dupe(u8, self.asset_manifest);
+        errdefer allocator.free(asset_manifest);
+        const default_scene = if (self.default_scene) |value| try allocator.dupe(u8, value) else null;
+        errdefer if (default_scene) |value| allocator.free(value);
+
+        return .{
+            .format = format,
+            .version = self.version,
+            .name = name,
+            .project_id = self.project_id,
+            .assets_dir = assets_dir,
+            .scenes_dir = scenes_dir,
+            .generated_dir = generated_dir,
+            .cooked_assets_dir = cooked_assets_dir,
+            .asset_manifest = asset_manifest,
+            .default_scene = default_scene,
+        };
+    }
+
+    pub fn deinit(self: *ProjectManifest, allocator: std.mem.Allocator) void {
+        allocator.free(self.format);
+        allocator.free(self.name);
+        allocator.free(self.assets_dir);
+        allocator.free(self.scenes_dir);
+        allocator.free(self.generated_dir);
+        allocator.free(self.cooked_assets_dir);
+        allocator.free(self.asset_manifest);
+        if (self.default_scene) |value| allocator.free(value);
+        self.* = undefined;
+    }
+
     pub fn save(self: *const ProjectManifest, allocator: std.mem.Allocator, io: std.Io, root_dir: std.Io.Dir) !void {
         try self.validate();
 
@@ -118,8 +162,6 @@ pub const ProjectManifest = struct {
         try atomic_file.writeFileAtomic(allocator, io, generated_dir, manifest_filename, bytes);
     }
 };
-
-pub const LoadedProjectManifest = std.json.Parsed(ProjectManifest);
 
 fn readManifestBytes(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, normalized_path: []const u8) ![]u8 {
     try path.validateVirtual(normalized_path);
@@ -181,10 +223,10 @@ test "ProjectManifest round-trips through save and loadFromDir" {
     };
     try manifest.save(testing.allocator, testing.io, tmp.dir);
 
-    const loaded = try ProjectManifest.loadFromDir(testing.allocator, testing.io, tmp.dir, default_manifest_path);
-    defer loaded.deinit();
-    try testing.expect(loaded.value.project_id.eql(test_project_id));
-    try testing.expectEqualStrings(".zephyr/custom.zmanifest", loaded.value.asset_manifest);
+    var loaded = try ProjectManifest.loadFromDir(testing.allocator, testing.io, tmp.dir, default_manifest_path);
+    defer loaded.deinit(testing.allocator);
+    try testing.expect(loaded.project_id.eql(test_project_id));
+    try testing.expectEqualStrings(".zephyr/custom.zmanifest", loaded.asset_manifest);
 }
 
 test "ProjectManifest.loadFromDir rejects invalid manifests" {
@@ -243,29 +285,23 @@ test "ProjectManifest.validate rejects bad identity and paths" {
     try testing.expectError(error.ParentTraversalNotAllowed, m.validate());
 }
 
-test "LoadedProjectManifest owns strings allocated during parsing" {
-    const bytes =
-        \\{
-        \\  "format": "zephyr.proj",
-        \\  "name": "Test Project",
-        \\  "project_id": "bf5a424f-e93e-4977-9a7a-0c522318dfdc",
-        \\  "assets_dir": "game-assets",
-        \\  "scenes_dir": "game-scenes",
-        \\  "generated_dir": ".cache",
-        \\  "cooked_assets_dir": ".cache/cooked",
-        \\  "asset_manifest": ".cache/assets.zmanifest",
-        \\  "default_scene": "game-scenes/main.scene"
-        \\}
-    ;
+test "ProjectManifest cloneOwned owns all string fields" {
+    const source: ProjectManifest = .{
+        .name = "Test Project",
+        .project_id = test_project_id,
+        .assets_dir = "game-assets",
+        .scenes_dir = "game-scenes",
+        .generated_dir = ".cache",
+        .cooked_assets_dir = ".cache/cooked",
+        .asset_manifest = ".cache/assets.zmanifest",
+        .default_scene = "game-scenes/main.scene",
+    };
+    var owned = try source.cloneOwned(testing.allocator);
+    defer owned.deinit(testing.allocator);
 
-    const loaded = try std.json.parseFromSlice(ProjectManifest, testing.allocator, bytes, .{
-        .allocate = .alloc_always,
-    });
-    defer loaded.deinit();
-
-    try testing.expectEqualStrings("zephyr.proj", loaded.value.format);
-    try testing.expectEqualStrings("game-scenes/main.scene", loaded.value.default_scene.?);
-    try testing.expectEqualStrings(".cache/assets.zmanifest", loaded.value.asset_manifest);
+    try testing.expectEqualStrings("zephyr.proj", owned.format);
+    try testing.expectEqualStrings("game-scenes/main.scene", owned.default_scene.?);
+    try testing.expectEqualStrings(".cache/assets.zmanifest", owned.asset_manifest);
 }
 
 test "ProjectManifest path helpers expose configured asset roots" {
