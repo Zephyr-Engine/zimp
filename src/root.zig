@@ -67,7 +67,6 @@ pub const project = struct {
 };
 
 pub const ProjectManifest = project.manifest.ProjectManifest;
-pub const LoadedProjectManifest = project.manifest.LoadedProjectManifest;
 pub const ProjectRoot = project.root.ProjectRoot;
 
 /// Asset identity: `.zmeta` sidecars, the generated asset manifest, and its
@@ -247,6 +246,7 @@ test {
     _ = @import("parsers/gltf/gltf_json_parser.zig");
     _ = @import("parsers/gltf/document.zig");
     _ = @import("parsers/gltf/mesh.zig");
+    _ = @import("parsers/gltf/model.zig");
     _ = @import("parsers/gltf/material_generator.zig");
     _ = @import("cookers/cooker.zig");
     _ = @import("cookers/glb.zig");

@@ -24,6 +24,7 @@ pub const Gltf = struct {
 };
 
 pub const GltfJson = struct {
+    scene: ?u32 = null,
     scenes: []GltfScene = &.{},
     nodes: []GltfNode = &.{},
     meshes: []GltfMesh = &.{},

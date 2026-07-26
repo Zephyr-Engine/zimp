@@ -162,7 +162,8 @@ When that label is present, CI still computes and reports regressions but does n
 
 Source: `.glb`, `.gltf`, `.obj`
 
-Flat binary blob with SoA vertex streams, directly uploadable to the GPU with minimal parsing:
+Version 2 is a model container made of one or more transformed mesh parts.
+Each part stores SoA vertex streams that are directly uploadable to the GPU:
 
 ```zig
 const zmesh = @import("zimp").formats.zmesh;
@@ -171,6 +172,11 @@ var read_buffer: [8192]u8 = undefined;
 var file_reader = file.reader(io, &read_buffer);
 var mesh = try zmesh.read(allocator, &file_reader.interface);
 defer mesh.deinit(allocator);
+
+for (mesh.parts) |part| {
+    // part.transform is the glTF node's local-to-model matrix.
+    upload(part.mesh.positions, part.mesh.indices_u16, part.mesh.indices_u32);
+}
 ```
 
 | Stream | Type | Notes |
@@ -183,9 +189,14 @@ defer mesh.deinit(allocator);
 | Joint indices | `[4]u16` | For skinned meshes |
 | Joint weights | `[4]f16` | For skinned meshes |
 
-Includes an AABB bounding box; indices are `u16` when they fit, `u32` otherwise.
+Each part includes an AABB bounding box; indices are `u16` when they fit,
+`u32` otherwise. glTF scene nodes are traversed from the default scene,
+including nested node transforms and repeated mesh instances. Files without a
+scene graph import every declared mesh with an identity transform.
 
-Each source mesh file currently must contain exactly one glTF mesh. Files containing multiple glTF meshes fail with `MultipleMeshesUnsupported` instead of producing an ambiguous concatenated output.
+The cache checks the magic and version embedded in every cooked output before
+accepting a cache hit. When a cooked format version changes, only assets of
+that format are recooked.
 
 ### Textures (`.ztex`)
 

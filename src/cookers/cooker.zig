@@ -42,11 +42,6 @@ pub const Cooker = struct {
     }
 };
 
-pub fn validateSingleMesh(mesh_count: usize) !void {
-    if (mesh_count == 0) return error.NoMeshes;
-    if (mesh_count > 1) return error.MultipleMeshesUnsupported;
-}
-
 const testing = std.testing;
 
 var test_called: bool = false;
@@ -82,10 +77,4 @@ test "Cooker struct contains cook_fn and asset_type" {
     try testing.expect(@sizeOf(Cooker) > @sizeOf(*const fn (std.mem.Allocator, std.Io, std.Io.Dir, []const u8, *std.Io.Writer) anyerror!void));
     try testing.expect(@hasField(Cooker, "cook_fn"));
     try testing.expect(@hasField(Cooker, "asset_type"));
-}
-
-test "validateSingleMesh requires exactly one mesh" {
-    try testing.expectError(error.NoMeshes, validateSingleMesh(0));
-    try validateSingleMesh(1);
-    try testing.expectError(error.MultipleMeshesUnsupported, validateSingleMesh(2));
 }

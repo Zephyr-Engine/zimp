@@ -374,6 +374,14 @@ test "material cooker writes zamat" {
     try cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
 
     try testing.expectEqualSlices(u8, zamat.MAGIC, out[0..zamat.MAGIC.len]);
+
+    var reader = std.Io.Reader.fixed(out[0..writer.end]);
+    var loaded = try zamat.Zamat.read(testing.allocator, &reader);
+    defer loaded.deinit(testing.allocator);
+
+    try testing.expectEqualStrings("shaders/basic.vert.zshdr", loaded.vertex_shader_path);
+    try testing.expectEqualStrings("shaders/basic.frag.zshdr", loaded.fragment_shader_path);
+    try testing.expectEqualStrings("textures/missing.ztex", loaded.texture_slots[0].cooked_path);
 }
 
 test "material cooker errors on missing shader" {
