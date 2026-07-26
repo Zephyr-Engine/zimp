@@ -31,7 +31,7 @@ pub const Callback = struct {
     }
 };
 
-const Watcher = @This();
+pub const Watcher = @This();
 
 gpa: std.mem.Allocator,
 io: std.Io,

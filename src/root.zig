@@ -24,12 +24,12 @@ pub const formats = struct {
     pub const zamat = @import("formats/zamat.zig");
 };
 
-pub const watcher = struct {
-    pub const handle = @import("watcher/handle.zig");
-    pub const snapshot = @import("watcher/snapshot.zig");
-    pub const wake = @import("watcher/wake.zig");
-    pub const watcher = @import("watcher/watcher.zig");
-};
+/// File-watching cooker for a project. Call `watcher.start` to begin watching
+/// in the background and later call `WatchHandle.stop` to release it.
+/// Snapshotting and platform wake mechanisms are implementation details.
+pub const watcher = @import("watcher/handle.zig");
+pub const WatchHandle = watcher.WatchHandle;
+pub const startWatcher = watcher.start;
 
 /// Asset data types used by the cooked formats.
 ///
@@ -224,6 +224,11 @@ test "public API exposes format and asset construction types" {
     _ = path.normalizeVirtual;
     _ = path.resolveShaderInclude;
     _ = path.cookedOutput;
+    _ = watcher.WatchOptions;
+    _ = watcher.Callback;
+    _ = watcher.CookResult;
+    _ = WatchHandle;
+    _ = startWatcher;
 }
 
 test {
@@ -292,6 +297,7 @@ test {
     _ = @import("manifest/model.zig");
     _ = @import("manifest/codec.zig");
     _ = @import("manifest/builder.zig");
+    _ = @import("watcher/handle.zig");
     _ = @import("watcher/snapshot.zig");
     _ = @import("watcher/wake.zig");
     _ = @import("watcher/watcher.zig");
