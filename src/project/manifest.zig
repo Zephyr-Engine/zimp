@@ -8,8 +8,8 @@ const log = std.log.scoped(.zimp_project);
 
 const MANIFEST_VERSION: u32 = 1;
 const DEFAULT_COOKED_ASSETS_DIR = ".zephyr/cooked";
-const DEFAULT_ASSETS_DIR = ".zephyr/assets";
-const DEFAULT_SCENES_DIR = ".zephyr/scenes";
+const DEFAULT_ASSETS_DIR = "assets";
+const DEFAULT_SCENES_DIR = "scenes";
 const DEFAULT_ASSET_MANIFEST = ".zephyr/assets.zmanifest";
 const DEFAULT_NAME = "Untitled Project";
 const DEFAULT_GENERATED_DIR = ".zephyr";
@@ -195,7 +195,7 @@ test "ProjectManifest.save writes generated manifest file" {
     const parsed = try std.json.parseFromSlice(ProjectManifest, testing.allocator, bytes, .{});
     defer parsed.deinit();
     try testing.expectEqualStrings(".zephyr", parsed.value.generated_dir);
-    try testing.expectEqualStrings(".zephyr/assets", parsed.value.assets_dir);
+    try testing.expectEqualStrings("assets", parsed.value.assets_dir);
     try testing.expectEqualStrings(".zephyr/cooked", parsed.value.cooked_assets_dir);
     try testing.expectEqualStrings(".zephyr/assets.zmanifest", parsed.value.asset_manifest);
     try testing.expectEqualStrings("zephyr.proj", parsed.value.format);
