@@ -294,6 +294,7 @@ test {
     _ = @import("manifest/builder.zig");
     _ = @import("watcher/snapshot.zig");
     _ = @import("watcher/wake.zig");
+    _ = @import("watcher/watcher.zig");
     _ = @import("scene/schema.zig");
     _ = @import("scene/value.zig");
     _ = @import("scene/schema_descriptor.zig");
