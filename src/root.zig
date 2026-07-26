@@ -27,9 +27,7 @@ pub const formats = struct {
 /// File-watching cooker for a project. Call `watcher.start` to begin watching
 /// in the background and later call `WatchHandle.stop` to release it.
 /// Snapshotting and platform wake mechanisms are implementation details.
-pub const watcher = @import("watcher/handle.zig");
-pub const WatchHandle = watcher.WatchHandle;
-pub const startWatcher = watcher.start;
+pub const WatchHandle = @import("watcher/handle.zig");
 
 /// Asset data types used by the cooked formats.
 ///
@@ -224,11 +222,7 @@ test "public API exposes format and asset construction types" {
     _ = path.normalizeVirtual;
     _ = path.resolveShaderInclude;
     _ = path.cookedOutput;
-    _ = watcher.WatchOptions;
-    _ = watcher.Callback;
-    _ = watcher.CookResult;
     _ = WatchHandle;
-    _ = startWatcher;
 }
 
 test {

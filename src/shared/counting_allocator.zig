@@ -2,6 +2,7 @@ const std = @import("std");
 
 pub const CountingAllocator = struct {
     backing_allocator: std.mem.Allocator,
+    mutex: std.atomic.Mutex = .unlocked,
     current_requested_bytes: usize = 0,
     peak_requested_bytes: usize = 0,
 
@@ -14,6 +15,12 @@ pub const CountingAllocator = struct {
             .ptr = self,
             .vtable = &vtable,
         };
+    }
+
+    fn lock(self: *CountingAllocator) void {
+        while (!self.mutex.tryLock()) {
+            std.atomic.spinLoopHint();
+        }
     }
 
     fn recordGrowth(self: *CountingAllocator, delta: usize) void {
@@ -33,6 +40,8 @@ pub const CountingAllocator = struct {
 
     fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
         const ptr = self.backing_allocator.rawAlloc(len, alignment, ret_addr) orelse return null;
         self.recordGrowth(len);
         return ptr;
@@ -40,6 +49,8 @@ pub const CountingAllocator = struct {
 
     fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
         const ok = self.backing_allocator.rawResize(memory, alignment, new_len, ret_addr);
         if (!ok) return false;
 
@@ -53,6 +64,8 @@ pub const CountingAllocator = struct {
 
     fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
         const ptr = self.backing_allocator.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
 
         if (new_len >= memory.len) {
@@ -65,6 +78,8 @@ pub const CountingAllocator = struct {
 
     fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
+        self.lock();
+        defer self.mutex.unlock();
         self.backing_allocator.rawFree(memory, alignment, ret_addr);
         self.recordShrink(memory.len);
     }

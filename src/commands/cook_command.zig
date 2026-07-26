@@ -147,7 +147,7 @@ pub const CookCommand = struct {
     pub fn run(self: *const CookCommand, progress: std.Progress.Node) !void {
         const MetricsAllocator = std.heap.DebugAllocator(.{
             .enable_memory_limit = true,
-            .thread_safe = false,
+            .thread_safe = true,
             .safety = false,
         });
 
