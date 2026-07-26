@@ -1,29 +1,24 @@
 const std = @import("std");
 
+const ProjectManifest = @import("../project/manifest.zig").ProjectManifest;
 const CookContext = @import("../commands/cook/context.zig").CookContext;
-const ProjectRoot = @import("../project/project_root.zig").ProjectRoot;
 const watcher_mod = @import("watcher.zig");
-const log = @import("../logger.zig");
 
-/// Configuration for polling and debounce behavior.
-pub const WatchOptions = watcher_mod.Options;
-/// Optional notification invoked after each cook attempt.
-pub const Callback = watcher_mod.Callback;
-/// The outcome passed to `Callback.on_cook`.
-pub const CookResult = watcher_mod.CookResult;
+const WatchOptions = watcher_mod.Options;
+const CookResult = watcher_mod.CookResult;
+const Callback = watcher_mod.Callback;
+
 const Watcher = watcher_mod.Watcher;
 const WatcherRunResult = @typeInfo(@TypeOf(Watcher.run)).@"fn".return_type.?;
 
-/// Owns a background project watcher. Call `stop` exactly once to cancel the
-/// watcher, release its resources, and free the handle.
-pub const WatchHandle = @This();
+const WatchHandle = @This();
 
 gpa: std.mem.Allocator,
 io: std.Io,
-project_root: ProjectRoot,
+project: ProjectManifest,
 source: std.Io.Dir,
 output: std.Io.Dir,
-output_path: []const u8,
+output_path: [:0]const u8,
 watcher: Watcher,
 future: std.Io.Future(WatcherRunResult),
 
@@ -36,18 +31,17 @@ pub fn stop(self: *WatchHandle) void {
     self.source.close(self.io);
     self.output.close(self.io);
     self.gpa.free(self.output_path);
-    self.project_root.deinit();
+    self.project.deinit(self.gpa);
 
     const gpa = self.gpa;
     gpa.destroy(self);
 }
 
-/// Start watching the project rooted at `project_root_path` in the background.
-/// The watcher performs an initial cook before waiting for source changes.
 pub fn start(
     gpa: std.mem.Allocator,
     io: std.Io,
-    project_root_path: []const u8,
+    project: ProjectManifest,
+    root_dir: std.Io.Dir,
     options: WatchOptions,
     callback: Callback,
 ) !*WatchHandle {
@@ -56,19 +50,16 @@ pub fn start(
 
     handle.gpa = gpa;
     handle.io = io;
+    handle.project = project;
+    errdefer handle.project.deinit(gpa);
 
-    handle.project_root = ProjectRoot.open(gpa, io, project_root_path) catch |err| {
-        log.err("watch: failed to open project '{s}': {s}", .{ project_root_path, @errorName(err) });
-        return err;
-    };
-    errdefer handle.project_root.deinit();
-    const pr = &handle.project_root;
-
-    handle.source = try pr.openDir(pr.manifest.assets_dir, .{ .iterate = true });
+    handle.source = try root_dir.openDir(io, handle.project.assets_dir, .{ .iterate = true });
     errdefer handle.source.close(io);
-    handle.output = try pr.makeOpenDir(pr.manifest.cooked_assets_dir);
+
+    handle.output = try root_dir.createDirPathOpen(io, handle.project.cooked_assets_dir, .{ .open_options = .{ .iterate = true } });
     errdefer handle.output.close(io);
-    handle.output_path = try pr.resolve(gpa, pr.manifest.cooked_assets_dir);
+
+    handle.output_path = try root_dir.realPathFileAlloc(io, handle.project.cooked_assets_dir, gpa);
     errdefer gpa.free(handle.output_path);
 
     const ctx: CookContext = .{
@@ -78,9 +69,9 @@ pub fn start(
         .output_path = handle.output_path,
         .force = false,
         .project = .{
-            .project_id = pr.manifest.project_id,
-            .root_dir = pr.root_dir,
-            .manifest_path = pr.manifest.asset_manifest,
+            .project_id = handle.project.project_id,
+            .root_dir = root_dir,
+            .manifest_path = handle.project.asset_manifest,
         },
     };
 
@@ -91,7 +82,6 @@ pub fn start(
 }
 
 const testing = std.testing;
-const ProjectManifest = @import("../project/manifest.zig").ProjectManifest;
 const ProjectId = @import("../id/id_types.zig").ProjectId;
 
 const TestObserver = struct {
@@ -117,26 +107,22 @@ fn waitForCalls(observer: *const TestObserver, expected: usize) !void {
     return error.TimedOut;
 }
 
-fn testProject(tmp: testing.TmpDir) ![]const u8 {
+fn testProject(tmp: testing.TmpDir) !ProjectManifest {
     const manifest: ProjectManifest = .{
         .project_id = ProjectId.parseComptime("bf5a424f-e93e-4977-9a7a-0c522318dfdc"),
     };
     try manifest.save(testing.allocator, testing.io, tmp.dir);
     try tmp.dir.createDirPath(testing.io, "assets");
-
-    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const path_len = try tmp.dir.realPathFile(testing.io, ".", &path_buf);
-    return testing.allocator.dupe(u8, path_buf[0..path_len]);
+    return manifest.cloneOwned(testing.allocator);
 }
 
 test "WatchHandle starts an initial cook and creates the output directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const project_path = try testProject(tmp);
-    defer testing.allocator.free(project_path);
+    const project = try testProject(tmp);
 
     var observer = TestObserver{};
-    const handle = try start(testing.allocator, testing.io, project_path, .{
+    const handle = try start(testing.allocator, testing.io, project, tmp.dir, .{
         .poll_interval = .fromMilliseconds(10),
         .debounce = .fromMilliseconds(5),
         .debounce_Max = .fromMilliseconds(100),
@@ -148,16 +134,6 @@ test "WatchHandle starts an initial cook and creates the output directory" {
     handle.stop();
 }
 
-test "WatchHandle.start rejects a missing project" {
-    try testing.expectError(error.ProjectNotFound, start(
-        testing.allocator,
-        testing.io,
-        "definitely-not-a-zimp-project",
-        .{},
-        .{},
-    ));
-}
-
 test "WatchHandle.start propagates a missing asset directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
@@ -167,9 +143,6 @@ test "WatchHandle.start propagates a missing asset directory" {
     };
     try manifest.save(testing.allocator, testing.io, tmp.dir);
 
-    var path_buf: [std.Io.Dir.max_path_bytes]u8 = undefined;
-    const path_len = try tmp.dir.realPathFile(testing.io, ".", &path_buf);
-    const project_path = path_buf[0..path_len];
-
-    try testing.expectError(error.FileNotFound, start(testing.allocator, testing.io, project_path, .{}, .{}));
+    const project = try manifest.cloneOwned(testing.allocator);
+    try testing.expectError(error.FileNotFound, start(testing.allocator, testing.io, project, tmp.dir, .{}, .{}));
 }
