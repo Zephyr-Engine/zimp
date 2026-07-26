@@ -24,6 +24,13 @@ pub const formats = struct {
     pub const zamat = @import("formats/zamat.zig");
 };
 
+pub const watcher = struct {
+    pub const handle = @import("watcher/handle.zig");
+    pub const snapshot = @import("watcher/snapshot.zig");
+    pub const wake = @import("watcher/wake.zig");
+    pub const watcher = @import("watcher/watcher.zig");
+};
+
 /// Asset data types used by the cooked formats.
 ///
 /// `raw` and `cooked` are useful to applications that produce assets
@@ -285,6 +292,7 @@ test {
     _ = @import("manifest/model.zig");
     _ = @import("manifest/codec.zig");
     _ = @import("manifest/builder.zig");
+    _ = @import("watcher/snapshot.zig");
     _ = @import("scene/schema.zig");
     _ = @import("scene/value.zig");
     _ = @import("scene/schema_descriptor.zig");
