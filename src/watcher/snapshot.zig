@@ -13,6 +13,7 @@ const Snapshot = @This();
 
 arena: std.heap.ArenaAllocator,
 files: std.StringHashMapUnmanaged(FileState),
+dirs: std.StringHashMapUnmanaged(void),
 
 pub fn deinit(self: *Snapshot) void {
     self.arena.deinit();
@@ -63,6 +64,7 @@ pub fn capture(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !Snaps
     var snapshot = Snapshot{
         .arena = std.heap.ArenaAllocator.init(allocator),
         .files = .empty,
+        .dirs = .empty,
     };
     errdefer snapshot.deinit();
 
@@ -72,6 +74,8 @@ pub fn capture(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir) !Snaps
 
 fn captureDir(self: *Snapshot, io: std.Io, dir: std.Io.Dir, prefix: []const u8) !void {
     const gpa = self.arena.allocator();
+
+    try self.dirs.put(gpa, try gpa.dupe(u8, prefix), {});
 
     var iter = dir.iterate();
     while (try iter.next(io)) |entry| {

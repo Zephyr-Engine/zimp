@@ -293,6 +293,7 @@ test {
     _ = @import("manifest/codec.zig");
     _ = @import("manifest/builder.zig");
     _ = @import("watcher/snapshot.zig");
+    _ = @import("watcher/wake.zig");
     _ = @import("scene/schema.zig");
     _ = @import("scene/value.zig");
     _ = @import("scene/schema_descriptor.zig");
