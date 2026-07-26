@@ -147,7 +147,7 @@ pub const CookCommand = struct {
     pub fn run(self: *const CookCommand, progress: std.Progress.Node) !void {
         const MetricsAllocator = std.heap.DebugAllocator(.{
             .enable_memory_limit = true,
-            .thread_safe = false,
+            .thread_safe = true,
             .safety = false,
         });
 
@@ -398,9 +398,9 @@ test "project cook lifecycle: ids are minted once and survive everything but sid
         .project_id = .parseComptime("bf5a424f-e93e-4977-9a7a-0c522318dfdc"),
     };
     try project.save(testing.allocator, testing.io, tmp.dir);
-    try tmp.dir.createDirPath(testing.io, ".zephyr/assets/shaders");
+    try tmp.dir.createDirPath(testing.io, "assets/shaders");
     try tmp.dir.writeFile(testing.io, .{
-        .sub_path = ".zephyr/assets/shaders/tri.vert",
+        .sub_path = "assets/shaders/tri.vert",
         .data = "#version 460 core\nvoid main() { gl_Position = vec4(0.0); }\n",
     });
 
@@ -414,7 +414,7 @@ test "project cook lifecycle: ids are minted once and survive everything but sid
 
     const manifest_bytes_1 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets.zmanifest", testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(manifest_bytes_1);
-    const sidecar_bytes_1 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets/shaders/tri.vert.zmeta", testing.allocator, .limited(4096));
+    const sidecar_bytes_1 = try tmp.dir.readFileAlloc(testing.io, "assets/shaders/tri.vert.zmeta", testing.allocator, .limited(4096));
     defer testing.allocator.free(sidecar_bytes_1);
 
     var m1 = try manifest_codec.decode(testing.allocator, manifest_bytes_1);
@@ -428,7 +428,7 @@ test "project cook lifecycle: ids are minted once and survive everything but sid
     try runProjectCook(root_path);
     const manifest_bytes_2 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets.zmanifest", testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(manifest_bytes_2);
-    const sidecar_bytes_2 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets/shaders/tri.vert.zmeta", testing.allocator, .limited(4096));
+    const sidecar_bytes_2 = try tmp.dir.readFileAlloc(testing.io, "assets/shaders/tri.vert.zmeta", testing.allocator, .limited(4096));
     defer testing.allocator.free(sidecar_bytes_2);
     try testing.expectEqualStrings(manifest_bytes_1, manifest_bytes_2);
     try testing.expectEqualStrings(sidecar_bytes_1, sidecar_bytes_2);
@@ -444,9 +444,9 @@ test "project cook lifecycle: ids are minted once and survive everything but sid
     try testing.expect(m3.entries[0].id.eql(original_id));
 
     // A file copied together with its sidecar is a hard duplicate-id error.
-    const src = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets/shaders/tri.vert", testing.allocator, .limited(4096));
+    const src = try tmp.dir.readFileAlloc(testing.io, "assets/shaders/tri.vert", testing.allocator, .limited(4096));
     defer testing.allocator.free(src);
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".zephyr/assets/shaders/tri2.vert", .data = src });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = ".zephyr/assets/shaders/tri2.vert.zmeta", .data = sidecar_bytes_1 });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "assets/shaders/tri2.vert", .data = src });
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "assets/shaders/tri2.vert.zmeta", .data = sidecar_bytes_1 });
     try testing.expectError(error.DuplicateAssetId, runProjectCook(root_path));
 }

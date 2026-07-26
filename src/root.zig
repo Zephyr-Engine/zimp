@@ -24,6 +24,11 @@ pub const formats = struct {
     pub const zamat = @import("formats/zamat.zig");
 };
 
+/// File-watching cooker for a project. Call `watcher.start` to begin watching
+/// in the background and later call `WatchHandle.stop` to release it.
+/// Snapshotting and platform wake mechanisms are implementation details.
+pub const WatchHandle = @import("watcher/handle.zig");
+
 /// Asset data types used by the cooked formats.
 ///
 /// `raw` and `cooked` are useful to applications that produce assets
@@ -217,6 +222,7 @@ test "public API exposes format and asset construction types" {
     _ = path.normalizeVirtual;
     _ = path.resolveShaderInclude;
     _ = path.cookedOutput;
+    _ = WatchHandle;
 }
 
 test {
@@ -285,6 +291,10 @@ test {
     _ = @import("manifest/model.zig");
     _ = @import("manifest/codec.zig");
     _ = @import("manifest/builder.zig");
+    _ = @import("watcher/handle.zig");
+    _ = @import("watcher/snapshot.zig");
+    _ = @import("watcher/wake.zig");
+    _ = @import("watcher/watcher.zig");
     _ = @import("scene/schema.zig");
     _ = @import("scene/value.zig");
     _ = @import("scene/schema_descriptor.zig");
