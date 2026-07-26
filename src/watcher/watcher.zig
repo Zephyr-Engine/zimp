@@ -263,11 +263,12 @@ test "Watcher runs an initial cook and recooks a changed asset" {
     defer source_tmp.cleanup();
     var output_tmp = testing.tmpDir(.{});
     defer output_tmp.cleanup();
-    try source_tmp.dir.writeFile(testing.io, .{ .sub_path = "triangle.obj", .data =
-        "v 0 0 0\n" ++
-        "v 1 0 0\n" ++
-        "v 0 1 0\n" ++
-        "f 1 2 3\n",
+    try source_tmp.dir.writeFile(testing.io, .{
+        .sub_path = "triangle.obj",
+        .data = "v 0 0 0\n" ++
+            "v 1 0 0\n" ++
+            "v 0 1 0\n" ++
+            "f 1 2 3\n",
     });
 
     const source = try source_tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
@@ -292,11 +293,12 @@ test "Watcher runs an initial cook and recooks a changed asset" {
     // Give run() time to establish its baseline snapshot after the initial
     // callback, then make a real source change for the next watcher tick.
     try testing.io.sleep(.fromMilliseconds(20), .awake);
-    try source_tmp.dir.writeFile(testing.io, .{ .sub_path = "triangle.obj", .data =
-        "v 0 0 0\n" ++
-        "v 2 0 0\n" ++
-        "v 0 2 0\n" ++
-        "f 1 2 3\n",
+    try source_tmp.dir.writeFile(testing.io, .{
+        .sub_path = "triangle.obj",
+        .data = "v 0 0 0\n" ++
+            "v 2 0 0\n" ++
+            "v 0 2 0\n" ++
+            "f 1 2 3\n",
     });
     try waitForCalls(&observer, 2);
 
