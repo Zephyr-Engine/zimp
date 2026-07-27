@@ -59,7 +59,7 @@ pub fn logSummary(metrics: *const CookMetrics) void {
     });
 }
 
-pub fn emitCiJson(allocator: std.mem.Allocator, metrics: *const CookMetrics) !void {
+pub fn emitJson(allocator: std.mem.Allocator, metrics: *const CookMetrics) !void {
     const json = try std.fmt.allocPrint(allocator, "{{\"schema_version\":{d},\"assets\":{{\"total\":{d},\"cooked\":{d},\"cached\":{d},\"hash_match\":{d},\"errored\":{d}}},\"io\":{{\"source_bytes_read\":{d},\"source_bytes_hashed\":{d},\"cooked_bytes_written\":{d},\"cache_bytes_written\":{d}}},\"timings_ns\":{{\"scan\":{d},\"dependency_graph\":{d},\"cook\":{d},\"cache_write\":{d},\"total\":{d}}},\"memory\":{{\"peak_allocated_bytes\":{d},\"ending_allocated_bytes\":{d}}}}}", .{
         metrics.schema_version,
         metrics.assets_total,
@@ -81,7 +81,7 @@ pub fn emitCiJson(allocator: std.mem.Allocator, metrics: *const CookMetrics) !vo
     });
     defer allocator.free(json);
 
-    std.debug.print("CI_METRICS_JSON {s}\n", .{json});
+    std.debug.print("COOK_METRICS_JSON {s}\n", .{json});
 }
 
 fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
