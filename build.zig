@@ -70,4 +70,12 @@ pub fn build(b: *std.Build) void {
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+
+    const perf_step = b.step("perf", "Run the local asset-cooking stress suite");
+    const perf_cmd = b.addSystemCommand(&.{ "python3", "scripts/perf/run_stress.py", "--zimp", "zig-out/bin/zimp" });
+    perf_cmd.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        perf_cmd.addArgs(args);
+    }
+    perf_step.dependOn(&perf_cmd.step);
 }

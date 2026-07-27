@@ -11,11 +11,15 @@ const Callback = watcher_mod.Callback;
 const Watcher = watcher_mod.Watcher;
 const WatcherRunResult = @typeInfo(@TypeOf(Watcher.run)).@"fn".return_type.?;
 
+pub const WaitForInitialCookError = error{
+    InitialCookFailed,
+};
+
 const WatchHandle = @This();
 
 gpa: std.mem.Allocator,
 io: std.Io,
-project: ProjectManifest,
+project: *const ProjectManifest,
 source: std.Io.Dir,
 output: std.Io.Dir,
 output_path: [:0]const u8,
@@ -31,16 +35,25 @@ pub fn stop(self: *WatchHandle) void {
     self.source.close(self.io);
     self.output.close(self.io);
     self.gpa.free(self.output_path);
-    self.project.deinit(self.gpa);
 
     const gpa = self.gpa;
     gpa.destroy(self);
 }
 
+pub fn waitForInitialCook(self: *const WatchHandle) !void {
+    while (true) {
+        switch (self.watcher.initialCookState()) {
+            .pending => try self.io.sleep(.fromMilliseconds(10), .awake),
+            .succeeded => return,
+            .failed => return WaitForInitialCookError.InitialCookFailed,
+        }
+    }
+}
+
 pub fn start(
     gpa: std.mem.Allocator,
     io: std.Io,
-    project: ProjectManifest,
+    project: *const ProjectManifest,
     root_dir: std.Io.Dir,
     options: WatchOptions,
     callback: Callback,
@@ -51,7 +64,6 @@ pub fn start(
     handle.gpa = gpa;
     handle.io = io;
     handle.project = project;
-    errdefer handle.project.deinit(gpa);
 
     handle.source = try root_dir.openDir(io, handle.project.assets_dir, .{ .iterate = true });
     errdefer handle.source.close(io);
@@ -119,19 +131,34 @@ fn testProject(tmp: testing.TmpDir) !ProjectManifest {
 test "WatchHandle starts an initial cook and creates the output directory" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
-    const project = try testProject(tmp);
+    var project = try testProject(tmp);
+    defer project.deinit(testing.allocator);
 
     var observer = TestObserver{};
-    const handle = try start(testing.allocator, testing.io, project, tmp.dir, .{
+    const handle = try start(testing.allocator, testing.io, &project, tmp.dir, .{
         .poll_interval = .fromMilliseconds(10),
         .debounce = .fromMilliseconds(5),
         .debounce_Max = .fromMilliseconds(100),
     }, observer.callback());
 
-    try waitForCalls(&observer, 1);
+    try handle.waitForInitialCook();
+    try testing.expectEqual(@as(usize, 1), observer.calls.load(.acquire));
     try tmp.dir.access(testing.io, ".zephyr/cooked", .{});
 
     handle.stop();
+}
+
+test "WatchHandle reports an unsuccessful initial cook" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    var project = try testProject(tmp);
+    defer project.deinit(testing.allocator);
+    try tmp.dir.writeFile(testing.io, .{ .sub_path = "assets/bad.jpg", .data = "not a JPEG" });
+
+    const handle = try start(testing.allocator, testing.io, &project, tmp.dir, .{}, .{});
+    defer handle.stop();
+
+    try testing.expectError(WaitForInitialCookError.InitialCookFailed, handle.waitForInitialCook());
 }
 
 test "WatchHandle.start propagates a missing asset directory" {
@@ -143,6 +170,7 @@ test "WatchHandle.start propagates a missing asset directory" {
     };
     try manifest.save(testing.allocator, testing.io, tmp.dir);
 
-    const project = try manifest.cloneOwned(testing.allocator);
-    try testing.expectError(error.FileNotFound, start(testing.allocator, testing.io, project, tmp.dir, .{}, .{}));
+    var project = try manifest.cloneOwned(testing.allocator);
+    defer project.deinit(testing.allocator);
+    try testing.expectError(error.FileNotFound, start(testing.allocator, testing.io, &project, tmp.dir, .{}, .{}));
 }

@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 const CountingAllocator = @import("../shared/counting_allocator.zig").CountingAllocator;
 const CookContext = @import("../commands/cook/context.zig").CookContext;
@@ -17,6 +18,12 @@ pub const Options = struct {
 pub const CookResult = struct {
     metrics: CookMetrics,
     ok: bool,
+};
+
+pub const InitialCookState = enum(u8) {
+    pending,
+    succeeded,
+    failed,
 };
 
 // optional observer
@@ -40,6 +47,7 @@ options: Options,
 callback: Callback = .{},
 wake: wake_mod.WakeSource,
 should_stop: std.atomic.Value(bool) = .init(false),
+initial_cook_state: std.atomic.Value(InitialCookState) = .init(.pending),
 
 pub fn init(gpa: std.mem.Allocator, io: std.Io, ctx: CookContext, options: Options, callback: Callback) Watcher {
     return .{
@@ -60,13 +68,18 @@ pub fn stop(self: *Watcher) void {
     self.should_stop.store(true, .release);
 }
 
+pub fn initialCookState(self: *const Watcher) InitialCookState {
+    return self.initial_cook_state.load(.acquire);
+}
+
 pub fn run(self: *Watcher) !void {
     log.info("watch: watching for changes (poll {f}, debounce {f})", .{
         self.options.poll_interval, self.options.debounce,
     });
 
     // ensure everything is cooked before we start watching
-    self.cook();
+    const initial_result = self.cook();
+    self.initial_cook_state.store(if (initial_result.ok) .succeeded else .failed, .release);
 
     var current = try Snapshot.capture(self.gpa, self.io, self.ctx.source);
     defer current.deinit();
@@ -99,17 +112,23 @@ pub fn run(self: *Watcher) !void {
         current = next;
 
         self.wake.sync(&current);
-        self.cook();
+        _ = self.cook();
     }
 }
 
-fn cook(self: *Watcher) void {
+fn cook(self: *Watcher) CookResult {
     var counting = CountingAllocator.init(self.gpa);
+    const progress = if (builtin.is_test)
+        std.Progress.Node.none
+    else
+        std.Progress.start(self.io, .{ .root_name = "Cooking project assets" });
+    defer progress.end();
 
-    const metrics = cook_pipeline.run(counting.allocator(), &counting, &self.ctx, .none) catch |err| {
+    const metrics = cook_pipeline.run(counting.allocator(), &counting, &self.ctx, progress) catch |err| {
         log.err("watch: cook failed: {s}", .{@errorName(err)});
-        self.callback.notify(.{ .metrics = .{}, .ok = false });
-        return;
+        const result: CookResult = .{ .metrics = .{}, .ok = false };
+        self.callback.notify(result);
+        return result;
     };
     self.ctx.force = false;
 
@@ -122,7 +141,9 @@ fn cook(self: *Watcher) void {
         log.warn("watch: cooked finished with {d} error(s); will retry on next change", .{metrics.assets_errored});
     }
 
-    self.callback.notify(.{ .metrics = metrics, .ok = ok });
+    const result: CookResult = .{ .metrics = metrics, .ok = ok };
+    self.callback.notify(result);
+    return result;
 }
 
 fn settle(self: *Watcher, first: Snapshot) !Snapshot {
@@ -250,7 +271,7 @@ test "Watcher cook reports successful empty source trees" {
     var watcher = Watcher.init(testing.allocator, testing.io, testContext(source, output), .{}, observer.callback());
     defer watcher.deinit();
 
-    watcher.cook();
+    _ = watcher.cook();
 
     try testing.expectEqual(@as(usize, 1), observer.calls.load(.acquire));
     try testing.expectEqual(@as(usize, 1), observer.successful_calls.load(.acquire));

@@ -138,23 +138,31 @@ zimp is the source of truth for asset identity (see [`docs/identity.md`](docs/id
 
 The shared ID types (`Uuid`, `AssetId`, `SceneId`, `SceneEntityId`, `ProjectId`, `ComponentTypeId`, `SchemaId`) live in `zimp.id` as distinct wrapper types, and the project manifest model (`zimp.ProjectManifest`, `zimp.ProjectRoot`) lives in `zimp.project`, so the cooker, runtime, and editor all share one definition.
 
-## CI performance regression checks
+## Performance stress suite
 
-CI runs a `cook` benchmark and extracts the `CI_METRICS_JSON` payload into an artifact (`cook-metrics-json`).
-On pull requests, CI fetches the last 10 successful `main` artifacts, computes a median baseline per timing metric, and fails if current timings exceed:
+Run a representative local cook benchmark from the repository root:
 
-- `total`: baseline + 15% (+10ms absolute tolerance)
-- `cook`: baseline + 15% (+10ms absolute tolerance)
-- `scan`, `dependency_graph`, `cache_write`: baseline + 20% (+10ms absolute tolerance)
+```sh
+zig build perf -Doptimize=ReleaseFast
+```
 
-This is a standard low-noise guard pattern: rolling-window baseline + median + percentage threshold.
-You can tune the window and thresholds in `.github/workflows/test.yml` via `scripts/ci/check_perf_regression.py` flags.
+It deterministically generates a large workload (five 2048×2048 textures, a
+384×384-quad mesh, 32 materials, and a shared 24-level shader dependency graph)
+under `.perf/zimp-stress/`. It then reports cold-cook, warm-cache, and
+dependency-invalidation timings alongside allocation, I/O, cache, and
+throughput metrics. The complete machine-readable result is retained as
+`.perf/zimp-stress/results.json`.
 
-To accept a new slower/faster baseline on a specific PR without disabling checks globally, add the PR label:
+For a quick smoke run, use:
 
-- `perf-baseline-accept`
+```sh
+zig build perf -Doptimize=ReleaseFast -- --quick
+```
 
-When that label is present, CI still computes and reports regressions but does not fail the PR on perf deltas.
+See [`scripts/perf/README.md`](scripts/perf/README.md) for the workload and
+tuning options. Performance measurement is intentionally local rather than a
+CI gate: the suite can be repeated on the same machine with a workload large
+enough to expose meaningful changes without noisy hosted-runner comparisons.
 
 ## Cooked formats
 
