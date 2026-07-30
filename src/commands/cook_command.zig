@@ -28,7 +28,6 @@ pub const CookCommand = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     force: bool = false,
-    emit_metrics_json: bool = false,
     /// Set in `--project` mode; owns the manifest strings that
     /// `source`/`output`/`output_path` were derived from.
     project_root: ?*ProjectRoot = null,
@@ -75,9 +74,6 @@ pub const CookCommand = struct {
             } else if (std.mem.eql(u8, "--force", args[i])) {
                 if (command.force) return CookError.DuplicateFlag;
                 command.force = true;
-            } else if (std.mem.eql(u8, "--metrics-json", args[i])) {
-                if (command.emit_metrics_json) return CookError.DuplicateFlag;
-                command.emit_metrics_json = true;
             } else {
                 log.err("cook: unknown flag '{s}'", .{args[i]});
                 return CookError.UnknownFlag;
@@ -196,9 +192,6 @@ pub const CookCommand = struct {
             metrics.assets_errored,
         });
         cook_metrics.logSummary(&metrics);
-        if (self.emit_metrics_json) {
-            try cook_metrics.emitJson(allocator, &metrics);
-        }
         if (metrics.assets_errored > 0) return error.AssetCookFailed;
     }
 

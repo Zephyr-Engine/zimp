@@ -2,8 +2,6 @@ const std = @import("std");
 const log = @import("../logger.zig");
 
 pub const CookMetrics = struct {
-    schema_version: u32 = 1,
-
     assets_total: u32 = 0,
     assets_cooked: u32 = 0,
     assets_cached: u32 = 0,
@@ -22,6 +20,10 @@ pub const CookMetrics = struct {
     total_ns: u64 = 0,
 
     peak_allocated_bytes: usize = 0,
+    /// Requested bytes while the plan and cache session are still live. This
+    /// helps size the pipeline; it is intentionally distinct from the ending
+    /// retained-allocation measurement.
+    pipeline_live_bytes: usize = 0,
     ending_allocated_bytes: usize = 0,
 };
 
@@ -53,35 +55,11 @@ pub fn logSummary(metrics: *const CookMetrics) void {
         metrics.cache_bytes_written,
     });
 
-    log.info("Cook memory: peak={d}B, end={d}B", .{
+    log.info("Cook memory: peak={d}B, pipeline_live={d}B, end={d}B", .{
         metrics.peak_allocated_bytes,
+        metrics.pipeline_live_bytes,
         metrics.ending_allocated_bytes,
     });
-}
-
-pub fn emitJson(allocator: std.mem.Allocator, metrics: *const CookMetrics) !void {
-    const json = try std.fmt.allocPrint(allocator, "{{\"schema_version\":{d},\"assets\":{{\"total\":{d},\"cooked\":{d},\"cached\":{d},\"hash_match\":{d},\"errored\":{d}}},\"io\":{{\"source_bytes_read\":{d},\"source_bytes_hashed\":{d},\"cooked_bytes_written\":{d},\"cache_bytes_written\":{d}}},\"timings_ns\":{{\"scan\":{d},\"dependency_graph\":{d},\"cook\":{d},\"cache_write\":{d},\"total\":{d}}},\"memory\":{{\"peak_allocated_bytes\":{d},\"ending_allocated_bytes\":{d}}}}}", .{
-        metrics.schema_version,
-        metrics.assets_total,
-        metrics.assets_cooked,
-        metrics.assets_cached,
-        metrics.assets_hash_match,
-        metrics.assets_errored,
-        metrics.source_bytes_read,
-        metrics.source_bytes_hashed,
-        metrics.cooked_bytes_written,
-        metrics.cache_bytes_written,
-        metrics.scan_ns,
-        metrics.dependency_graph_ns,
-        metrics.cook_ns,
-        metrics.cache_write_ns,
-        metrics.total_ns,
-        metrics.peak_allocated_bytes,
-        metrics.ending_allocated_bytes,
-    });
-    defer allocator.free(json);
-
-    std.debug.print("COOK_METRICS_JSON {s}\n", .{json});
 }
 
 fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
