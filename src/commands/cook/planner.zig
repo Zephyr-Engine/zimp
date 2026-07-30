@@ -13,19 +13,31 @@ const material_generator = @import("../../parsers/gltf/material_generator.zig");
 
 const Dependencies = std.ArrayList(Hash);
 pub const DependentsMap = std.AutoHashMap(Hash, Dependencies);
+pub const SourceIndex = u32;
+
+/// Stable, dense source state.  Paths are sorted before records are assigned so
+/// indexes are deterministic across identical scans.
+pub const SourceRecord = struct {
+    source: SourceFile,
+    info: SourceFile.FileInfo,
+    descriptor: asset_registry.AssetDescriptor,
+    output_path: ?[]const u8,
+    cached_index: ?u32,
+};
 
 pub const CookPlan = struct {
-    source_files: std.ArrayList(SourceFile),
-    levels: [][]SourceFile,
+    records: std.ArrayList(SourceRecord),
+    levels: [][]SourceIndex,
     reverse: DependentsMap,
 
     pub fn deinit(self: *CookPlan, allocator: std.mem.Allocator) void {
-        for (self.source_files.items) |file| {
-            allocator.free(file.path);
+        for (self.records.items) |record| {
+            allocator.free(record.source.path);
+            if (record.output_path) |path| allocator.free(path);
         }
-        self.source_files.deinit(allocator);
+        self.records.deinit(allocator);
 
-        DepGraph.freeLevels(allocator, self.levels);
+        freeLevels(allocator, self.levels);
 
         var reverse_iter = self.reverse.iterator();
         while (reverse_iter.next()) |entry| {
@@ -38,78 +50,178 @@ pub const CookPlan = struct {
 pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cache, metrics: *CookMetrics) !CookPlan {
     const scan_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     const scanner = AssetScanner.init(allocator, ctx.io, ctx.source);
-    var source_files = try scanner.scan();
+    var scanned = try scanner.scan();
     errdefer {
-        for (source_files.items) |file| {
+        for (scanned.items) |file| {
             allocator.free(file.path);
         }
-        source_files.deinit(allocator);
+        scanned.deinit(allocator);
     }
 
-    const generated_materials = try material_generator.generateForSources(allocator, ctx.io, ctx.source, source_files.items);
+    var generation_sources: std.ArrayList(SourceFile) = .empty;
+    defer generation_sources.deinit(allocator);
+    for (scanned.items) |source| {
+        if (try needsMaterialGeneration(source, ctx, cache)) {
+            try generation_sources.append(allocator, source);
+        }
+    }
+
+    const generated_materials = try material_generator.generateForSources(allocator, ctx.io, ctx.source, generation_sources.items);
     if (generated_materials > 0) {
         log.debug("Generated {d} material source file(s), rescanning assets", .{generated_materials});
-        scanner.deinit(&source_files);
-        source_files = try scanner.scan();
+        scanner.deinit(&scanned);
+        scanned = try scanner.scan();
     }
     const scan_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 
     metrics.scan_ns = @intCast(scan_start.durationTo(scan_end).raw.nanoseconds);
-    metrics.assets_total = @intCast(source_files.items.len);
+    std.mem.sort(SourceFile, scanned.items, {}, struct {
+        fn lessThan(_: void, a: SourceFile, b: SourceFile) bool {
+            return std.mem.order(u8, a.path, b.path) == .lt;
+        }
+    }.lessThan);
 
-    try validateUniqueOutputs(allocator, source_files.items);
+    var records: std.ArrayList(SourceRecord) = .empty;
+    errdefer {
+        for (records.items) |record| {
+            allocator.free(record.source.path);
+            if (record.output_path) |path| allocator.free(path);
+        }
+        records.deinit(allocator);
+    }
+    try records.ensureTotalCapacity(allocator, scanned.items.len);
+    for (scanned.items) |source| {
+        const descriptor = asset_registry.descriptorForSource(source);
+        const info = try source.getFileInfo(ctx.source, ctx.io);
+        const output_path = if (descriptor.cooker) |cooker|
+            try cooker.outputPath(allocator, source.path)
+        else
+            null;
+        records.appendAssumeCapacity(.{
+            .source = source,
+            .info = info,
+            .descriptor = descriptor,
+            .output_path = output_path,
+            .cached_index = cache.getIdx(source),
+        });
+    }
+    // Ownership of paths moved into records.
+    scanned.deinit(allocator);
+    scanned = .empty;
+
+    metrics.assets_total = @intCast(records.items.len);
+
+    try validateUniqueOutputs(allocator, records.items);
 
     const dep_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     var dep_graph = DepGraph.init(allocator);
     defer dep_graph.deinit();
 
-    try buildDependencyGraph(allocator, ctx, cache, &dep_graph, source_files.items);
+    try buildDependencyGraph(allocator, ctx, cache, &dep_graph, records.items);
 
     const dep_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     metrics.dependency_graph_ns = @intCast(dep_start.durationTo(dep_end).raw.nanoseconds);
 
     log.debug("Built dependency graph: {d} edge(s) across {d} source file(s)", .{
         dep_graph.totalDependencyCount(),
-        source_files.items.len,
+        records.items.len,
     });
 
-    const levels = try dep_graph.cookLevels(source_files.items);
-    errdefer DepGraph.freeLevels(allocator, levels);
+    const source_files = try sourceSlice(allocator, records.items);
+    defer allocator.free(source_files);
+    const source_levels = try dep_graph.cookLevels(source_files);
+    defer DepGraph.freeLevels(allocator, source_levels);
+    const levels = try indexLevels(allocator, records.items, source_levels);
+    errdefer freeLevels(allocator, levels);
 
     var reverse = try dep_graph.buildReverse(allocator);
     errdefer deinitReverse(allocator, &reverse);
 
     return .{
-        .source_files = source_files,
+        .records = records,
         .levels = levels,
         .reverse = reverse,
     };
 }
 
-fn validateUniqueOutputs(allocator: std.mem.Allocator, source_files: []const SourceFile) !void {
-    var outputs = std.StringHashMap([]const u8).init(allocator);
-    defer {
-        var iter = outputs.iterator();
-        while (iter.next()) |entry| allocator.free(entry.key_ptr.*);
-        outputs.deinit();
+fn needsMaterialGeneration(source: SourceFile, ctx: *const CookContext, cache: *const Cache) !bool {
+    if (source.extension != .glb and source.extension != .gltf) {
+        return false;
     }
 
-    for (source_files) |source| {
-        const cooker = asset_registry.cookerFor(source.extension) orelse continue;
-        const output_path = try cooker.outputPath(allocator, source.path);
-        errdefer allocator.free(output_path);
+    const cache_index = cache.getIdx(source) orelse return true;
+    const entry = cache.entries.items[cache_index];
+    if (entry.isErrored()) {
+        return true;
+    }
+
+    const info = try source.getFileInfo(ctx.source, ctx.io);
+    if (entry.source_size != info.size) {
+        return true;
+    }
+    if (entry.source_mtime == info.modified_ns) {
+        return false;
+    }
+
+    return entry.content_hash != try source.hash(ctx.source, ctx.io);
+}
+
+pub fn sourceSlice(allocator: std.mem.Allocator, records: []const SourceRecord) ![]SourceFile {
+    const files = try allocator.alloc(SourceFile, records.len);
+    for (records, files) |record, *file| {
+        file.* = record.source;
+    }
+    return files;
+}
+
+fn indexLevels(allocator: std.mem.Allocator, records: []const SourceRecord, source_levels: []const []const SourceFile) ![][]SourceIndex {
+    var indexes = std.AutoHashMap(Hash, SourceIndex).init(allocator);
+    defer indexes.deinit();
+    try indexes.ensureTotalCapacity(@intCast(records.len));
+    for (records, 0..) |record, index| {
+        indexes.putAssumeCapacity(record.source.hashPath(), @intCast(index));
+    }
+
+    const levels = try allocator.alloc([]SourceIndex, source_levels.len);
+    errdefer allocator.free(levels);
+    var built: usize = 0;
+    errdefer {
+        for (levels[0..built]) |level| allocator.free(level);
+    }
+    for (source_levels, 0..) |source_level, level_index| {
+        const level = try allocator.alloc(SourceIndex, source_level.len);
+        levels[level_index] = level;
+        built += 1;
+        for (source_level, level) |source, *index| {
+            index.* = indexes.get(source.hashPath()) orelse return error.MissingSourceRecord;
+        }
+    }
+    return levels;
+}
+
+fn freeLevels(allocator: std.mem.Allocator, levels: [][]SourceIndex) void {
+    for (levels) |level| allocator.free(level);
+    allocator.free(levels);
+}
+
+fn validateUniqueOutputs(allocator: std.mem.Allocator, records: []const SourceRecord) !void {
+    var outputs = std.StringHashMap([]const u8).init(allocator);
+    defer outputs.deinit();
+
+    for (records) |record| {
+        const output_path = record.output_path orelse continue;
 
         const gop = try outputs.getOrPut(output_path);
         if (gop.found_existing) {
             log.err("Cooked output collision: '{s}' and '{s}' both map to '{s}'", .{
                 gop.value_ptr.*,
-                source.path,
+                record.source.path,
                 output_path,
             });
             return error.DuplicateCookedOutput;
         }
         gop.key_ptr.* = output_path;
-        gop.value_ptr.* = source.path;
+        gop.value_ptr.* = record.source.path;
     }
 }
 
@@ -118,16 +230,13 @@ fn buildDependencyGraph(
     ctx: *const CookContext,
     cache: *Cache,
     dep_graph: *DepGraph,
-    source_files: []const SourceFile,
+    records: []const SourceRecord,
 ) !void {
-    for (source_files) |source| {
-        const info = source.getFileInfo(ctx.source, ctx.io) catch |err| {
-            log.warn("Failed to stat '{s}' while building dependency graph: {s}", .{ source.path, @errorName(err) });
-            continue;
-        };
+    for (records) |record| {
+        const source = record.source;
 
         if (cache.lookupDependencyRow(source)) |row| {
-            if (row.isFresh(info)) {
+            if (row.isFresh(record.info)) {
                 const from = source.hashPath();
                 for (row.dependencies.items) |dep| {
                     try dep_graph.addDependency(from, dep.path_hash);
@@ -150,7 +259,7 @@ fn buildDependencyGraph(
             try dep_graph.addDependency(from, dep.hashPath());
         }
 
-        try cache.upsertDependencyRow(allocator, source, info, deps);
+        try cache.upsertDependencyRow(allocator, source, record.info, deps);
     }
 }
 
@@ -198,7 +307,7 @@ test "buildDependencyGraph reuses fresh cached dependency rows" {
     var graph = DepGraph.init(testing.allocator);
     defer graph.deinit();
 
-    try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{source});
+    try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{.{ .source = source, .info = info, .descriptor = asset_registry.descriptorForSource(source), .output_path = null, .cached_index = null }});
 
     try testing.expectEqual(@as(usize, 1), graph.dependencyCount(&source));
     const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
@@ -237,7 +346,7 @@ test "buildDependencyGraph refreshes stale cached dependency rows" {
     var graph = DepGraph.init(testing.allocator);
     defer graph.deinit();
 
-    try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{source});
+    try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{.{ .source = source, .info = info, .descriptor = asset_registry.descriptorForSource(source), .output_path = null, .cached_index = null }});
 
     const row = cache.lookupDependencyRow(source) orelse return error.MissingDependencyRow;
     try testing.expect(row.isFresh(info));
@@ -249,17 +358,17 @@ test "buildDependencyGraph refreshes stale cached dependency rows" {
 }
 
 test "validateUniqueOutputs rejects sources with the same cooked path" {
-    const sources = [_]SourceFile{
-        SourceFile.fromPath("textures/hero.png"),
-        SourceFile.fromPath("textures/hero.jpg"),
+    const records = [_]SourceRecord{
+        .{ .source = SourceFile.fromPath("textures/hero.png"), .info = .{ .size = 0, .modified_ns = 0 }, .descriptor = asset_registry.descriptorForExtension(.png), .output_path = "textures/hero.ztex", .cached_index = null },
+        .{ .source = SourceFile.fromPath("textures/hero.jpg"), .info = .{ .size = 0, .modified_ns = 0 }, .descriptor = asset_registry.descriptorForExtension(.jpg), .output_path = "textures/hero.ztex", .cached_index = null },
     };
-    try testing.expectError(error.DuplicateCookedOutput, validateUniqueOutputs(testing.allocator, &sources));
+    try testing.expectError(error.DuplicateCookedOutput, validateUniqueOutputs(testing.allocator, &records));
 }
 
 test "validateUniqueOutputs allows repeated stems in different directories" {
-    const sources = [_]SourceFile{
-        SourceFile.fromPath("characters/hero.png"),
-        SourceFile.fromPath("ui/hero.png"),
+    const records = [_]SourceRecord{
+        .{ .source = SourceFile.fromPath("characters/hero.png"), .info = .{ .size = 0, .modified_ns = 0 }, .descriptor = asset_registry.descriptorForExtension(.png), .output_path = "characters/hero.ztex", .cached_index = null },
+        .{ .source = SourceFile.fromPath("ui/hero.png"), .info = .{ .size = 0, .modified_ns = 0 }, .descriptor = asset_registry.descriptorForExtension(.png), .output_path = "ui/hero.ztex", .cached_index = null },
     };
-    try validateUniqueOutputs(testing.allocator, &sources);
+    try validateUniqueOutputs(testing.allocator, &records);
 }

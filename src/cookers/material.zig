@@ -1,9 +1,11 @@
 const std = @import("std");
 
 const Cooker = @import("cooker.zig").Cooker;
+const CookInput = @import("cooker.zig").CookInput;
 const file_read = @import("../shared/file_read.zig");
 const raw_material = @import("../assets/raw/material.zig");
 const raw_shader = @import("../assets/raw/shader.zig");
+const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const CookedMaterial = @import("../assets/cooked/material.zig").CookedMaterial;
 const slotNameToIndex = @import("../assets/cooked/material.zig").slotNameToIndex;
 const zamat = @import("../formats/zamat.zig");
@@ -13,27 +15,16 @@ pub fn cooker() Cooker {
     return .{ .cook_fn = cookMaterial, .asset_type = .material };
 }
 
-fn cookMaterial(
-    allocator: std.mem.Allocator,
-    io: std.Io,
-    source_dir: std.Io.Dir,
-    file_path: []const u8,
-    writer: *std.Io.Writer,
-) !void {
-    const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{
-        .chunk_size = 256 * 1024,
-    });
-    defer allocator.free(file_result.bytes);
+fn cookMaterial(input: *const CookInput) !void {
+    var source = try raw_material.parseMaterialSource(input.bytes, input.allocator);
+    defer source.deinit(input.allocator);
 
-    var source = try raw_material.parseMaterialSource(file_result.bytes, allocator);
-    defer source.deinit(allocator);
+    try validateReferences(input.allocator, input.io, input.source_dir, input.source.path, &source);
 
-    try validateReferences(allocator, io, source_dir, file_path, &source);
+    var cooked = try CookedMaterial.cook(input.allocator, &source);
+    defer cooked.deinit(input.allocator);
 
-    var cooked = try CookedMaterial.cook(allocator, &source);
-    defer cooked.deinit(allocator);
-
-    try zamat.write(writer, cooked);
+    try zamat.write(input.writer, cooked);
 }
 
 fn validateReferences(
@@ -48,11 +39,11 @@ fn validateReferences(
     const frag_path = try std.fmt.allocPrint(allocator, "{s}.frag", .{source.shader_path});
     defer allocator.free(frag_path);
 
-    if (!fileExists(source_dir, io, vert_path)) {
+    if (!file_read.fileExists(source_dir, io, vert_path)) {
         log.err("{s}: shader '{s}' not found - missing {s}", .{ file_path, source.shader_path, vert_path });
         return error.MissingShader;
     }
-    if (!fileExists(source_dir, io, frag_path)) {
+    if (!file_read.fileExists(source_dir, io, frag_path)) {
         log.err("{s}: shader '{s}' not found - missing {s}", .{ file_path, source.shader_path, frag_path });
         return error.MissingShader;
     }
@@ -61,7 +52,7 @@ fn validateReferences(
     defer reflected.deinit(allocator);
 
     for (source.textures) |slot| {
-        if (!fileExists(source_dir, io, slot.texture_path)) {
+        if (!file_read.fileExists(source_dir, io, slot.texture_path)) {
             log.warn("{s}: texture '{s}' not found", .{ file_path, slot.texture_path });
         }
         if (slotNameToIndex(slot.slot_name) == null) {
@@ -76,12 +67,6 @@ fn validateReferences(
 
     try validateBindings(file_path, source);
     source.required_variants = try selectRequiredVariants(allocator, source, reflected.variants);
-}
-
-fn fileExists(dir: std.Io.Dir, io: std.Io, path: []const u8) bool {
-    const file = dir.openFile(io, path, .{}) catch return false;
-    file.close(io);
-    return true;
 }
 
 const UniformKind = enum {
@@ -335,6 +320,14 @@ fn findUniformInList(uniforms: []const Uniform, name: []const u8) ?Uniform {
 
 const testing = std.testing;
 
+fn cookMaterialFixture(allocator: std.mem.Allocator, io: std.Io, source_dir: std.Io.Dir, file_path: []const u8, writer: *std.Io.Writer) !void {
+    const result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{});
+    defer allocator.free(result.bytes);
+    const source = SourceFile.fromPath(file_path);
+    const input = CookInput{ .allocator = allocator, .io = io, .source_dir = source_dir, .source = source, .bytes = result.bytes, .writer = writer };
+    try cooker().cook(&input);
+}
+
 fn writeTestFile(dir: std.Io.Dir, path: []const u8, bytes: []const u8) !void {
     if (std.fs.path.dirname(path)) |dirname| {
         try dir.createDirPath(testing.io, dirname);
@@ -371,7 +364,7 @@ test "material cooker writes zamat" {
 
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
+    try cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
 
     try testing.expectEqualSlices(u8, zamat.MAGIC, out[0..zamat.MAGIC.len]);
 
@@ -396,7 +389,7 @@ test "material cooker errors on missing shader" {
 
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try testing.expectError(error.MissingShader, cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
+    try testing.expectError(error.MissingShader, cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
 }
 
 test "material cooker rejects params missing from shader reflection" {
@@ -415,7 +408,7 @@ test "material cooker rejects params missing from shader reflection" {
 
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try testing.expectError(error.MissingShaderUniform, cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
+    try testing.expectError(error.MissingShaderUniform, cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
 }
 
 test "material cooker rejects param type mismatch" {
@@ -438,7 +431,7 @@ test "material cooker rejects param type mismatch" {
 
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try testing.expectError(error.ShaderUniformTypeMismatch, cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
+    try testing.expectError(error.ShaderUniformTypeMismatch, cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
 }
 
 test "material cooker rejects texture and param binding collision" {
@@ -469,7 +462,7 @@ test "material cooker rejects texture and param binding collision" {
 
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try testing.expectError(error.DuplicateShaderBinding, cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
+    try testing.expectError(error.DuplicateShaderBinding, cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
 }
 
 test "material cooker accepts custom texture slot with explicit resource" {
@@ -495,7 +488,7 @@ test "material cooker accepts custom texture slot with explicit resource" {
 
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
+    try cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
 }
 
 test "material cooker reflects layout-qualified uniforms" {
@@ -522,7 +515,7 @@ test "material cooker reflects layout-qualified uniforms" {
 
     var out: [1024]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
+    try cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
 }
 
 test "material cooker selects declared variants from material contents" {
@@ -550,7 +543,7 @@ test "material cooker selects declared variants from material contents" {
 
     var out: [2048]u8 = undefined;
     var writer = std.Io.Writer.fixed(&out);
-    try cookMaterial(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
+    try cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
 
     var reader = std.Io.Reader.fixed(out[0..writer.end]);
     var loaded = try zamat.Zamat.read(testing.allocator, &reader);

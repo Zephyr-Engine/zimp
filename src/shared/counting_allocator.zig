@@ -1,10 +1,10 @@
 const std = @import("std");
 
 pub const CountingAllocator = struct {
+    /// Must be thread-safe because cooking can allocate concurrently.
     backing_allocator: std.mem.Allocator,
-    mutex: std.atomic.Mutex = .unlocked,
-    current_requested_bytes: usize = 0,
-    peak_requested_bytes: usize = 0,
+    current_requested_bytes: std.atomic.Value(usize) = .init(0),
+    peak_requested_bytes: std.atomic.Value(usize) = .init(0),
 
     pub fn init(backing_allocator: std.mem.Allocator) CountingAllocator {
         return .{ .backing_allocator = backing_allocator };
@@ -17,31 +17,25 @@ pub const CountingAllocator = struct {
         };
     }
 
-    fn lock(self: *CountingAllocator) void {
-        while (!self.mutex.tryLock()) {
-            std.atomic.spinLoopHint();
-        }
-    }
-
     fn recordGrowth(self: *CountingAllocator, delta: usize) void {
-        self.current_requested_bytes = self.current_requested_bytes +| delta;
-        if (self.current_requested_bytes > self.peak_requested_bytes) {
-            self.peak_requested_bytes = self.current_requested_bytes;
-        }
+        const current = self.current_requested_bytes.fetchAdd(delta, .monotonic) +| delta;
+        _ = self.peak_requested_bytes.fetchMax(current, .monotonic);
     }
 
     fn recordShrink(self: *CountingAllocator, delta: usize) void {
-        if (delta >= self.current_requested_bytes) {
-            self.current_requested_bytes = 0;
-            return;
-        }
-        self.current_requested_bytes -= delta;
+        _ = self.current_requested_bytes.fetchSub(delta, .monotonic);
+    }
+
+    pub fn currentRequestedBytes(self: *const CountingAllocator) usize {
+        return self.current_requested_bytes.load(.monotonic);
+    }
+
+    pub fn peakRequestedBytes(self: *const CountingAllocator) usize {
+        return self.peak_requested_bytes.load(.monotonic);
     }
 
     fn alloc(ctx: *anyopaque, len: usize, alignment: std.mem.Alignment, ret_addr: usize) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.lock();
-        defer self.mutex.unlock();
         const ptr = self.backing_allocator.rawAlloc(len, alignment, ret_addr) orelse return null;
         self.recordGrowth(len);
         return ptr;
@@ -49,8 +43,6 @@ pub const CountingAllocator = struct {
 
     fn resize(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) bool {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.lock();
-        defer self.mutex.unlock();
         const ok = self.backing_allocator.rawResize(memory, alignment, new_len, ret_addr);
         if (!ok) return false;
 
@@ -64,8 +56,6 @@ pub const CountingAllocator = struct {
 
     fn remap(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret_addr: usize) ?[*]u8 {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.lock();
-        defer self.mutex.unlock();
         const ptr = self.backing_allocator.rawRemap(memory, alignment, new_len, ret_addr) orelse return null;
 
         if (new_len >= memory.len) {
@@ -78,8 +68,6 @@ pub const CountingAllocator = struct {
 
     fn free(ctx: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret_addr: usize) void {
         const self: *CountingAllocator = @ptrCast(@alignCast(ctx));
-        self.lock();
-        defer self.mutex.unlock();
         self.backing_allocator.rawFree(memory, alignment, ret_addr);
         self.recordShrink(memory.len);
     }
@@ -100,11 +88,11 @@ test "CountingAllocator tracks current and peak requested bytes" {
 
     const a = try allocator.alloc(u8, 64);
     defer allocator.free(a);
-    try testing.expectEqual(@as(usize, 64), tracker.current_requested_bytes);
-    try testing.expectEqual(@as(usize, 64), tracker.peak_requested_bytes);
+    try testing.expectEqual(@as(usize, 64), tracker.currentRequestedBytes());
+    try testing.expectEqual(@as(usize, 64), tracker.peakRequestedBytes());
 
     const b = try allocator.alloc(u8, 32);
     defer allocator.free(b);
-    try testing.expectEqual(@as(usize, 96), tracker.current_requested_bytes);
-    try testing.expectEqual(@as(usize, 96), tracker.peak_requested_bytes);
+    try testing.expectEqual(@as(usize, 96), tracker.currentRequestedBytes());
+    try testing.expectEqual(@as(usize, 96), tracker.peakRequestedBytes());
 }

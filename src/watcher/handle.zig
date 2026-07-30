@@ -51,6 +51,7 @@ pub fn waitForInitialCook(self: *const WatchHandle) !void {
 }
 
 pub fn start(
+    /// Must be thread-safe: cooking work is dispatched concurrently.
     gpa: std.mem.Allocator,
     io: std.Io,
     project: *const ProjectManifest,
