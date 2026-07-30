@@ -23,7 +23,7 @@ fn cookTexture(
     });
     defer allocator.free(file_result.bytes);
 
-    const raw = try RawTexture.init(file_path, file_result.bytes, allocator);
+    const raw = try RawTexture.init(file_path, file_result.bytes);
     defer raw.deinit(allocator);
 
     var cooked = try CookedTexture.cook(allocator, &raw);

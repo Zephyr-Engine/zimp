@@ -77,23 +77,40 @@ pub const CookedTexture = struct {
 
     pub fn cook(allocator: std.mem.Allocator, raw: *const RawTexture) !CookedTexture {
         const format = selectFormat(raw.class);
-
-        const raw_mips = try raw.generateMipmaps(allocator);
-        defer {
-            for (raw_mips) |mip| mip.deinit(allocator);
-            allocator.free(raw_mips);
-        }
-
-        const mips = try allocator.alloc(CookedMip, raw_mips.len);
+        const mip_count = std.math.log2(@max(raw.width, raw.height)) + 1;
+        const mips = try allocator.alloc(CookedMip, mip_count);
         errdefer allocator.free(mips);
 
         var cooked_count: usize = 0;
         errdefer for (mips[0..cooked_count]) |mip| allocator.free(mip.data);
 
-        for (raw_mips, mips) |*src, *dst| {
-            dst.* = try cookMip(allocator, src, format);
-            cooked_count += 1;
+        if (raw.class == .normal_linear) raw.validateNormals();
+        mips[cooked_count] = try cookMip(allocator, raw, format);
+        cooked_count += 1;
+
+        if (raw.width > 1 or raw.height > 1) {
+            const scratch = try allocator.alloc(f32, raw.mipScratchLen());
+            defer allocator.free(scratch);
+
+            var previous: ?RawTexture = null;
+            defer if (previous) |*mip| mip.deinit(allocator);
+
+            while (true) {
+                const source: *const RawTexture = if (previous) |*mip| mip else raw;
+                const next = try source.downsample(allocator, scratch);
+                if (previous) |*mip| {
+                    mip.deinit(allocator);
+                }
+                previous = next;
+
+                mips[cooked_count] = try cookMip(allocator, &previous.?, format);
+                cooked_count += 1;
+                if (previous.?.width == 1 and previous.?.height == 1) {
+                    break;
+                }
+            }
         }
+        std.debug.assert(cooked_count == mips.len);
 
         return .{
             .width = raw.width,
@@ -160,39 +177,33 @@ fn cookMip(allocator: std.mem.Allocator, src: *const RawTexture, format: TexelFo
             }
         },
         .bc4 => {
-            const ldr = src.pixels.ldr;
-            const r_channel = try allocator.alloc(u8, pixel_count);
-            defer allocator.free(r_channel);
-            for (0..pixel_count) |i| r_channel[i] = ldr[i * 4];
-            compression.encode(.bc4, r_channel, src.width, src.height, data);
+            compression.encodeChannels(.bc4, .{
+                .bytes = src.pixels.ldr,
+                .width = src.width,
+                .height = src.height,
+                .row_stride = @as(usize, src.width) * src.channels,
+                .pixel_stride = src.channels,
+                .channels = .{ 0, 0 },
+                .channel_count = 1,
+            }, data);
         },
         .bc5 => {
-            const ldr = src.pixels.ldr;
-            const rg = try allocator.alloc(u8, pixel_count * 2);
-            defer allocator.free(rg);
-            for (0..pixel_count) |i| {
-                rg[i * 2 + 0] = ldr[i * 4 + 0];
-                rg[i * 2 + 1] = ldr[i * 4 + 1];
-            }
-            compression.encode(.bc5, rg, src.width, src.height, data);
+            compression.encodeChannels(.bc5, .{
+                .bytes = src.pixels.ldr,
+                .width = src.width,
+                .height = src.height,
+                .row_stride = @as(usize, src.width) * src.channels,
+                .pixel_stride = src.channels,
+                .channels = .{ 0, 1 },
+                .channel_count = 2,
+            }, data);
         },
         .bc7 => {
             // Source is already the RGBA8 layout stb_image produced.
             compression.encode(.bc7, src.pixels.ldr, src.width, src.height, data);
         },
         .bc6h => {
-            const hdr = src.pixels.hdr;
-            const rgb_half = try allocator.alloc(u8, pixel_count * 6);
-            defer allocator.free(rgb_half);
-            for (0..pixel_count) |i| {
-                const r: f16 = @floatCast(hdr[i * 3 + 0]);
-                const g: f16 = @floatCast(hdr[i * 3 + 1]);
-                const b: f16 = @floatCast(hdr[i * 3 + 2]);
-                std.mem.writeInt(u16, rgb_half[i * 6 + 0 ..][0..2], @bitCast(r), .little);
-                std.mem.writeInt(u16, rgb_half[i * 6 + 2 ..][0..2], @bitCast(g), .little);
-                std.mem.writeInt(u16, rgb_half[i * 6 + 4 ..][0..2], @bitCast(b), .little);
-            }
-            compression.encode(.bc6h, rgb_half, src.width, src.height, data);
+            compression.encodeF32(.bc6h, src.pixels.hdr, src.width, src.height, src.channels, data);
         },
     }
 
@@ -210,6 +221,7 @@ fn makeUniformRaw(allocator: std.mem.Allocator, width: u32, height: u32, class: 
         .channels = 4,
         .pixels = .{ .ldr = pixels },
         .class = class,
+        .owner = .allocator,
     };
 }
 
@@ -227,6 +239,7 @@ fn makeUniformRawHdr(allocator: std.mem.Allocator, width: u32, height: u32, fill
         .channels = 3,
         .pixels = .{ .hdr = pixels },
         .class = .hdr_linear,
+        .owner = .allocator,
     };
 }
 
@@ -373,7 +386,7 @@ test "CookedTexture.cook: normal_linear produces platform-compatible mips" {
         pixels[i * 4 + 2] = 255;
         pixels[i * 4 + 3] = 255;
     }
-    var raw = RawTexture{ .width = 4, .height = 4, .channels = 4, .pixels = .{ .ldr = pixels }, .class = .normal_linear };
+    var raw = RawTexture{ .width = 4, .height = 4, .channels = 4, .pixels = .{ .ldr = pixels }, .class = .normal_linear, .owner = .allocator };
     defer raw.deinit(alloc);
 
     var cooked = try CookedTexture.cook(alloc, &raw);

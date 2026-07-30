@@ -30,6 +30,37 @@ pub fn encode(src: []const u8, width: u32, height: u32, dst: []u8) void {
     }
 }
 
+pub fn encodeChannels(source: compression.ChannelView, dst: []u8) void {
+    std.debug.assert(source.channel_count == 1);
+    const blocks_x = (source.width + 3) / 4;
+    const blocks_y = (source.height + 3) / 4;
+    std.debug.assert(dst.len == @as(usize, blocks_x) * @as(usize, blocks_y) * 8);
+
+    var block: [16]u8 = undefined;
+    for (0..blocks_y) |by| {
+        for (0..blocks_x) |bx| {
+            const origin_x = @as(u32, @intCast(bx)) * 4;
+            const origin_y = @as(u32, @intCast(by)) * 4;
+            extractChannelBlock(source, origin_x, origin_y, source.channels[0], &block);
+            const encoded = encodeBlock(block);
+            const dst_off = (by * blocks_x + bx) * 8;
+            @memcpy(dst[dst_off..][0..8], &encoded);
+        }
+    }
+}
+
+fn extractChannelBlock(source: compression.ChannelView, origin_x: u32, origin_y: u32, channel: u32, dst: *[16]u8) void {
+    std.debug.assert(channel < source.pixel_stride);
+    for (0..4) |ly| {
+        const y = @min(origin_y + @as(u32, @intCast(ly)), source.height - 1);
+        for (0..4) |lx| {
+            const x = @min(origin_x + @as(u32, @intCast(lx)), source.width - 1);
+            const offset = @as(usize, y) * source.row_stride + @as(usize, x) * source.pixel_stride + channel;
+            dst[ly * 4 + lx] = source.bytes[offset];
+        }
+    }
+}
+
 /// Encode a single 4x4 block of single-channel bytes as 8 BC4 output bytes.
 ///
 /// Always emits 8-value mode (endpoints red0 = max, red1 = min). If max > min,
@@ -246,4 +277,29 @@ test "encode: 4x4 in-bounds block matches encodeBlock directly" {
 
     const expected = encodeBlock(src);
     try testing.expectEqualSlices(u8, &expected, &dst);
+}
+
+test "encodeChannels matches compact single-channel input" {
+    var rgba: [5 * 3 * 4]u8 = undefined;
+    var compact: [5 * 3]u8 = undefined;
+    for (0..compact.len) |i| {
+        compact[i] = @intCast(i * 13);
+        rgba[i * 4 + 0] = compact[i];
+        rgba[i * 4 + 1] = 1;
+        rgba[i * 4 + 2] = 2;
+        rgba[i * 4 + 3] = 3;
+    }
+    var expected: [16]u8 = undefined;
+    var actual: [16]u8 = undefined;
+    encode(&compact, 5, 3, &expected);
+    encodeChannels(.{
+        .bytes = &rgba,
+        .width = 5,
+        .height = 3,
+        .row_stride = 5 * 4,
+        .pixel_stride = 4,
+        .channels = .{ 0, 0 },
+        .channel_count = 1,
+    }, &actual);
+    try testing.expectEqualSlices(u8, &expected, &actual);
 }

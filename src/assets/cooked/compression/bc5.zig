@@ -41,6 +41,41 @@ pub fn encode(src: []const u8, width: u32, height: u32, dst: []u8) void {
     }
 }
 
+pub fn encodeChannels(source: compression.ChannelView, dst: []u8) void {
+    std.debug.assert(source.channel_count == 2);
+    const blocks_x = (source.width + 3) / 4;
+    const blocks_y = (source.height + 3) / 4;
+    std.debug.assert(dst.len == @as(usize, blocks_x) * @as(usize, blocks_y) * 16);
+
+    var r_block: [16]u8 = undefined;
+    var g_block: [16]u8 = undefined;
+    for (0..blocks_y) |by| {
+        for (0..blocks_x) |bx| {
+            const origin_x = @as(u32, @intCast(bx)) * 4;
+            const origin_y = @as(u32, @intCast(by)) * 4;
+            extractChannelBlock(source, origin_x, origin_y, source.channels[0], &r_block);
+            extractChannelBlock(source, origin_x, origin_y, source.channels[1], &g_block);
+            const r_encoded = bc4.encodeBlock(r_block);
+            const g_encoded = bc4.encodeBlock(g_block);
+            const dst_off = (by * blocks_x + bx) * 16;
+            @memcpy(dst[dst_off..][0..8], &r_encoded);
+            @memcpy(dst[dst_off + 8 ..][0..8], &g_encoded);
+        }
+    }
+}
+
+fn extractChannelBlock(source: compression.ChannelView, origin_x: u32, origin_y: u32, channel: u32, dst: *[16]u8) void {
+    std.debug.assert(channel < source.pixel_stride);
+    for (0..4) |ly| {
+        const y = @min(origin_y + @as(u32, @intCast(ly)), source.height - 1);
+        for (0..4) |lx| {
+            const x = @min(origin_x + @as(u32, @intCast(lx)), source.width - 1);
+            const offset = @as(usize, y) * source.row_stride + @as(usize, x) * source.pixel_stride + channel;
+            dst[ly * 4 + lx] = source.bytes[offset];
+        }
+    }
+}
+
 const testing = std.testing;
 
 test "encode: output size matches ceil(w/4)*ceil(h/4)*16" {
@@ -98,4 +133,30 @@ test "encode: R and G channels are encoded independently" {
     try testing.expectEqual(@as(u8, 128), dst[8]);
     try testing.expectEqual(@as(u8, 128), dst[9]);
     for (dst[10..16]) |b| try testing.expectEqual(@as(u8, 0), b);
+}
+
+test "encodeChannels matches compact RG input" {
+    var rgba: [5 * 3 * 4]u8 = undefined;
+    var compact: [5 * 3 * 2]u8 = undefined;
+    for (0..(5 * 3)) |i| {
+        compact[i * 2 + 0] = @intCast(i * 11);
+        compact[i * 2 + 1] = @intCast(255 - i * 9);
+        rgba[i * 4 + 0] = compact[i * 2 + 0];
+        rgba[i * 4 + 1] = compact[i * 2 + 1];
+        rgba[i * 4 + 2] = 2;
+        rgba[i * 4 + 3] = 3;
+    }
+    var expected: [32]u8 = undefined;
+    var actual: [32]u8 = undefined;
+    encode(&compact, 5, 3, &expected);
+    encodeChannels(.{
+        .bytes = &rgba,
+        .width = 5,
+        .height = 3,
+        .row_stride = 5 * 4,
+        .pixel_stride = 4,
+        .channels = .{ 0, 1 },
+        .channel_count = 2,
+    }, &actual);
+    try testing.expectEqualSlices(u8, &expected, &actual);
 }

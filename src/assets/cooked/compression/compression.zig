@@ -7,6 +7,16 @@ pub const bc5 = @import("bc5.zig");
 pub const bc7 = @import("bc7.zig");
 pub const bc6h = @import("bc6h.zig");
 
+pub const ChannelView = struct {
+    bytes: []const u8,
+    width: u32,
+    height: u32,
+    row_stride: usize,
+    pixel_stride: u32,
+    channels: [2]u32,
+    channel_count: u8,
+};
+
 /// Encode a mip into its block-compressed on-disk representation.
 ///
 /// `src` layout depends on `format`:
@@ -31,6 +41,35 @@ pub fn encode(
         .bc6h => bc6h.encode(src, width, height, dst),
         else => unreachable,
     }
+}
+
+/// Encode one or two channels from an interleaved image without first copying
+/// them into a full-image R or RG buffer.
+pub fn encodeChannels(format: TexelFormat, source: ChannelView, dst: []u8) void {
+    std.debug.assert(dst.len == format.imageSize(source.width, source.height));
+    std.debug.assert(source.channel_count >= 1 and source.channel_count <= 2);
+    std.debug.assert(source.row_stride >= @as(usize, source.width) * source.pixel_stride);
+    switch (format) {
+        .bc4 => bc4.encodeChannels(source, dst),
+        .bc5 => bc5.encodeChannels(source, dst),
+        else => unreachable,
+    }
+}
+
+/// Encode an interleaved f32 RGB image directly to BC6H. Half conversion is
+/// performed per 4x4 block by the encoder.
+pub fn encodeF32(
+    format: TexelFormat,
+    source: []const f32,
+    width: u32,
+    height: u32,
+    pixel_stride: u32,
+    dst: []u8,
+) void {
+    std.debug.assert(format == .bc6h);
+    std.debug.assert(source.len >= @as(usize, width) * @as(usize, height) * pixel_stride);
+    std.debug.assert(dst.len == format.imageSize(width, height));
+    bc6h.encodeF32(source, width, height, pixel_stride, dst);
 }
 
 /// Read a 4x4 block of `bytes_per_pixel`-sized texels into `dst`, replicating
