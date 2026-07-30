@@ -108,6 +108,9 @@ pub const ObjParser = struct {
             .indices = try indices.toOwnedSlice(allocator),
             .submeshes = submesh,
             .name = null,
+            .guarantees = .{
+                .unused_vertices_removed = true,
+            },
         };
     }
 
@@ -318,4 +321,31 @@ test "resolveIndex zero returns null" {
 
 test "resolveIndex negative out of range returns null" {
     try testing.expectEqual(@as(?u32, null), resolveIndex("-5", 3));
+}
+
+test "OBJ source-index deduplication does not claim constructed vertices are unique" {
+    const allocator = testing.allocator;
+    var parser = ObjParser{
+        .allocator = allocator,
+        .file_bytes =
+        \\v 0 0 0
+        \\v 1 0 0
+        \\v 0 1 0
+        \\v 0 0 0
+        \\f 1 2 3
+        \\f 4 2 3
+        ,
+    };
+    var mesh = try parser.parse(allocator);
+    defer allocator.free(mesh.vertices);
+    defer allocator.free(mesh.indices);
+    defer allocator.free(mesh.submeshes);
+
+    // Source index 4 has the same position as source index 1. The parser's
+    // tuple map retains both entries, so the optimizer must not be skipped.
+    try testing.expectEqual(@as(usize, 4), mesh.vertices.len);
+    try testing.expect(!mesh.guarantees.vertices_unique);
+
+    try mesh.optimize(allocator);
+    try testing.expectEqual(@as(usize, 3), mesh.vertices.len);
 }

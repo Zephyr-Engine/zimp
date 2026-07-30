@@ -3,6 +3,7 @@ const std = @import("std");
 const raw_mesh = @import("../raw/mesh.zig");
 const RawVertex = raw_mesh.RawVertex;
 const RawMesh = raw_mesh.RawMesh;
+const MeshScratch = raw_mesh.MeshScratch;
 
 pub const FormatFlags = packed struct {
     has_normals: bool = false,
@@ -96,7 +97,13 @@ pub const CookedMesh = struct {
     }
 
     pub fn cook(allocator: std.mem.Allocator, mesh: *RawMesh) !CookedMesh {
-        try mesh.optimize(allocator);
+        var scratch = MeshScratch.init(allocator);
+        defer scratch.deinit();
+        return cookWithScratch(allocator, mesh, &scratch);
+    }
+
+    pub fn cookWithScratch(allocator: std.mem.Allocator, mesh: *RawMesh, scratch: *MeshScratch) !CookedMesh {
+        try mesh.optimizeWithScratch(allocator, scratch);
 
         const flags: FormatFlags = if (mesh.vertices.len > 0) .{
             .has_normals = mesh.vertices[0].normal != null,

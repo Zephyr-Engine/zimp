@@ -1,4 +1,5 @@
 const std = @import("std");
+pub const AccessorView = @import("accessor_view.zig").AccessorView;
 
 pub const Gltf = struct {
     value: GltfJson,
@@ -103,16 +104,12 @@ pub const GltfAccessor = struct {
     componentType: AccessorComponentType,
     count: u32,
     type: AccessorType,
+    normalized: bool = false,
     min: ?[]f64 = null,
     max: ?[]f64 = null,
 
-    pub fn readAccessorSlice(self: *const GltfAccessor, comptime T: type, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, buffers: []const []const u8) GltfAccessorError![]align(1) const T {
-        const bytes = try self.readAccessor(allocator, buffer_views, buffers);
-        return std.mem.bytesAsSlice(T, bytes);
-    }
-
-    pub fn readAccessor(self: *const GltfAccessor, allocator: std.mem.Allocator, buffer_views: []GltfBufferView, buffers: []const []const u8) GltfAccessorError![]const u8 {
-        const buffer_view_value = self.bufferView orelse return &.{};
+    pub fn accessorView(self: *const GltfAccessor, buffer_views: []const GltfBufferView, buffers: []const []const u8) GltfAccessorError!AccessorView {
+        const buffer_view_value = self.bufferView orelse return GltfAccessorError.OutOfBounds;
         if (buffer_view_value >= buffer_views.len) {
             return GltfAccessorError.OutOfBounds;
         }
@@ -122,34 +119,46 @@ pub const GltfAccessor = struct {
         }
         const bin = buffers[buffer_view.buffer];
 
-        const start: usize = self.byteOffset + buffer_view.byteOffset;
-        const component_size = self.componentType.size();
-        const num_components = self.type.componentCount();
-        const element_size = component_size * num_components;
-        const stride = buffer_view.byteStride orelse element_size;
-
-        // Tightly packed — return a direct slice, no copy needed
-        if (stride == element_size) {
-            const end = start + element_size * self.count;
-            if (end > bin.len) {
-                return GltfAccessorError.OutOfBounds;
-            }
-            return bin[start..end];
-        }
-
-        // Interleaved — copy each element's data into a contiguous buffer
-        const total = element_size * self.count;
-        if (start + stride * (self.count - 1) + element_size > bin.len) {
+        const view_start: usize = buffer_view.byteOffset;
+        const view_len: usize = buffer_view.byteLength;
+        if (view_start > bin.len or view_len > bin.len - view_start) {
             return GltfAccessorError.OutOfBounds;
         }
 
-        const out = try allocator.alloc(u8, total);
-        for (0..self.count) |i| {
-            const src_offset = start + stride * i;
-            @memcpy(out[element_size * i ..][0..element_size], bin[src_offset..][0..element_size]);
+        const accessor_offset: usize = self.byteOffset;
+        if (accessor_offset > view_len) {
+            return GltfAccessorError.OutOfBounds;
         }
 
-        return out;
+        const start = std.math.add(usize, view_start, accessor_offset) catch return GltfAccessorError.OutOfBounds;
+        const component_size = self.componentType.size();
+        const num_components = self.type.componentCount();
+        const element_size = std.math.mul(usize, component_size, num_components) catch return GltfAccessorError.OutOfBounds;
+        const stride: usize = buffer_view.byteStride orelse @intCast(element_size);
+        if (stride < element_size or stride % component_size != 0) {
+            return GltfAccessorError.OutOfBounds;
+        }
+
+        const count: usize = self.count;
+        if (count > 0) {
+            const last_stride = std.math.mul(usize, stride, count - 1) catch return GltfAccessorError.OutOfBounds;
+            const last_start = std.math.add(usize, accessor_offset, last_stride) catch return GltfAccessorError.OutOfBounds;
+            const required = std.math.add(usize, last_start, element_size) catch return GltfAccessorError.OutOfBounds;
+            if (required > view_len) {
+                return GltfAccessorError.OutOfBounds;
+            }
+        }
+
+        return .{
+            .bytes = bin,
+            .start = start,
+            .stride = stride,
+            .element_size = element_size,
+            .count = count,
+            .component_type = @intFromEnum(self.componentType),
+            .component_count = num_components,
+            .normalized = self.normalized,
+        };
     }
 };
 
@@ -606,6 +615,44 @@ test "parse returns error on invalid accessor type" {
     try testing.expectError(error.InvalidEnumTag, Gltf.parse(
         \\{"accessors":[{"componentType":5126,"count":1,"type":"INVALID"}]}
     , testing.allocator));
+}
+
+test "accessor views decode interleaved data without a copy" {
+    const bytes = [_]u8{
+        0, 0, 128, 63, 0, 0, 0,   64, 0xaa, 0xbb, 0xcc, 0xdd,
+        0, 0, 64,  64, 0, 0, 128, 64, 0xee, 0xff, 0x11, 0x22,
+    };
+    const views = [_]GltfBufferView{.{ .buffer = 0, .byteLength = bytes.len, .byteStride = 12 }};
+    const buffers = [_][]const u8{&bytes};
+    const accessor = GltfAccessor{
+        .bufferView = 0,
+        .componentType = .FLOAT,
+        .count = 2,
+        .type = .VEC2,
+    };
+
+    const view = try accessor.accessorView(&views, &buffers);
+    try testing.expectEqual(@intFromPtr(bytes[0..].ptr), @intFromPtr(view.bytes.ptr));
+    try testing.expectEqual([2]f32{ 1, 2 }, try view.readVec2(0));
+    try testing.expectEqual([2]f32{ 3, 4 }, try view.readVec2(1));
+}
+
+test "accessor view validates zero count, stride, truncation, and overflow" {
+    const bytes = [_]u8{0} ** 16;
+    const buffers = [_][]const u8{&bytes};
+    const views = [_]GltfBufferView{.{ .buffer = 0, .byteLength = bytes.len, .byteStride = 8 }};
+    const packed_views = [_]GltfBufferView{.{ .buffer = 0, .byteLength = bytes.len }};
+    const zero_count = GltfAccessor{ .bufferView = 0, .byteOffset = 16, .componentType = .FLOAT, .count = 0, .type = .VEC3 };
+    try testing.expectEqual(@as(usize, 0), (try zero_count.accessorView(&packed_views, &buffers)).count);
+
+    const undersized_stride = GltfAccessor{ .bufferView = 0, .componentType = .FLOAT, .count = 1, .type = .VEC3 };
+    try testing.expectError(GltfAccessorError.OutOfBounds, undersized_stride.accessorView(&views, &buffers));
+
+    const truncated = GltfAccessor{ .bufferView = 0, .byteOffset = 8, .componentType = .FLOAT, .count = 2, .type = .VEC2 };
+    try testing.expectError(GltfAccessorError.OutOfBounds, truncated.accessorView(&views, &buffers));
+
+    const overflow = GltfAccessor{ .bufferView = 0, .byteOffset = std.math.maxInt(u32), .componentType = .FLOAT, .count = 1, .type = .VEC2 };
+    try testing.expectError(GltfAccessorError.OutOfBounds, overflow.accessorView(&views, &buffers));
 }
 
 test "deinit frees memory" {

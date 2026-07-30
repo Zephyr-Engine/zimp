@@ -5,11 +5,13 @@ const GltfJson = gltf_parser.GltfJson;
 const GltfBufferView = gltf_parser.GltfBufferView;
 const GltfAccessor = gltf_parser.GltfAccessor;
 const GltfPrimitive = gltf_parser.GltfPrimitive;
+const AccessorView = gltf_parser.AccessorView;
 
 pub const BuildMeshError = error{
     MissingPositionAttribute,
     UnsupportedPrimitiveMode,
     InvalidIndexCount,
+    InvalidAccessorType,
     OutOfBounds,
     OutOfMemory,
 };
@@ -53,8 +55,8 @@ pub const GltfMesh = struct {
         var vertex_offset: u32 = 0;
         var index_offset: u32 = 0;
         for (primitives, 0..) |prim, prim_idx| {
-            const count = try processVertices(allocator, gltf, buffers, prim, vertices, vertex_offset);
-            try processIndices(allocator, gltf, buffers, prim, indices, index_offset, vertex_offset);
+            const count = try processVertices(gltf, buffers, prim, vertices, vertex_offset);
+            try processIndices(gltf, buffers, prim, indices, index_offset, vertex_offset);
 
             const prim_index_count: u32 = if (prim.indices) |idx| gltf.accessors[idx].count else 0;
             submeshes[prim_idx] = .{
@@ -90,66 +92,76 @@ pub const GltfMesh = struct {
     }
 };
 
-fn processVertices(allocator: std.mem.Allocator, gltf: *const GltfJson, buffers: []const []const u8, prim: GltfPrimitive, vertices: []mesh.RawVertex, offset: u32) BuildMeshError!u32 {
+fn processVertices(gltf: *const GltfJson, buffers: []const []const u8, prim: GltfPrimitive, vertices: []mesh.RawVertex, offset: u32) BuildMeshError!u32 {
     const pos_accessor = &gltf.accessors[prim.attributes.POSITION.?];
-    const positions = try pos_accessor.readAccessorSlice([3]f32, allocator, gltf.bufferViews, buffers);
-
-    const normals = try readAttr([3]f32, prim.attributes.NORMAL, allocator, gltf, buffers);
-    const tangents = try readAttr([4]f32, prim.attributes.TANGENT, allocator, gltf, buffers);
-    const uv0s = try readAttr([2]f32, prim.attributes.TEXCOORD_0, allocator, gltf, buffers);
-    const uv1s = try readAttr([2]f32, prim.attributes.TEXCOORD_1, allocator, gltf, buffers);
-    const joints = try readAttr([4]u16, prim.attributes.JOINTS_0, allocator, gltf, buffers);
-    const weights = try readAttr([4]f32, prim.attributes.WEIGHTS_0, allocator, gltf, buffers);
+    const positions = try pos_accessor.accessorView(gltf.bufferViews, buffers);
+    const normals = try readAttr(prim.attributes.NORMAL, gltf, buffers);
+    const tangents = try readAttr(prim.attributes.TANGENT, gltf, buffers);
+    const uv0s = try readAttr(prim.attributes.TEXCOORD_0, gltf, buffers);
+    const uv1s = try readAttr(prim.attributes.TEXCOORD_1, gltf, buffers);
+    const joints = try readAttr(prim.attributes.JOINTS_0, gltf, buffers);
+    const weights = try readAttr(prim.attributes.WEIGHTS_0, gltf, buffers);
 
     for (0..pos_accessor.count) |i| {
         vertices[offset + i] = .{
-            .position = positions[i],
-            .normal = optionalIndex(normals, i),
-            .tangent = optionalIndex(tangents, i),
-            .uv0 = optionalIndex(uv0s, i),
-            .uv1 = optionalIndex(uv1s, i),
-            .joint_indices = optionalIndex(joints, i),
-            .joint_weights = optionalIndex(weights, i),
+            .position = try positions.readVec3(i),
+            .normal = try optionalVec3(normals, i),
+            .tangent = try optionalVec4(tangents, i),
+            .uv0 = try optionalVec2(uv0s, i),
+            .uv1 = try optionalVec2(uv1s, i),
+            .joint_indices = try optionalU16Vec4(joints, i),
+            .joint_weights = try optionalVec4(weights, i),
         };
     }
 
     return pos_accessor.count;
 }
 
-fn processIndices(allocator: std.mem.Allocator, gltf: *const GltfJson, buffers: []const []const u8, prim: GltfPrimitive, indices: []u32, offset: u32, vertex_offset: u32) BuildMeshError!void {
+fn processIndices(gltf: *const GltfJson, buffers: []const []const u8, prim: GltfPrimitive, indices: []u32, offset: u32, vertex_offset: u32) BuildMeshError!void {
     const indices_index = prim.indices orelse return;
     const idx_accessor = &gltf.accessors[indices_index];
-    const idx_bytes = try idx_accessor.readAccessor(allocator, gltf.bufferViews, buffers);
-
-    switch (idx_accessor.componentType) {
-        .UNSIGNED_BYTE => {
-            for (idx_bytes, 0..) |b, j| {
-                indices[offset + j] = @as(u32, b) + vertex_offset;
-            }
-        },
-        .UNSIGNED_SHORT => {
-            const shorts = std.mem.bytesAsSlice(u16, idx_bytes);
-            for (shorts, 0..) |s, j| {
-                indices[offset + j] = @as(u32, s) + vertex_offset;
-            }
-        },
-        .UNSIGNED_INT => {
-            const ints = std.mem.bytesAsSlice(u32, idx_bytes);
-            for (ints, 0..) |v, j| {
-                indices[offset + j] = v + vertex_offset;
-            }
-        },
-        else => return BuildMeshError.OutOfBounds,
+    const index_view = try idx_accessor.accessorView(gltf.bufferViews, buffers);
+    for (0..index_view.count) |index| {
+        indices[offset + index] = try index_view.readIndex(index) + vertex_offset;
     }
 }
 
-fn readAttr(comptime T: type, attr_index: ?u32, allocator: std.mem.Allocator, gltf: *const GltfJson, buffers: []const []const u8) BuildMeshError!?[]align(1) const T {
+fn readAttr(attr_index: ?u32, gltf: *const GltfJson, buffers: []const []const u8) BuildMeshError!?AccessorView {
     const idx = attr_index orelse return null;
-    return try gltf.accessors[idx].readAccessorSlice(T, allocator, gltf.bufferViews, buffers);
+    if (idx >= gltf.accessors.len) return BuildMeshError.OutOfBounds;
+    return try gltf.accessors[idx].accessorView(gltf.bufferViews, buffers);
 }
 
-fn optionalIndex(slice: anytype, i: usize) ?std.meta.Elem(@TypeOf(slice.?)) {
-    return if (slice) |s| s[i] else null;
+fn optionalVec2(view: ?AccessorView, index: usize) !?[2]f32 {
+    if (view) |value| {
+        if (index >= value.count) return error.OutOfBounds;
+        return try value.readVec2(index);
+    }
+    return null;
+}
+
+fn optionalVec3(view: ?AccessorView, index: usize) !?[3]f32 {
+    if (view) |value| {
+        if (index >= value.count) return error.OutOfBounds;
+        return try value.readVec3(index);
+    }
+    return null;
+}
+
+fn optionalVec4(view: ?AccessorView, index: usize) !?[4]f32 {
+    if (view) |value| {
+        if (index >= value.count) return error.OutOfBounds;
+        return try value.readVec4(index);
+    }
+    return null;
+}
+
+fn optionalU16Vec4(view: ?AccessorView, index: usize) !?[4]u16 {
+    if (view) |value| {
+        if (index >= value.count) return error.OutOfBounds;
+        return try value.readU16Vec4(index);
+    }
+    return null;
 }
 
 const testing = std.testing;
