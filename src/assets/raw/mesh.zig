@@ -1,7 +1,7 @@
 const std = @import("std");
 const log = @import("../../logger.zig");
+pub const MeshScratch = @import("mesh_scratch.zig").MeshScratch;
 const Map = std.AutoHashMap(u64, u32);
-const ReMap = std.AutoHashMap(u32, u32);
 
 pub const RawVertex = struct {
     position: [3]f32,
@@ -109,30 +109,52 @@ pub const RawSubmesh = struct {
     material_index: u16,
 };
 
+pub const MeshGuarantees = struct {
+    vertices_unique: bool = false,
+    triangles_validated: bool = false,
+    unused_vertices_removed: bool = false,
+};
+
 pub const RawMesh = struct {
     vertices: []RawVertex,
     indices: []u32,
     submeshes: []RawSubmesh,
     name: ?[]const u8,
+    guarantees: MeshGuarantees = .{},
 
     pub fn optimize(self: *RawMesh, allocator: std.mem.Allocator) !void {
-        try self.removeDegenerateTriangles(allocator);
-        try self.removeUnusedVertices(allocator);
-        try self.deduplicateVertices(allocator);
-        try self.removeDegenerateTriangles(allocator);
-        try self.removeUnusedVertices(allocator);
-        try self.optimizeVertexCache(allocator);
-        try self.optimizeVertexFetch(allocator);
+        var scratch = MeshScratch.init(allocator);
+        defer scratch.deinit();
+        try self.optimizeWithScratch(allocator, &scratch);
     }
 
-    fn removeDegenerateTriangles(self: *RawMesh, allocator: std.mem.Allocator) !void {
+    pub fn optimizeWithScratch(self: *RawMesh, allocator: std.mem.Allocator, scratch: *MeshScratch) !void {
+        const degenerates_removed = if (self.guarantees.triangles_validated) false else try self.removeDegenerateTriangles(allocator);
+        if (!self.guarantees.unused_vertices_removed or degenerates_removed) {
+            _ = try self.removeUnusedVerticesWithScratch(allocator, scratch);
+        }
+        const deduplicated = if (self.guarantees.vertices_unique) false else try self.deduplicateVerticesWithScratch(allocator, scratch);
+        if (deduplicated) {
+            const post_dedup_degenerates = try self.removeDegenerateTriangles(allocator);
+            if (post_dedup_degenerates) _ = try self.removeUnusedVerticesWithScratch(allocator, scratch);
+        }
+        self.guarantees = .{
+            .vertices_unique = true,
+            .triangles_validated = true,
+            .unused_vertices_removed = true,
+        };
+        try self.optimizeVertexCache(allocator);
+        try self.optimizeVertexFetchWithScratch(allocator, scratch);
+    }
+
+    fn removeDegenerateTriangles(self: *RawMesh, allocator: std.mem.Allocator) !bool {
         if (self.indices.len == 0) {
-            return;
+            return false;
         }
 
         if (self.submeshes.len == 0) {
             if (self.indices.len % 3 != 0) {
-                return;
+                return false;
             }
         } else {
             for (self.submeshes) |submesh| {
@@ -142,25 +164,22 @@ pub const RawMesh = struct {
                     return error.InvalidSubmeshRange;
                 }
                 if (count % 3 != 0) {
-                    return;
+                    return false;
                 }
             }
         }
-
-        const cleaned = try allocator.alloc(u32, self.indices.len);
-        errdefer allocator.free(cleaned);
 
         const original_len = self.indices.len;
         var cleaned_len: usize = 0;
 
         if (self.submeshes.len == 0) {
-            cleaned_len = try copyValidTriangles(self.vertices, self.indices, cleaned, 0, self.indices.len);
+            cleaned_len = try compactValidTriangles(self.vertices, self.indices, 0, self.indices.len, 0);
         } else {
             for (self.submeshes) |*submesh| {
                 const offset: usize = submesh.index_offset;
                 const count: usize = submesh.index_count;
                 const new_offset = cleaned_len;
-                const kept_count = try copyValidTriangles(self.vertices, self.indices, cleaned[cleaned_len..], offset, count);
+                const kept_count = try compactValidTriangles(self.vertices, self.indices, offset, count, cleaned_len);
                 submesh.index_offset = @intCast(new_offset);
                 submesh.index_count = @intCast(kept_count);
                 cleaned_len += kept_count;
@@ -168,16 +187,19 @@ pub const RawMesh = struct {
         }
 
         if (cleaned_len == original_len) {
-            allocator.free(cleaned);
-            return;
+            return false;
         }
 
-        const new_indices = try allocator.dupe(u32, cleaned[0..cleaned_len]);
-        allocator.free(cleaned);
-        allocator.free(self.indices);
-        self.indices = new_indices;
+        if (allocator.resize(self.indices, cleaned_len)) {
+            self.indices = self.indices.ptr[0..cleaned_len];
+        } else {
+            const new_indices = try allocator.dupe(u32, self.indices[0..cleaned_len]);
+            allocator.free(self.indices);
+            self.indices = new_indices;
+        }
 
         log.debug("[Optimizing Mesh] Removed {d} degenerate triangle indices", .{original_len - cleaned_len});
+        return true;
     }
 
     // Forsyth Algorithm
@@ -209,49 +231,66 @@ pub const RawMesh = struct {
         self.indices = optimized;
     }
 
-    fn deduplicateVertices(self: *RawMesh, allocator: std.mem.Allocator) !void {
+    fn deduplicateVerticesWithScratch(self: *RawMesh, allocator: std.mem.Allocator, scratch: *MeshScratch) !bool {
+        return self.deduplicateVerticesWithHashAndScratch(allocator, scratch, RawVertex.hash);
+    }
+
+    fn deduplicateVerticesWithHashAndScratch(
+        self: *RawMesh,
+        allocator: std.mem.Allocator,
+        scratch: *MeshScratch,
+        hash_fn: *const fn (*const RawVertex) u64,
+    ) !bool {
         var deduped: std.ArrayList(RawVertex) = try .initCapacity(allocator, self.vertices.len);
         defer deduped.deinit(allocator);
 
-        // hash → index in deduped array
         var map = Map.init(allocator);
         defer map.deinit();
 
-        // old vertex index → new vertex index
-        var remap = ReMap.init(allocator);
-        defer remap.deinit();
+        const remap = try scratch.remapFor(self.vertices.len);
+        const next_candidate = try scratch.candidatesFor(self.vertices.len);
+        const no_candidate = std.math.maxInt(u32);
 
         for (0.., self.vertices) |i, vertex| {
-            const h = vertex.hash();
-            const existing = map.get(h);
-
-            if (existing) |existing_idx| {
-                if (std.mem.eql(u8, std.mem.asBytes(&deduped.items[existing_idx]), std.mem.asBytes(&vertex))) {
-                    try remap.put(@intCast(i), existing_idx);
-                    continue;
+            const h = hash_fn(&vertex);
+            if (map.get(h)) |first_candidate| {
+                var candidate = first_candidate;
+                while (true) {
+                    if (std.mem.eql(u8, std.mem.asBytes(&deduped.items[candidate]), std.mem.asBytes(&vertex))) {
+                        remap[i] = candidate;
+                        break;
+                    }
+                    const next = next_candidate[candidate];
+                    if (next == no_candidate) {
+                        const new_idx: u32 = @intCast(deduped.items.len);
+                        deduped.appendAssumeCapacity(vertex);
+                        next_candidate[candidate] = new_idx;
+                        next_candidate[new_idx] = no_candidate;
+                        remap[i] = new_idx;
+                        break;
+                    }
+                    candidate = next;
                 }
-                log.warn("Hash collision detected at vertex {d}", .{i});
-            }
-
-            const new_idx: u32 = @intCast(deduped.items.len);
-            deduped.appendAssumeCapacity(vertex);
-
-            if (existing == null) {
+            } else {
+                const new_idx: u32 = @intCast(deduped.items.len);
+                deduped.appendAssumeCapacity(vertex);
                 try map.put(h, new_idx);
+                next_candidate[new_idx] = no_candidate;
+                remap[i] = new_idx;
             }
-            try remap.put(@intCast(i), new_idx);
         }
 
         // No duplicates found, nothing to do
         if (deduped.items.len == self.vertices.len) {
-            return;
+            return false;
         }
 
         const original_len = self.vertices.len;
 
         // Rewrite index buffer using the remap table
         for (self.indices) |*index| {
-            index.* = remap.get(index.*).?;
+            if (index.* >= remap.len) return error.InvalidMeshIndex;
+            index.* = remap[index.*];
         }
 
         // Replace vertices with deduplicated array
@@ -259,15 +298,15 @@ pub const RawMesh = struct {
         self.vertices = try allocator.dupe(RawVertex, deduped.items);
 
         log.debug("[Optimizing Mesh] Deduplicated {d} -> {d} vertices", .{ original_len, self.vertices.len });
+        return true;
     }
 
-    fn removeUnusedVertices(self: *RawMesh, allocator: std.mem.Allocator) !void {
+    fn removeUnusedVerticesWithScratch(self: *RawMesh, allocator: std.mem.Allocator, scratch: *MeshScratch) !bool {
         if (self.vertices.len == 0) {
-            return;
+            return false;
         }
 
-        var used = try allocator.alloc(bool, self.vertices.len);
-        defer allocator.free(used);
+        const used = try scratch.usedFor(self.vertices.len);
         @memset(used, false);
 
         for (self.indices) |index| {
@@ -285,11 +324,10 @@ pub const RawMesh = struct {
         }
 
         if (used_count == self.vertices.len) {
-            return;
+            return false;
         }
 
-        const remap = try allocator.alloc(u32, self.vertices.len);
-        defer allocator.free(remap);
+        const remap = try scratch.remapFor(self.vertices.len);
 
         const compacted = try allocator.alloc(RawVertex, used_count);
         errdefer allocator.free(compacted);
@@ -312,16 +350,16 @@ pub const RawMesh = struct {
         self.vertices = compacted;
 
         log.debug("[Optimizing Mesh] Removed {d} unused vertices", .{original_len - self.vertices.len});
+        return true;
     }
 
-    fn optimizeVertexFetch(self: *RawMesh, allocator: std.mem.Allocator) !void {
+    fn optimizeVertexFetchWithScratch(self: *RawMesh, allocator: std.mem.Allocator, scratch: *MeshScratch) !void {
         if (self.vertices.len == 0 or self.indices.len == 0) {
             return;
         }
 
         const unset = std.math.maxInt(u32);
-        var remap = try allocator.alloc(u32, self.vertices.len);
-        defer allocator.free(remap);
+        const remap = try scratch.remapFor(self.vertices.len);
         @memset(remap, unset);
 
         const reordered = try allocator.alloc(RawVertex, self.vertices.len);
@@ -360,14 +398,37 @@ const forsyth_last_triangle_score: f32 = 0.75;
 const forsyth_cache_decay_power: f32 = 1.5;
 const forsyth_valence_boost_scale: f32 = 2.0;
 const forsyth_valence_boost_power: f32 = 0.5;
+const forsyth_score_table_size = 64;
 const degenerate_triangle_area_epsilon_sq: f32 = 1.0e-20;
 
-fn copyValidTriangles(
+const forsyth_cache_position_scores: [forsyth_cache_size]f32 = blk: {
+    @setEvalBranchQuota(10_000);
+    var scores: [forsyth_cache_size]f32 = undefined;
+    for (0..forsyth_cache_size) |position| {
+        scores[position] = if (position < 3)
+            forsyth_last_triangle_score
+        else
+            std.math.pow(f32, 1.0 - @as(f32, @floatFromInt(position - 3)) / @as(f32, @floatFromInt(forsyth_cache_size - 3)), forsyth_cache_decay_power);
+    }
+    break :blk scores;
+};
+
+const forsyth_valence_scores: [forsyth_score_table_size + 1]f32 = blk: {
+    @setEvalBranchQuota(10_000);
+    var scores: [forsyth_score_table_size + 1]f32 = undefined;
+    scores[0] = 0.0;
+    for (1..scores.len) |valence| {
+        scores[valence] = forsyth_valence_boost_scale * std.math.pow(f32, @floatFromInt(valence), -forsyth_valence_boost_power);
+    }
+    break :blk scores;
+};
+
+fn compactValidTriangles(
     vertices: []const RawVertex,
-    source_indices: []const u32,
-    dest_indices: []u32,
+    indices: []u32,
     index_offset: usize,
     index_count: usize,
+    output_offset: usize,
 ) !usize {
     if (index_count % 3 != 0) {
         return error.InvalidTriangleIndexBuffer;
@@ -376,9 +437,9 @@ fn copyValidTriangles(
     var written: usize = 0;
     var triangle_start = index_offset;
     while (triangle_start < index_offset + index_count) : (triangle_start += 3) {
-        const a = source_indices[triangle_start + 0];
-        const b = source_indices[triangle_start + 1];
-        const c = source_indices[triangle_start + 2];
+        const a = indices[triangle_start + 0];
+        const b = indices[triangle_start + 1];
+        const c = indices[triangle_start + 2];
         if (a >= vertices.len or b >= vertices.len or c >= vertices.len) {
             return error.InvalidMeshIndex;
         }
@@ -386,9 +447,9 @@ fn copyValidTriangles(
             continue;
         }
 
-        dest_indices[written + 0] = a;
-        dest_indices[written + 1] = b;
-        dest_indices[written + 2] = c;
+        indices[output_offset + written + 0] = a;
+        indices[output_offset + written + 1] = b;
+        indices[output_offset + written + 2] = c;
         written += 3;
     }
 
@@ -573,21 +634,15 @@ fn forsythVertexScore(cache_position: i32, active_triangle_count: u32) f32 {
         return 0.0;
     }
 
-    var score: f32 = 0.0;
-    if (cache_position >= 0) {
-        if (cache_position < 3) {
-            score = forsyth_last_triangle_score;
-        } else if (cache_position < forsyth_cache_size) {
-            const cache_position_f: f32 = @floatFromInt(cache_position - 3);
-            const cache_range: f32 = @floatFromInt(forsyth_cache_size - 3);
-            const scaler = 1.0 / cache_range;
-            score = std.math.pow(f32, 1.0 - cache_position_f * scaler, forsyth_cache_decay_power);
-        }
-    }
-
-    const active_triangle_count_f: f32 = @floatFromInt(active_triangle_count);
-    score += forsyth_valence_boost_scale * std.math.pow(f32, active_triangle_count_f, -forsyth_valence_boost_power);
-    return score;
+    const cache_score = if (cache_position >= 0 and cache_position < forsyth_cache_size)
+        forsyth_cache_position_scores[@intCast(cache_position)]
+    else
+        0.0;
+    const valence_score = if (active_triangle_count <= forsyth_score_table_size)
+        forsyth_valence_scores[active_triangle_count]
+    else
+        forsyth_valence_boost_scale * std.math.pow(f32, @floatFromInt(active_triangle_count), -forsyth_valence_boost_power);
+    return cache_score + valence_score;
 }
 
 fn forsythTriangleScore(indices: []const u32, triangle_index: usize, vertex_scores: []const f32) f32 {
@@ -793,7 +848,7 @@ test "removeDegenerateTriangles drops repeated and zero-area triangles and updat
         .name = null,
     };
 
-    try mesh.removeDegenerateTriangles(allocator);
+    _ = try mesh.removeDegenerateTriangles(allocator);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
     defer allocator.free(mesh.submeshes);
@@ -824,7 +879,9 @@ test "removeUnusedVertices compacts vertices in original order and remaps indice
         .name = null,
     };
 
-    try mesh.removeUnusedVertices(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.removeUnusedVerticesWithScratch(allocator, &scratch);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
 
@@ -853,7 +910,9 @@ test "optimizeVertexFetch orders referenced vertices by first index use" {
         .name = null,
     };
 
-    try mesh.optimizeVertexFetch(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    try mesh.optimizeVertexFetchWithScratch(allocator, &scratch);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
 
@@ -996,7 +1055,9 @@ test "quad with shared edge deduplicates from 6 to 4 vertices" {
         .name = null,
     };
 
-    try mesh.deduplicateVertices(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.deduplicateVerticesWithScratch(allocator, &scratch);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
 
@@ -1021,7 +1082,9 @@ test "mesh with no duplicates is unchanged" {
         .name = null,
     };
 
-    try mesh.deduplicateVertices(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.deduplicateVerticesWithScratch(allocator, &scratch);
     // Early-return path: original slices are still owned by us
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
@@ -1029,6 +1092,34 @@ test "mesh with no duplicates is unchanged" {
     try std.testing.expectEqual(@as(usize, 3), mesh.vertices.len);
     // Indices should be untouched
     try std.testing.expectEqualSlices(u32, &.{ 0, 1, 2 }, mesh.indices);
+}
+
+fn collidingVertexHash(vertex: *const RawVertex) u64 {
+    return @intFromPtr(vertex) % 1;
+}
+
+test "deduplication handles hash collisions" {
+    const allocator = std.testing.allocator;
+    const vertices = try allocator.dupe(RawVertex, &.{
+        makeVertex(0, 0, 0),
+        makeVertex(1, 0, 0),
+        makeVertex(0, 0, 0),
+    });
+    const indices = try allocator.dupe(u32, &.{ 0, 1, 2 });
+    var mesh = RawMesh{
+        .vertices = vertices,
+        .indices = indices,
+        .submeshes = &.{},
+        .name = null,
+    };
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.deduplicateVerticesWithHashAndScratch(allocator, &scratch, collidingVertexHash);
+    defer allocator.free(mesh.vertices);
+    defer allocator.free(mesh.indices);
+
+    try std.testing.expectEqual(@as(usize, 2), mesh.vertices.len);
+    try std.testing.expectEqualSlices(u32, &.{ 0, 1, 0 }, mesh.indices);
 }
 
 test "all remapped indices are valid" {
@@ -1055,7 +1146,9 @@ test "all remapped indices are valid" {
         .name = null,
     };
 
-    try mesh.deduplicateVertices(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.deduplicateVerticesWithScratch(allocator, &scratch);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
 
@@ -1090,7 +1183,9 @@ test "dedup preserves rendered triangles" {
         .name = null,
     };
 
-    try mesh.deduplicateVertices(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.deduplicateVerticesWithScratch(allocator, &scratch);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
 
@@ -1116,7 +1211,9 @@ test "all vertices identical deduplicates to one" {
         .name = null,
     };
 
-    try mesh.deduplicateVertices(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.deduplicateVerticesWithScratch(allocator, &scratch);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
 
@@ -1146,7 +1243,9 @@ test "vertices differing only in optional fields are not deduplicated" {
         .name = null,
     };
 
-    try mesh.deduplicateVertices(allocator);
+    var scratch = MeshScratch.init(allocator);
+    defer scratch.deinit();
+    _ = try mesh.deduplicateVerticesWithScratch(allocator, &scratch);
     defer allocator.free(mesh.vertices);
     defer allocator.free(mesh.indices);
 

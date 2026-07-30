@@ -1,6 +1,7 @@
 const std = @import("std");
 
 const cooked_mesh = @import("../../assets/cooked/mesh.zig");
+const raw_mesh = @import("../../assets/raw/mesh.zig");
 const gltf_parser = @import("gltf_json_parser.zig");
 const GltfJson = gltf_parser.GltfJson;
 const GltfMesh = @import("mesh.zig").GltfMesh;
@@ -36,6 +37,9 @@ pub const CookedModel = struct {
             parts.deinit(allocator);
         }
 
+        var mesh_scratch = raw_mesh.MeshScratch.init(allocator);
+        defer mesh_scratch.deinit();
+
         if (gltf.nodes.len > 0) {
             const active = try allocator.alloc(bool, gltf.nodes.len);
             defer allocator.free(active);
@@ -45,7 +49,7 @@ pub const CookedModel = struct {
                 const scene_index: usize = @intCast(gltf.scene orelse 0);
                 if (scene_index >= gltf.scenes.len) return error.SceneIndexOutOfBounds;
                 for (gltf.scenes[scene_index].nodes) |node_index| {
-                    try appendNode(allocator, gltf, buffers, node_index, identity_transform, active, &parts);
+                    try appendNode(allocator, gltf, buffers, node_index, identity_transform, active, &mesh_scratch, &parts);
                 }
             } else {
                 const is_child = try allocator.alloc(bool, gltf.nodes.len);
@@ -61,7 +65,7 @@ pub const CookedModel = struct {
 
                 for (is_child, 0..) |child, node_index| {
                     if (!child) {
-                        try appendNode(allocator, gltf, buffers, @intCast(node_index), identity_transform, active, &parts);
+                        try appendNode(allocator, gltf, buffers, @intCast(node_index), identity_transform, active, &mesh_scratch, &parts);
                     }
                 }
             }
@@ -71,7 +75,7 @@ pub const CookedModel = struct {
         // graph. Treat each definition as an identity-transformed model part.
         if (parts.items.len == 0) {
             for (0..gltf.meshes.len) |mesh_index| {
-                try appendMesh(allocator, gltf, buffers, mesh_index, identity_transform, &parts);
+                try appendMesh(allocator, gltf, buffers, mesh_index, identity_transform, &mesh_scratch, &parts);
             }
         }
 
@@ -95,6 +99,7 @@ fn appendNode(
     node_index_value: u32,
     parent_transform: Transform,
     active: []bool,
+    scratch: *raw_mesh.MeshScratch,
     parts: *std.ArrayList(CookedModel.Part),
 ) !void {
     const node_index: usize = @intCast(node_index_value);
@@ -108,10 +113,10 @@ fn appendNode(
     const transform = multiply(nodeTransform(node), parent_transform);
 
     if (node.mesh) |mesh_index| {
-        try appendMesh(allocator, gltf, buffers, mesh_index, transform, parts);
+        try appendMesh(allocator, gltf, buffers, mesh_index, transform, scratch, parts);
     }
     for (node.children) |child| {
-        try appendNode(allocator, gltf, buffers, child, transform, active, parts);
+        try appendNode(allocator, gltf, buffers, child, transform, active, scratch, parts);
     }
 }
 
@@ -121,6 +126,7 @@ fn appendMesh(
     buffers: []const []const u8,
     mesh_index_value: anytype,
     transform: Transform,
+    scratch: *raw_mesh.MeshScratch,
     parts: *std.ArrayList(CookedModel.Part),
 ) !void {
     const mesh_index: usize = @intCast(mesh_index_value);
@@ -129,7 +135,7 @@ fn appendMesh(
     var parsed = try GltfMesh.buildMesh(allocator, gltf, mesh_index, buffers);
     defer parsed.deinit();
 
-    var cooked = try cooked_mesh.CookedMesh.cook(allocator, &parsed.raw);
+    var cooked = try cooked_mesh.CookedMesh.cookWithScratch(allocator, &parsed.raw, scratch);
     errdefer cooked.deinit(allocator);
     try parts.append(allocator, .{ .mesh = cooked, .transform = transform });
 }

@@ -108,6 +108,10 @@ pub const ObjParser = struct {
             .indices = try indices.toOwnedSlice(allocator),
             .submeshes = submesh,
             .name = null,
+            .guarantees = .{
+                .vertices_unique = true,
+                .unused_vertices_removed = true,
+            },
         };
     }
 
