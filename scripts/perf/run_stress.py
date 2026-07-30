@@ -9,9 +9,13 @@ planning, cache hits, and invalidation without bloating the repository.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
+import platform
+import re
 import shutil
+import statistics
 import struct
 import subprocess
 import sys
@@ -23,8 +27,6 @@ from typing import Any
 
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 MARKER_NAME = ".zimp-perf-fixture"
-METRICS_PREFIX = "COOK_METRICS_JSON "
-SOURCE_EXTENSIONS = {".obj", ".png", ".vert", ".frag", ".glsl", ".zamat"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -44,37 +46,43 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--texture-size",
         type=int,
-        default=2048,
-        help="Width and height of each generated RGBA texture (default: 2048).",
+        default=1024,
+        help="Width and height of each generated RGBA texture (default: 1024).",
     )
     parser.add_argument(
         "--mesh-grid",
         type=int,
-        default=384,
-        help="Number of quads on each axis of the generated OBJ mesh (default: 384).",
+        default=320,
+        help="Number of quads on each axis of the generated OBJ mesh (default: 320).",
     )
     parser.add_argument(
         "--materials",
         type=int,
-        default=32,
+        default=24,
         help="Number of materials sharing the shader and texture dependency fan-in.",
     )
     parser.add_argument(
         "--include-depth",
         type=int,
-        default=24,
+        default=20,
         help="Depth of the generated shader include chain.",
     )
     parser.add_argument(
         "--quick",
         action="store_true",
-        help="Use a smaller fixture for a fast smoke run (512px textures, 128x128 mesh).",
+        help="Use one smaller sample for a fast smoke run.",
     )
+    parser.add_argument("--samples", type=int, default=30, help="Independent deterministic samples per scenario (default: 30).")
+    parser.add_argument("--instances", type=int, default=256, help="Nodes that reference one mesh in the repeated-instance glTF fixture.")
+    parser.add_argument("--metadata-assets", type=int, default=384, help="Dependency-only files used for file-count scaling.")
+    parser.add_argument("--scene-entities", type=int, default=5000, help="Entities in the generated large-scene JSON fixture.")
+    parser.add_argument("--keep-fixtures", action="store_true", help="Keep per-sample source/output trees instead of removing them after measurement.")
+    parser.add_argument("--optimize", default="ReleaseFast", help="Build optimization mode recorded in result metadata.")
     return parser.parse_args()
 
 
 def validate_args(args: argparse.Namespace) -> None:
-    for name in ("texture_size", "mesh_grid", "materials", "include_depth"):
+    for name in ("texture_size", "mesh_grid", "materials", "include_depth", "samples", "instances", "metadata_assets", "scene_entities"):
         if getattr(args, name) < 1:
             raise SystemExit(f"--{name.replace('_', '-')} must be at least 1")
     if args.texture_size < 4:
@@ -109,23 +117,21 @@ def png_chunk(kind: bytes, payload: bytes) -> bytes:
 
 
 def pixel_row(width: int, y: int, salt: int, texture_kind: str) -> bytes:
-    row = bytearray(1 + width * 4)
-    # PNG filter method 0. The mix deliberately avoids an overly compressible
-    # source image, so file hashing and decoding are substantial work too.
-    for x in range(width):
-        i = 1 + x * 4
-        mix = (x * 0x45D9F3B + y * 0x27D4EB2D + salt * 0x165667B1) & 0xFFFFFFFF
-        mix ^= mix >> 16
-        mix = (mix * 0x7FEB352D) & 0xFFFFFFFF
-        mix ^= mix >> 15
-        if texture_kind == "normal":
-            row[i : i + 4] = bytes(((mix & 7) + 124, ((mix >> 3) & 7) + 124, 255, 255))
-        elif texture_kind == "mask":
-            value = mix & 0xFF
-            row[i : i + 4] = bytes((value, value, value, 255))
-        else:
-            row[i : i + 4] = bytes((mix & 0xFF, (mix >> 8) & 0xFF, (mix >> 16) & 0xFF, 255))
-    return bytes(row)
+    # PNG filter method 0. `shake_256` produces deterministic, incompressible
+    # bytes in C rather than spending minutes in a Python loop for a full-size
+    # fixture. Channel slicing also runs in C and keeps normal/mask inputs
+    # representative of their intended use.
+    seed = f"zimp-perf:{salt}:{y}".encode("ascii")
+    pixels = bytearray(hashlib.shake_256(seed).digest(width * 4))
+    if texture_kind == "normal":
+        pixels[0::4] = b"\x80" * width
+        pixels[1::4] = b"\x80" * width
+        pixels[2::4] = b"\xff" * width
+    elif texture_kind == "mask":
+        pixels[1::4] = pixels[0::4]
+        pixels[2::4] = pixels[0::4]
+    pixels[3::4] = b"\xff" * width
+    return b"\0" + pixels
 
 
 def write_png(path: Path, size: int, salt: int, texture_kind: str) -> None:
@@ -265,12 +271,105 @@ binding = 1
 '''
 
 
-def generate_fixture(source: Path, texture_size: int, mesh_grid: int, materials: int, include_depth: int) -> dict[str, int]:
+def write_gltf_fixture(directory: Path, name: str, instances: int, interleaved: bool) -> None:
+    """Write a small mesh with either packed or strided accessors.
+
+    Both files describe the same quad. The repeated-instance file places the
+    same mesh on many nodes, while the interleaved form gives the importer a
+    realistic byteStride path without adding a second geometry payload.
+    """
+    positions = ((-0.5, -0.5, 0.0), (0.5, -0.5, 0.0), (0.5, 0.5, 0.0), (-0.5, 0.5, 0.0))
+    normals = ((0.0, 0.0, 1.0),) * 4
+    uvs = ((0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0))
+    indices = (0, 1, 2, 0, 2, 3)
+    binary = bytearray()
+    if interleaved:
+        for position, normal, uv in zip(positions, normals, uvs):
+            binary.extend(struct.pack("<3f3f2f", *position, *normal, *uv))
+        views = [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 128, "byteStride": 32, "target": 34962},
+            {"buffer": 0, "byteOffset": 0, "byteLength": 128, "byteStride": 32, "target": 34962},
+            {"buffer": 0, "byteOffset": 0, "byteLength": 128, "byteStride": 32, "target": 34962},
+            {"buffer": 0, "byteOffset": 128, "byteLength": 12, "target": 34963},
+        ]
+        accessors = [
+            {"bufferView": 0, "byteOffset": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-0.5, -0.5, 0.0], "max": [0.5, 0.5, 0.0]},
+            {"bufferView": 1, "byteOffset": 12, "componentType": 5126, "count": 4, "type": "VEC3"},
+            {"bufferView": 2, "byteOffset": 24, "componentType": 5126, "count": 4, "type": "VEC2"},
+        ]
+    else:
+        for position in positions:
+            binary.extend(struct.pack("<3f", *position))
+        for normal in normals:
+            binary.extend(struct.pack("<3f", *normal))
+        for uv in uvs:
+            binary.extend(struct.pack("<2f", *uv))
+        views = [
+            {"buffer": 0, "byteOffset": 0, "byteLength": 48, "target": 34962},
+            {"buffer": 0, "byteOffset": 48, "byteLength": 48, "target": 34962},
+            {"buffer": 0, "byteOffset": 96, "byteLength": 32, "target": 34962},
+            {"buffer": 0, "byteOffset": 128, "byteLength": 12, "target": 34963},
+        ]
+        accessors = [
+            {"bufferView": 0, "componentType": 5126, "count": 4, "type": "VEC3", "min": [-0.5, -0.5, 0.0], "max": [0.5, 0.5, 0.0]},
+            {"bufferView": 1, "componentType": 5126, "count": 4, "type": "VEC3"},
+            {"bufferView": 2, "componentType": 5126, "count": 4, "type": "VEC2"},
+        ]
+    binary.extend(struct.pack("<6H", *indices))
+    accessors.append({"bufferView": 3, "componentType": 5123, "count": 6, "type": "SCALAR", "min": [0], "max": [3]})
+    binary_path = directory / f"{name}.bin"
+    binary_path.write_bytes(binary)
+    nodes = [{"mesh": 0, "translation": [float(index % 32), float(index // 32), 0.0]} for index in range(instances)]
+    gltf = {
+        "asset": {"version": "2.0", "generator": "zimp perf fixture"},
+        "scene": 0,
+        "scenes": [{"nodes": list(range(instances))}],
+        "nodes": nodes,
+        "meshes": [{"primitives": [{"attributes": {"POSITION": 0, "NORMAL": 1, "TEXCOORD_0": 2}, "indices": 3}]}],
+        "buffers": [{"uri": binary_path.name, "byteLength": len(binary)}],
+        "bufferViews": views,
+        "accessors": accessors,
+    }
+    (directory / f"{name}.gltf").write_text(json.dumps(gltf, separators=(",", ":")), encoding="utf-8")
+
+
+def write_shader_variant_fixtures(shader_dir: Path) -> None:
+    for variant_count in (0, 4, 6, 8):
+        variants = ", ".join(f"PERF_VARIANT_{index}" for index in range(variant_count))
+        (shader_dir / f"variant_{variant_count}.frag").write_text(
+            "#version 330 core\n"
+            + (f"// VARIANTS: {variants}\n" if variants else "")
+            + "out vec4 frag_color;\nvoid main() { frag_color = vec4(1.0); }\n",
+            encoding="utf-8",
+        )
+
+
+def write_large_scene_fixture(scene_dir: Path, entities: int) -> None:
+    scene_dir.mkdir(parents=True)
+    document = {
+        "fixture": "large_scene",
+        "entities": [
+            {
+                "id": index,
+                "name": f"entity_{index:06d}",
+                "parent": index // 8 - 1 if index else None,
+                "components": {"transform": [float(index % 97), float(index % 31), 0.0], "tag": "even" if index % 2 == 0 else "odd"},
+                "reference": (index * 17) % entities if entities else None,
+            }
+            for index in range(entities)
+        ],
+    }
+    (scene_dir / "large_scene.json").write_text(json.dumps(document, separators=(",", ":")), encoding="utf-8")
+
+
+def generate_fixture(source: Path, texture_size: int, mesh_grid: int, materials: int, include_depth: int, instances: int, metadata_assets: int, scene_entities: int) -> dict[str, int]:
     textures = source / "textures"
     shaders = source / "shaders"
     material_dir = source / "materials"
     mesh_dir = source / "meshes"
-    for directory in (textures, shaders, material_dir, mesh_dir):
+    fixture_dir = source / "fixtures"
+    metadata_dir = source / "metadata_pressure"
+    for directory in (textures, shaders, material_dir, mesh_dir, fixture_dir, metadata_dir):
         directory.mkdir(parents=True)
 
     texture_specs = (
@@ -285,8 +384,14 @@ def generate_fixture(source: Path, texture_size: int, mesh_grid: int, materials:
 
     write_mesh(mesh_dir / "terrain_stress.obj", mesh_grid)
     write_shaders(shaders, include_depth)
+    write_shader_variant_fixtures(shaders)
+    write_gltf_fixture(fixture_dir, "repeated_instances", instances, interleaved=False)
+    write_gltf_fixture(fixture_dir, "interleaved_accessors", 1, interleaved=True)
+    write_large_scene_fixture(fixture_dir / "scene", scene_entities)
     for index in range(materials):
         (material_dir / f"stress_{index:03d}.zamat").write_text(material_source(index), encoding="utf-8")
+    for index in range(metadata_assets):
+        (metadata_dir / f"metadata_{index:05d}.glsl").write_text(f"// dependency-only metadata fixture {index}\n", encoding="utf-8")
 
     return {
         "textures": len(texture_specs),
@@ -294,42 +399,59 @@ def generate_fixture(source: Path, texture_size: int, mesh_grid: int, materials:
         "shader_stages": 2,
         "shader_includes": include_depth + 4,
         "materials": materials,
+        "unique_geometry_count": 2,
+        "repeated_instance_count": instances,
+        "interleaved_accessor_meshes": 1,
+        "shader_variant_declarations": 0 + 4 + 6 + 8,
+        "shader_variant_permutations": 1 + 16 + 64 + 256,
+        "large_scene_entities": scene_entities,
+        "metadata_assets": metadata_assets,
         # Every material depends directly on two stages and five textures.
         "direct_material_edges": materials * 7,
     }
 
 
-def bytes_on_disk(directory: Path, extensions: set[str] | None = None) -> int:
-    total = 0
-    for path in directory.rglob("*"):
-        if path.is_file() and (extensions is None or path.suffix in extensions):
-            total += path.stat().st_size
-    return total
-
-
-def asset_count(directory: Path) -> int:
-    return sum(1 for path in directory.rglob("*") if path.is_file() and path.suffix in SOURCE_EXTENSIONS)
+def linux_process_metrics(pid: int) -> dict[str, int | None]:
+    """Read process-owned OS counters without treating allocator bytes as RSS."""
+    result: dict[str, int | None] = {"peak_rss_bytes": None, "read_bytes": None, "write_bytes": None}
+    try:
+        status = Path(f"/proc/{pid}/status").read_text(encoding="utf-8")
+        match = re.search(r"^VmHWM:\s+(\d+)\s+kB$", status, re.MULTILINE)
+        if match:
+            result["peak_rss_bytes"] = int(match.group(1)) * 1024
+        io_text = Path(f"/proc/{pid}/io").read_text(encoding="utf-8")
+        values = dict(re.findall(r"^(read_bytes|write_bytes):\s+(\d+)$", io_text, re.MULTILINE))
+        result["read_bytes"] = int(values["read_bytes"]) if "read_bytes" in values else None
+        result["write_bytes"] = int(values["write_bytes"]) if "write_bytes" in values else None
+    except (FileNotFoundError, PermissionError, ProcessLookupError):
+        pass
+    return result
 
 
 def run_cook(zimp: Path, source: Path, output: Path, label: str, force: bool) -> dict[str, Any]:
-    command = [str(zimp), "cook", "--source", str(source), "--output", str(output), "--metrics-json"]
+    command = [str(zimp), "cook", "--source", str(source), "--output", str(output)]
     if force:
         command.append("--force")
 
     start_ns = time.perf_counter_ns()
-    completed = subprocess.run(command, text=True, capture_output=True, check=False)
+    process = subprocess.Popen(command, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    os_metrics: dict[str, int | None] = {"peak_rss_bytes": None, "read_bytes": None, "write_bytes": None}
+    while process.poll() is None:
+        if sys.platform.startswith("linux"):
+            observed = linux_process_metrics(process.pid)
+            for key, value in observed.items():
+                if key == "peak_rss_bytes" and value is not None:
+                    os_metrics[key] = max(os_metrics[key] or 0, value)
+                elif value is not None:
+                    os_metrics[key] = value
+        time.sleep(0.002)
+    stdout, stderr = process.communicate()
     wall_ns = time.perf_counter_ns() - start_ns
-    combined = completed.stdout + "\n" + completed.stderr
-    metrics: dict[str, Any] | None = None
-    for line in combined.splitlines():
-        if line.startswith(METRICS_PREFIX):
-            metrics = json.loads(line[len(METRICS_PREFIX) :])
-    if completed.returncode != 0 or metrics is None:
+    combined = stdout + "\n" + stderr
+    if process.returncode != 0:
         print(combined, file=sys.stderr)
-        reason = "did not emit metrics" if metrics is None else f"returned {completed.returncode}"
-        raise RuntimeError(f"{label} cook {reason}")
-    metrics["wall_ns"] = wall_ns
-    return metrics
+        raise RuntimeError(f"{label} cook returned {process.returncode}")
+    return {"wall_ns": wall_ns, "os": os_metrics}
 
 
 def format_duration(ns: int | float) -> str:
@@ -352,29 +474,34 @@ def format_bytes(value: int | float) -> str:
     return f"{amount:.1f}GiB"
 
 
-def cook_throughput(metrics: dict[str, Any]) -> str:
-    cook_ns = metrics["timings_ns"]["cook"]
-    source_bytes = metrics["io"]["source_bytes_read"]
-    if cook_ns == 0 or source_bytes == 0:
-        return "-"
-    mib_per_second = source_bytes / (cook_ns / 1_000_000_000) / (1024 * 1024)
-    return f"{mib_per_second:.1f} MiB/s"
+def aggregate_values(values: list[Any]) -> Any:
+    """Aggregate numeric observations while retaining the raw local samples."""
+    first = values[0]
+    if isinstance(first, dict):
+        keys = set(first)
+        if any(not isinstance(value, dict) or set(value) != keys for value in values):
+            return None
+        return {key: aggregate_values([value[key] for value in values]) for key in sorted(keys)}
+    if isinstance(first, (int, float)) and not isinstance(first, bool):
+        numbers = [float(value) for value in values]
+        median = statistics.median(numbers)
+        return {"median": median, "min": min(numbers), "max": max(numbers), "mad": statistics.median(abs(value - median) for value in numbers)}
+    return first if all(value == first for value in values) else None
 
 
-def other_pipeline_time(metrics: dict[str, Any]) -> int:
-    """Return pipeline work not covered by an individually timed stage."""
-    timings = metrics["timings_ns"]
-    measured_stages = (
-        timings["scan"]
-        + timings["dependency_graph"]
-        + timings["cook"]
-        + timings["cache_write"]
-    )
-    return max(0, timings["total"] - measured_stages)
+def aggregate_scenario(samples: list[dict[str, Any]]) -> dict[str, Any]:
+    return aggregate_values(samples)
+
+
+def metric_median(scenario: dict[str, Any], *path: str) -> float:
+    current: Any = scenario["aggregate"]
+    for key in path:
+        current = current[key]
+    return float(current["median"])
 
 
 def print_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
-    """Print a plain-text table that remains readable in CI logs and terminals."""
+    """Print a plain-text table that remains readable in terminals."""
     widths = [len(header) for header in headers]
     for row in rows:
         for index, cell in enumerate(row):
@@ -389,93 +516,92 @@ def print_table(headers: tuple[str, ...], rows: list[tuple[str, ...]]) -> None:
     print(separator)
 
 
-def print_results(passes: tuple[tuple[str, dict[str, Any]], ...]) -> None:
+def print_results(scenarios: dict[str, dict[str, Any]]) -> None:
     print("\nRESULTS AT A GLANCE")
     print_table(
-        ("Scenario", "Total", "Cook", "Wall", "Cooked", "Cached", "Peak allocation"),
+        ("Scenario", "Wall median", "MAD", "RSS median", "Output", "Changed cooked files"),
         [
             (
-                label,
-                format_duration(metrics["timings_ns"]["total"]),
-                format_duration(metrics["timings_ns"]["cook"]),
-                format_duration(metrics["wall_ns"]),
-                str(metrics["assets"]["cooked"]),
-                str(metrics["assets"]["cached"]),
-                format_bytes(metrics["memory"]["peak_allocated_bytes"]),
+                name,
+                format_duration(metric_median(scenario, "wall_ns")),
+                format_duration(scenario["aggregate"]["wall_ns"]["mad"]),
+                "unavailable" if scenario["aggregate"]["os"]["peak_rss_bytes"] is None else format_bytes(scenario["aggregate"]["os"]["peak_rss_bytes"]["median"]),
+                format_bytes(metric_median(scenario, "cooked_output_bytes")),
+                f"{metric_median(scenario, 'changed_cooked_files'):.0f}",
             )
-            for label, metrics in passes
+            for name, scenario in scenarios.items()
         ],
     )
-
-    cold = passes[0][1]
-    warm = passes[1][1]
-    invalidated = passes[2][1]
-    cold_total = cold["timings_ns"]["total"]
-    warm_total = warm["timings_ns"]["total"]
-    invalidated_total = invalidated["timings_ns"]["total"]
-    cold_peak = cold["memory"]["peak_allocated_bytes"]
-    warm_peak = warm["memory"]["peak_allocated_bytes"]
+    cold_total = metric_median(scenarios["cold"], "wall_ns")
+    warm_total = metric_median(scenarios["warm_noop"], "wall_ns")
+    invalidated_total = metric_median(scenarios["one_file_invalidation"], "wall_ns")
     warm_speedup = cold_total / warm_total if warm_total else 0.0
     invalidation_speedup = cold_total / invalidated_total if invalidated_total else 0.0
-    allocation_reduction = cold_peak / warm_peak if warm_peak else 0.0
     print("\nKEY COMPARISONS")
-    print(
-        f"  Warm cache: {warm_speedup:.1f}× faster than cold; "
-        f"{warm['assets']['cooked']} assets recooked; "
-        f"{allocation_reduction:.0f}× lower peak allocation."
-    )
-    print(
-        f"  Shared dependency change: {invalidation_speedup:.1f}× faster than cold; "
-        f"{invalidated['assets']['cooked']} assets recooked."
-    )
+    print(f"  Warm no-op: {warm_speedup:.1f}× faster than cold.")
+    print(f"  One-file invalidation: {invalidation_speedup:.1f}× faster than cold.")
 
-    print("\nI/O AND CACHE")
-    print_table(
-        ("Scenario", "Source read", "Hashed", "Cooked output", "Cache written", "Cook throughput"),
-        [
-            (
-                label,
-                format_bytes(metrics["io"]["source_bytes_read"]),
-                format_bytes(metrics["io"]["source_bytes_hashed"]),
-                format_bytes(metrics["io"]["cooked_bytes_written"]),
-                format_bytes(metrics["io"]["cache_bytes_written"]),
-                cook_throughput(metrics),
-            )
-            for label, metrics in passes
-        ],
-    )
 
-    print("\nTIME ACCOUNTING (total = all stages + other pipeline work)")
-    print_table(
-        ("Scenario", "Total", "Scan", "Dependencies", "Cook", "Cache write", "Other"),
-        [
-            (
-                label,
-                format_duration(metrics["timings_ns"]["total"]),
-                format_duration(metrics["timings_ns"]["scan"]),
-                format_duration(metrics["timings_ns"]["dependency_graph"]),
-                format_duration(metrics["timings_ns"]["cook"]),
-                format_duration(metrics["timings_ns"]["cache_write"]),
-                format_duration(other_pipeline_time(metrics)),
-            )
-            for label, metrics in passes
-        ],
-    )
-    print("Other includes cache-session setup and pruning; wall time additionally includes process startup.")
+def collect_metadata(args: argparse.Namespace) -> dict[str, Any]:
+    zig_version = subprocess.run(["zig", "version"], text=True, capture_output=True, check=False).stdout.strip() or None
+    cpu_model = None
+    if sys.platform.startswith("linux"):
+        try:
+            cpu_model = next((line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text(encoding="utf-8").splitlines() if line.startswith("model name")), None)
+        except OSError:
+            pass
+    return {
+        "commit": subprocess.run(["git", "rev-parse", "HEAD"], text=True, capture_output=True, check=False).stdout.strip() or None,
+        "zig_version": zig_version,
+        "optimize": args.optimize,
+        "platform": platform.platform(),
+        "cpu_model": cpu_model,
+        "cpu_count": os.cpu_count(),
+        "target_triple": platform.machine() + "-" + sys.platform,
+        "python": platform.python_version(),
+    }
 
-    print("\nMEMORY AND ERRORS")
-    print_table(
-        ("Scenario", "Peak allocation", "Ending allocation", "Errors"),
-        [
-            (
-                label,
-                format_bytes(metrics["memory"]["peak_allocated_bytes"]),
-                format_bytes(metrics["memory"]["ending_allocated_bytes"]),
-                str(metrics["assets"]["errored"]),
-            )
-            for label, metrics in passes
-        ],
-    )
+
+def prepare_sample(root: Path, fixture_source: Path) -> tuple[Path, Path]:
+    source = root / "source"
+    output = root / "cooked"
+    root.mkdir(parents=True)
+    shutil.copytree(fixture_source, source)
+    output.mkdir()
+    return source, output
+
+
+def cooked_file_snapshot(output: Path) -> dict[str, tuple[int, int]]:
+    """Return only cooked asset files; the cache is not a cooked output."""
+    return {
+        str(path.relative_to(output)): (path.stat().st_size, path.stat().st_mtime_ns)
+        for path in output.rglob("*")
+        if path.is_file() and path.name != ".zcache"
+    }
+
+
+def add_output_snapshot(result: dict[str, Any], before: dict[str, tuple[int, int]], output: Path) -> dict[str, Any]:
+    after = cooked_file_snapshot(output)
+    result["cooked_output_bytes"] = sum(size for size, _ in after.values())
+    result["cooked_output_files"] = len(after)
+    result["changed_cooked_files"] = sum(1 for path, stat in after.items() if before.get(path) != stat)
+    return result
+
+
+def run_scenario(name: str, source: Path, output: Path, zimp: Path) -> dict[str, Any]:
+    if name == "cold":
+        result = add_output_snapshot(run_cook(zimp, source, output, name, force=True), {}, output)
+    elif name == "warm_noop":
+        before = cooked_file_snapshot(output)
+        result = add_output_snapshot(run_cook(zimp, source, output, name, force=False), before, output)
+    elif name == "one_file_invalidation":
+        leaf = source / "shaders" / "includes" / "layer_00.glsl"
+        leaf.write_text(leaf.read_text(encoding="utf-8") + "\n// changed once for this deterministic sample\n", encoding="utf-8")
+        before = cooked_file_snapshot(output)
+        result = add_output_snapshot(run_cook(zimp, source, output, name, force=False), before, output)
+    else:
+        raise AssertionError(name)
+    return result
 
 
 def main() -> int:
@@ -486,6 +612,10 @@ def main() -> int:
         args.mesh_grid = min(args.mesh_grid, 128)
         args.materials = min(args.materials, 12)
         args.include_depth = min(args.include_depth, 12)
+        args.instances = min(args.instances, 64)
+        args.metadata_assets = min(args.metadata_assets, 128)
+        args.scene_entities = min(args.scene_entities, 512)
+        args.samples = min(args.samples, 1)
 
     repo_root = Path.cwd()
     zimp = Path(args.zimp)
@@ -498,63 +628,57 @@ def main() -> int:
     if not work_dir.is_absolute():
         work_dir = repo_root / work_dir
     ensure_owned_work_dir(repo_root, work_dir)
-    source = work_dir / "source"
-    output = work_dir / "cooked"
-    source.mkdir()
-    output.mkdir()
-
-    fixture = generate_fixture(source, args.texture_size, args.mesh_grid, args.materials, args.include_depth)
-    source_bytes = bytes_on_disk(source)
+    fixture_source = work_dir / "fixture-source"
+    fixture_source.mkdir()
+    fixture = generate_fixture(
+        fixture_source,
+        args.texture_size,
+        args.mesh_grid,
+        args.materials,
+        args.include_depth,
+        args.instances,
+        args.metadata_assets,
+        args.scene_entities,
+    )
     print("zimp performance stress suite")
     print("=" * 29)
-    print(f"Fixture directory: {source}")
-    print("\nFIXTURE")
-    print_table(
-        ("Assets", "Source size", "Textures", "Mesh", "Materials", "Include graph", "Direct edges"),
-        [(
-            str(asset_count(source)),
-            format_bytes(source_bytes),
-            f"{fixture['textures']} × {args.texture_size}²",
-            f"{fixture['meshes']} × {args.mesh_grid}² quads",
-            str(fixture["materials"]),
-            f"{args.include_depth} levels / {fixture['shader_includes']} files",
-            str(fixture["direct_material_edges"]),
-        )],
-    )
-    print("The invalidation pass changes the shared include leaf, then measures all affected recooks.")
+    print(f"Work directory: {work_dir}; samples per scenario: {args.samples}")
+    scenarios: dict[str, dict[str, Any]] = {}
+    samples_by_scenario: dict[str, list[dict[str, Any]]] = {
+        "cold": [],
+        "warm_noop": [],
+        "one_file_invalidation": [],
+    }
+    for index in range(args.samples):
+        sample_root = work_dir / "samples" / f"sample-{index:03d}"
+        source, output = prepare_sample(sample_root, fixture_source)
+        samples_by_scenario["cold"].append(run_scenario("cold", source, output, zimp))
+        samples_by_scenario["warm_noop"].append(run_scenario("warm_noop", source, output, zimp))
+        samples_by_scenario["one_file_invalidation"].append(
+            run_scenario("one_file_invalidation", source, output, zimp)
+        )
+        if not args.keep_fixtures:
+            shutil.rmtree(sample_root)
+    for name, samples in samples_by_scenario.items():
+        scenarios[name] = {"samples": samples, "aggregate": aggregate_scenario(samples)}
 
-    cold = run_cook(zimp, source, output, "cold", force=True)
-    warm = run_cook(zimp, source, output, "warm", force=False)
-    leaf = source / "shaders" / "includes" / "layer_00.glsl"
-    with leaf.open("a", encoding="utf-8") as output_file:
-        output_file.write("\n// Changed by the invalidation benchmark.\n")
-    invalidated = run_cook(zimp, source, output, "invalidation", force=False)
+    for sample in scenarios["warm_noop"]["samples"]:
+        if sample["changed_cooked_files"] != 0:
+            raise RuntimeError("warm no-op sample rewrote cooked files")
+    for sample in scenarios["one_file_invalidation"]["samples"]:
+        if sample["changed_cooked_files"] == 0:
+            raise RuntimeError("one-file invalidation sample did not recook affected assets")
 
-    passes = (("Cold cook", cold), ("Warm cache", warm), ("Dependency change", invalidated))
-    print_results(passes)
-
-    if warm["assets"]["cooked"] != 0 or warm["assets"]["errored"] != 0:
-        raise RuntimeError("warm-cache pass did not produce a clean cache hit; results are not trustworthy")
-    if invalidated["assets"]["cooked"] == 0 or invalidated["assets"]["errored"] != 0:
-        raise RuntimeError("dependency-invalidation pass did not recook assets; results are not trustworthy")
-
+    print_results(scenarios)
     results = {
         "schema_version": 1,
-        "fixture": {
-            **fixture,
-            "source_asset_count": asset_count(source),
-            "source_bytes": source_bytes,
-            "texture_size": args.texture_size,
-            "mesh_grid": args.mesh_grid,
-            "include_depth": args.include_depth,
-        },
-        "passes": {"cold": cold, "warm_cache": warm, "dependency_invalidation": invalidated},
-        "cooked_bytes_on_disk": bytes_on_disk(output),
+        "metadata": collect_metadata(args),
+        "fixture": {**fixture, "texture_size": args.texture_size, "mesh_grid": args.mesh_grid, "include_depth": args.include_depth, "samples": args.samples},
+        "scenarios": scenarios,
     }
     result_path = work_dir / "results.json"
     result_path.write_text(json.dumps(results, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     print(f"\nMachine-readable results: {result_path}")
-    print(f"Cooked output on disk: {format_bytes(results['cooked_bytes_on_disk'])}")
     return 0
 
 

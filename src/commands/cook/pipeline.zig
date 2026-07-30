@@ -24,40 +24,50 @@ pub fn run(
     var metrics: CookMetrics = .{};
     const total_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 
-    var cache_session = try cache_session_mod.CacheSession.open(allocator, ctx);
-    defer cache_session.deinit(allocator);
-    cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
+    // Keep cleanup in explicit lexical scopes. `ending_allocated_bytes` is a
+    // retained-allocation measurement, not a snapshot of intentionally-live
+    // plan/cache data.
+    {
+        var cache_session = try cache_session_mod.CacheSession.open(allocator, ctx);
+        defer cache_session.deinit(allocator);
+        cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
 
-    var plan = try planner.build(allocator, ctx, &cache_session.cache, &metrics);
-    defer plan.deinit(allocator);
-    cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
+        {
+            var plan = try planner.build(allocator, ctx, &cache_session.cache, &metrics);
+            defer plan.deinit(allocator);
+            cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
 
-    cache_session.pruneDeleted(allocator, plan.source_files.items);
+            cache_session.pruneDeleted(allocator, plan.source_files.items);
 
-    var executor = Executor.init(
-        allocator,
-        ctx,
-        &metrics,
-        &cache_session.cache,
-        plan.levels,
-        &plan.reverse,
-        counting,
-    );
-    try executor.run(ctx.io, progress);
+            var executor = Executor.init(
+                allocator,
+                ctx,
+                &metrics,
+                &cache_session.cache,
+                plan.levels,
+                &plan.reverse,
+                counting,
+            );
+            try executor.run(ctx.io, progress);
+        }
 
-    const cache_write_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
-    try cache_session.persist(allocator, ctx);
-    const cache_write_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
-    metrics.cache_write_ns = @intCast(cache_write_start.durationTo(cache_write_end).raw.nanoseconds);
-    metrics.cache_bytes_written = cache_session_mod.CacheSession.cacheBytesWritten(ctx);
+        const cache_write_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
+        try cache_session.persist(allocator, ctx);
+        const cache_write_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
+        metrics.cache_write_ns = @intCast(cache_write_start.durationTo(cache_write_end).raw.nanoseconds);
+        metrics.cache_bytes_written = cache_session_mod.CacheSession.cacheBytesWritten(ctx);
 
-    if (ctx.project) |proj| {
-        try buildAndWriteManifest(allocator, ctx, proj, &cache_session.cache);
+        if (ctx.project) |proj| {
+            try buildAndWriteManifest(allocator, ctx, proj, &cache_session.cache);
+        }
+
+        metrics.pipeline_live_bytes = counting.current_requested_bytes;
+        cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
     }
 
+    metrics.ending_allocated_bytes = counting.current_requested_bytes;
     const total_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     metrics.total_ns = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
-    metrics.ending_allocated_bytes = counting.current_requested_bytes;
     cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
 
     return metrics;

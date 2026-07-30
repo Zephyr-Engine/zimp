@@ -146,12 +146,6 @@ Run a representative local cook benchmark from the repository root:
 zig build perf -Doptimize=ReleaseFast
 ```
 
-It deterministically generates a large workload (five 2048×2048 textures, a
-384×384-quad mesh, 32 materials, and a shared 24-level shader dependency graph)
-under `.perf/zimp-stress/`. It then reports cold-cook, warm-cache, and
-dependency-invalidation timings alongside allocation, I/O, cache, and
-throughput metrics. The complete machine-readable result is retained as
-`.perf/zimp-stress/results.json`.
 
 For a quick smoke run, use:
 

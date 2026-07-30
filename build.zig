@@ -73,6 +73,7 @@ pub fn build(b: *std.Build) void {
 
     const perf_step = b.step("perf", "Run the local asset-cooking stress suite");
     const perf_cmd = b.addSystemCommand(&.{ "python3", "scripts/perf/run_stress.py", "--zimp", "zig-out/bin/zimp" });
+    perf_cmd.has_side_effects = true;
     perf_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
         perf_cmd.addArgs(args);
