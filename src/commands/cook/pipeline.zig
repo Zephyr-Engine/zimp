@@ -13,6 +13,7 @@ const manifest_builder = @import("../../manifest/builder.zig");
 const manifest_codec = @import("../../manifest/codec.zig");
 const meta_store_mod = @import("../../manifest/meta_store.zig");
 const meta_mod = @import("../../manifest/meta.zig");
+const AssetManifest = @import("../../manifest/model.zig").AssetManifest;
 const log = @import("../../logger.zig");
 
 pub fn run(
@@ -30,20 +31,23 @@ pub fn run(
     {
         var cache_session = try cache_session_mod.CacheSession.open(allocator, ctx);
         defer cache_session.deinit(allocator);
-        cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
+        cook_metrics.markPeak(&metrics, counting.peakRequestedBytes());
 
         {
             var plan = try planner.build(allocator, ctx, &cache_session.cache, &metrics);
             defer plan.deinit(allocator);
-            cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
+            cook_metrics.markPeak(&metrics, counting.peakRequestedBytes());
 
-            cache_session.pruneDeleted(allocator, plan.source_files.items);
+            const source_files = try planner.sourceSlice(allocator, plan.records.items);
+            defer allocator.free(source_files);
+            cache_session.pruneDeleted(allocator, source_files);
 
             var executor = Executor.init(
                 allocator,
                 ctx,
                 &metrics,
                 &cache_session.cache,
+                plan.records.items,
                 plan.levels,
                 &plan.reverse,
                 counting,
@@ -61,14 +65,14 @@ pub fn run(
             try buildAndWriteManifest(allocator, ctx, proj, &cache_session.cache);
         }
 
-        metrics.pipeline_live_bytes = counting.current_requested_bytes;
-        cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
+        metrics.pipeline_live_bytes = counting.currentRequestedBytes();
+        cook_metrics.markPeak(&metrics, counting.peakRequestedBytes());
     }
 
-    metrics.ending_allocated_bytes = counting.current_requested_bytes;
+    metrics.ending_allocated_bytes = counting.currentRequestedBytes();
     const total_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     metrics.total_ns = @intCast(total_start.durationTo(total_end).raw.nanoseconds);
-    cook_metrics.markPeak(&metrics, counting.peak_requested_bytes);
+    cook_metrics.markPeak(&metrics, counting.peakRequestedBytes());
 
     return metrics;
 }
@@ -112,7 +116,7 @@ fn buildAndWriteManifest(
 
 /// A sidecar whose source file is gone is authored identity with nothing to
 /// identify — warn, never delete (the user may be mid-rename or mid-revert).
-fn warnOrphanedSidecars(allocator: std.mem.Allocator, ctx: *const CookContext, manifest: *const @import("../../manifest/model.zig").AssetManifest) void {
+fn warnOrphanedSidecars(allocator: std.mem.Allocator, ctx: *const CookContext, manifest: *const AssetManifest) void {
     warnOrphansInDir(allocator, ctx, manifest, ctx.source, "") catch |err| {
         log.warn("orphaned-sidecar sweep failed: {s}", .{@errorName(err)});
     };
@@ -121,7 +125,7 @@ fn warnOrphanedSidecars(allocator: std.mem.Allocator, ctx: *const CookContext, m
 fn warnOrphansInDir(
     allocator: std.mem.Allocator,
     ctx: *const CookContext,
-    manifest: *const @import("../../manifest/model.zig").AssetManifest,
+    manifest: *const AssetManifest,
     dir: std.Io.Dir,
     prefix: []const u8,
 ) !void {
@@ -135,7 +139,9 @@ fn warnOrphansInDir(
             try warnOrphansInDir(allocator, ctx, manifest, subdir, subprefix);
             continue;
         }
-        if (entry.kind != .file or !meta_mod.isMetaPath(entry.name)) continue;
+        if (entry.kind != .file or !meta_mod.isMetaPath(entry.name)) {
+            continue;
+        }
 
         const source_name = entry.name[0 .. entry.name.len - meta_mod.meta_extension.len];
         dir.access(ctx.io, source_name, .{}) catch {

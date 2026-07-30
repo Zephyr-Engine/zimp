@@ -9,6 +9,12 @@ pub const ChunkedReadResult = struct {
     bytes_read: usize,
 };
 
+pub fn fileExists(dir: std.Io.Dir, io: std.Io, path: []const u8) bool {
+    const file = dir.openFile(io, path, .{}) catch return false;
+    file.close(io);
+    return true;
+}
+
 pub fn readFileAllocChunked(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -66,4 +72,15 @@ test "readFileAllocChunked reads file content" {
 
     try testing.expectEqual(@as(usize, 19), result.bytes_read);
     try testing.expectEqualStrings("hello chunked world", result.bytes);
+}
+
+test "fileExists reports present and absent files" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const file = try tmp.dir.createFile(testing.io, "present.txt", .{});
+    file.close(testing.io);
+
+    try testing.expect(fileExists(tmp.dir, testing.io, "present.txt"));
+    try testing.expect(!fileExists(tmp.dir, testing.io, "absent.txt"));
 }

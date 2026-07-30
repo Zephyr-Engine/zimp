@@ -1,5 +1,7 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
+const Hash = @import("../assets/source_file.zig").Hash;
 const CacheEntry = @import("entry.zig").CacheEntry;
 
 pub const Staleness = enum {
@@ -11,36 +13,45 @@ pub const Staleness = enum {
     errored,
     not_cached,
 
+    pub const Result = struct {
+        verdict: Staleness,
+        content_hash: ?Hash = null,
+    };
+
+    /// Compare an already captured stat snapshot.  Callers provide a hash only
+    /// for the size-equal / mtime-changed path, avoiding a second open/stat.
     pub fn check(
-        io: std.Io,
-        source_dir: std.Io.Dir,
         cache_entry: *const CacheEntry,
-        source_file: *const SourceFile,
+        source_file_info: SourceFile.FileInfo,
+        source_content_hash: ?Hash,
         cached_host_os: []const u8,
-    ) !Staleness {
+    ) Result {
         if (cache_entry.isErrored()) {
-            return .errored;
+            return .{ .verdict = .errored };
         }
 
-        if (cache_entry.asset_type.rebuildsOnHostOsChange() and !std.mem.eql(u8, cached_host_os, @tagName(@import("builtin").os.tag))) {
-            return .stale_host_os;
+        if (cache_entry.asset_type.rebuildsOnHostOsChange() and !std.mem.eql(u8, cached_host_os, @tagName(builtin.os.tag))) {
+            return .{ .verdict = .stale_host_os };
         }
 
-        const source_file_info = try source_file.getFileInfo(source_dir, io);
         if (cache_entry.source_mtime == source_file_info.modified_ns) {
-            return .cached;
+            return .{ .verdict = .cached };
         }
 
         if (cache_entry.source_size != source_file_info.size) {
-            return .stale_size;
+            return .{ .verdict = .stale_size };
         }
 
-        const source_content_hash = try source_file.hash(source_dir, io);
-        if (cache_entry.content_hash != source_content_hash) {
-            return .stale_content;
+        const content_hash = source_content_hash orelse {
+            // Equal-size mtime changes must be supplied with their one retained
+            // payload hash by the source-analysis owner.
+            return .{ .verdict = .stale_content };
+        };
+        if (cache_entry.content_hash != content_hash) {
+            return .{ .verdict = .stale_content, .content_hash = content_hash };
         }
 
-        return .hash_match;
+        return .{ .verdict = .hash_match, .content_hash = content_hash };
     }
 };
 
@@ -77,7 +88,7 @@ fn makeCacheEntryFromFile(tmp: std.testing.TmpDir, sf: *const SourceFile) !Cache
 }
 
 fn currentHostOsName() []const u8 {
-    return @tagName(@import("builtin").os.tag);
+    return @tagName(builtin.os.tag);
 }
 
 test "check returns cached when mtime matches" {
@@ -88,8 +99,8 @@ test "check returns cached when mtime matches" {
     const sf = makeSourceFile("a.glb");
     const entry = try makeCacheEntryFromFile(tmp, &sf);
 
-    const result = try Staleness.check(testing.io, tmp.dir, &entry, &sf, currentHostOsName());
-    try testing.expectEqual(Staleness.cached, result);
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, currentHostOsName());
+    try testing.expectEqual(Staleness.cached, result.verdict);
 }
 
 test "check returns stale_size when size differs" {
@@ -102,8 +113,8 @@ test "check returns stale_size when size differs" {
     entry.source_mtime = 0;
     entry.source_size = 999;
 
-    const result = try Staleness.check(testing.io, tmp.dir, &entry, &sf, currentHostOsName());
-    try testing.expectEqual(Staleness.stale_size, result);
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, currentHostOsName());
+    try testing.expectEqual(Staleness.stale_size, result.verdict);
 }
 
 test "check returns stale_content when size matches but hash differs" {
@@ -116,8 +127,8 @@ test "check returns stale_content when size matches but hash differs" {
     entry.source_mtime = 0;
     entry.content_hash = 0xDEAD;
 
-    const result = try Staleness.check(testing.io, tmp.dir, &entry, &sf, currentHostOsName());
-    try testing.expectEqual(Staleness.stale_content, result);
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), try sf.hash(tmp.dir, testing.io), currentHostOsName());
+    try testing.expectEqual(Staleness.stale_content, result.verdict);
 }
 
 test "check returns hash_match when size and hash match but mtime differs" {
@@ -129,8 +140,8 @@ test "check returns hash_match when size and hash match but mtime differs" {
     var entry = try makeCacheEntryFromFile(tmp, &sf);
     entry.source_mtime = 0;
 
-    const result = try Staleness.check(testing.io, tmp.dir, &entry, &sf, currentHostOsName());
-    try testing.expectEqual(Staleness.hash_match, result);
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), try sf.hash(tmp.dir, testing.io), currentHostOsName());
+    try testing.expectEqual(Staleness.hash_match, result.verdict);
 }
 
 test "check returns stale_host_os for OS-sensitive cached asset from different host OS" {
@@ -142,8 +153,8 @@ test "check returns stale_host_os for OS-sensitive cached asset from different h
     var entry = try makeCacheEntryFromFile(tmp, &sf);
     entry.asset_type = .material;
 
-    const result = try Staleness.check(testing.io, tmp.dir, &entry, &sf, "not-current-os");
-    try testing.expectEqual(Staleness.stale_host_os, result);
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, "not-current-os");
+    try testing.expectEqual(Staleness.stale_host_os, result.verdict);
 }
 
 test "check ignores host OS changes for portable cached asset types" {
@@ -154,6 +165,6 @@ test "check ignores host OS changes for portable cached asset types" {
     const sf = makeSourceFile("a.glb");
     const entry = try makeCacheEntryFromFile(tmp, &sf);
 
-    const result = try Staleness.check(testing.io, tmp.dir, &entry, &sf, "not-current-os");
-    try testing.expectEqual(Staleness.cached, result);
+    const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, "not-current-os");
+    try testing.expectEqual(Staleness.cached, result.verdict);
 }

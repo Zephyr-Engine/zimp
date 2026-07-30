@@ -28,16 +28,17 @@ pub const CacheEntry = struct {
         return !self.isErrored() and self.cooked_path.len != 0;
     }
 
-    pub fn create(
+    /// Construct an owned cache entry from an analysis snapshot.  This function
+    /// deliberately performs no filesystem I/O.
+    pub fn init(
         allocator: std.mem.Allocator,
         io: std.Io,
-        source_dir: std.Io.Dir,
         source_file: SourceFile,
+        source_info: SourceFile.FileInfo,
+        content_hash: Hash,
         cooked_path: []const u8,
         cooked_size: u64,
     ) !CacheEntry {
-        const source_info = try source_file.getFileInfo(source_dir, io);
-
         const owned_source = try allocator.dupe(u8, source_file.path);
         errdefer allocator.free(owned_source);
         const owned_cooked = try allocator.dupe(u8, cooked_path);
@@ -47,7 +48,7 @@ pub const CacheEntry = struct {
         return .{
             .source_path = owned_source,
             .source_path_hash = source_file.hashPath(),
-            .content_hash = try source_file.hash(source_dir, io),
+            .content_hash = content_hash,
             .source_size = source_info.size,
             .source_mtime = source_info.modified_ns,
             .cooked_path = owned_cooked,
@@ -58,14 +59,12 @@ pub const CacheEntry = struct {
         };
     }
 
-    pub fn createErrored(
+    pub fn initErrored(
         allocator: std.mem.Allocator,
-        io: std.Io,
-        source_dir: std.Io.Dir,
         source_file: SourceFile,
+        source_info: SourceFile.FileInfo,
+        content_hash: Hash,
     ) !CacheEntry {
-        const source_info = try source_file.getFileInfo(source_dir, io);
-
         const owned_source = try allocator.dupe(u8, source_file.path);
         errdefer allocator.free(owned_source);
         const owned_cooked = try allocator.dupe(u8, "");
@@ -73,7 +72,7 @@ pub const CacheEntry = struct {
         return .{
             .source_path = owned_source,
             .source_path_hash = source_file.hashPath(),
-            .content_hash = try source_file.hash(source_dir, io),
+            .content_hash = content_hash,
             .source_size = source_info.size,
             .source_mtime = source_info.modified_ns,
             .cooked_path = owned_cooked,
@@ -105,11 +104,12 @@ test "create populates all fields from source file" {
         .extension = .glb,
     };
 
-    const entry = try CacheEntry.create(
+    const entry = try CacheEntry.init(
         testing.allocator,
         testing.io,
-        tmp.dir,
         source_file,
+        try source_file.getFileInfo(tmp.dir, testing.io),
+        try source_file.hash(tmp.dir, testing.io),
         "model.zmesh",
         256,
     );
@@ -146,11 +146,12 @@ test "create owns copies of paths" {
         .extension = .glb,
     };
 
-    const entry = try CacheEntry.create(
+    const entry = try CacheEntry.init(
         testing.allocator,
         testing.io,
-        tmp.dir,
         source_file,
+        try source_file.getFileInfo(tmp.dir, testing.io),
+        try source_file.hash(tmp.dir, testing.io),
         "out.zmesh",
         0,
     );
@@ -175,11 +176,12 @@ test "create with unknown asset type" {
         .extension = .other,
     };
 
-    const entry = try CacheEntry.create(
+    const entry = try CacheEntry.init(
         testing.allocator,
         testing.io,
-        tmp.dir,
         source_file,
+        try source_file.getFileInfo(tmp.dir, testing.io),
+        try source_file.hash(tmp.dir, testing.io),
         "data.cooked",
         0,
     );

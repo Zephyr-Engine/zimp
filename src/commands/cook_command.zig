@@ -157,8 +157,7 @@ pub const CookCommand = struct {
             return self.runWithAllocator(counting.allocator(), &counting, progress);
         }
 
-        // Release builds use the global SMP allocator for lower overhead and better throughput.
-        var counting = CountingAllocator.init(std.heap.smp_allocator);
+        var counting = CountingAllocator.init(self.allocator);
         return self.runWithAllocator(counting.allocator(), &counting, progress);
     }
 

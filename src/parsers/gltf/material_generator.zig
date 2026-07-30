@@ -8,10 +8,12 @@ const GltfJson = @import("gltf_json_parser.zig").GltfJson;
 const GltfMaterial = @import("gltf_json_parser.zig").GltfMaterial;
 const GltfPbr = @import("gltf_json_parser.zig").GltfPbr;
 const GltfTextureInfo = @import("gltf_json_parser.zig").GltfTextureInfo;
+const GltfSampler = @import("gltf_json_parser.zig").GltfSampler;
 const GltfDocument = @import("document.zig").GltfDocument;
 const Extension = @import("../../assets/asset.zig").Extension;
 const resolveRelativeUri = @import("document.zig").resolveRelativeUri;
 const log = @import("../../logger.zig");
+const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
 
 const DEFAULT_SHADER = "shaders/basic";
 const GENERATED_MATERIAL_DIR = "generated/materials";
@@ -91,26 +93,50 @@ pub fn generateFromGltf(
         const hand_path = try handwrittenMaterialPath(allocator, std.fs.path.basename(output_path));
         defer allocator.free(hand_path);
 
-        if (fileExists(source_dir, io, hand_path) or fileExists(source_dir, io, output_path)) {
+        if (file_read.fileExists(source_dir, io, hand_path)) {
             continue;
         }
 
         var text: std.ArrayList(u8) = .empty;
         defer text.deinit(allocator);
-        try writeMaterialText(&text, allocator, io, source_dir, source_path, gltf, buffers, material, material_name);
+        try writeMaterialText(
+            &text,
+            allocator,
+            io,
+            source_dir,
+            source_path,
+            gltf,
+            buffers,
+            material,
+            material_name,
+        );
 
-        const file = try source_dir.createFile(io, output_path, .{});
+        if (try fileMatches(source_dir, io, allocator, output_path, text.items)) {
+            continue;
+        }
+
+        var pending = try AtomicFile.create(allocator, io, source_dir, output_path);
+        defer pending.deinit();
         var buf: [4096]u8 = undefined;
-        var writer = file.writer(io, &buf);
+        var writer = pending.file.writer(io, &buf);
         try writer.interface.writeAll(text.items);
         try writer.interface.flush();
-        file.close(io);
+        try pending.commit();
 
         generated += 1;
         log.debug("Generated material '{s}' from '{s}'", .{ output_path, source_path });
     }
 
     return generated;
+}
+
+fn fileMatches(dir: std.Io.Dir, io: std.Io, allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) !bool {
+    const result = file_read.readFileAllocChunked(allocator, io, dir, path, .{}) catch |err| {
+        if (err == error.FileNotFound) return false;
+        return err;
+    };
+    defer allocator.free(result.bytes);
+    return std.mem.eql(u8, result.bytes, bytes);
 }
 
 fn writeMaterialText(
@@ -250,7 +276,7 @@ fn texturePath(
 
     const path = try generatedTexturePath(allocator, source_path, image.name, image_index, image.mimeType);
     errdefer allocator.free(path);
-    if (!fileExists(source_dir, io, path)) {
+    if (!file_read.fileExists(source_dir, io, path)) {
         const file = try source_dir.createFile(io, path, .{});
         var buf: [4096]u8 = undefined;
         var writer = file.writer(io, &buf);
@@ -312,7 +338,7 @@ fn appendParamVec4(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name:
     , .{ name, value[0], value[1], value[2], value[3], binding });
 }
 
-fn samplerForTexture(gltf: *const GltfJson, texture_index: u32) @import("gltf_json_parser.zig").GltfSampler {
+fn samplerForTexture(gltf: *const GltfJson, texture_index: u32) GltfSampler {
     if (texture_index >= gltf.textures.len) return .{};
     const sampler_index = gltf.textures[texture_index].sampler orelse return .{};
     if (sampler_index >= gltf.samplers.len) return .{};
@@ -431,12 +457,6 @@ fn sanitizeName(allocator: std.mem.Allocator, name: []const u8) ![]u8 {
         };
     }
     return out;
-}
-
-fn fileExists(dir: std.Io.Dir, io: std.Io, path: []const u8) bool {
-    const file = dir.openFile(io, path, .{}) catch return false;
-    file.close(io);
-    return true;
 }
 
 const testing = std.testing;
@@ -567,7 +587,7 @@ test "generateFromGltf does not overwrite handwritten material" {
 
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube_textured.glb", &gltf.value, &.{});
     try testing.expectEqual(@as(usize, 0), count);
-    try testing.expect(!fileExists(tmp.dir, testing.io, "generated/materials/cube_textured_WoodMaterial.zamat"));
+    try testing.expect(!file_read.fileExists(tmp.dir, testing.io, "generated/materials/cube_textured_WoodMaterial.zamat"));
 }
 
 test "generateFromGltf extracts embedded image bytes" {

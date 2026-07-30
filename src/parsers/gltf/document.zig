@@ -3,6 +3,8 @@ const std = @import("std");
 const file_read = @import("../../shared/file_read.zig");
 const Gltf = @import("gltf_json_parser.zig").Gltf;
 const GltfJson = @import("gltf_json_parser.zig").GltfJson;
+const GltfBuffer = @import("gltf_json_parser.zig").GltfBuffer;
+const GltfImage = @import("gltf_json_parser.zig").GltfImage;
 
 pub const GltfUriError = error{
     EmptyUri,
@@ -14,7 +16,7 @@ pub const GltfUriError = error{
 
 pub const GltfDocument = struct {
     allocator: std.mem.Allocator,
-    json_bytes: []u8,
+    json_bytes: ?[]u8,
     gltf: Gltf,
     buffers: [][]const u8,
 
@@ -58,12 +60,42 @@ pub const GltfDocument = struct {
             loaded_count += 1;
         }
 
-        return .{
-            .allocator = allocator,
-            .json_bytes = file_result.bytes,
-            .gltf = gltf,
-            .buffers = buffers,
-        };
+        return .{ .allocator = allocator, .json_bytes = file_result.bytes, .gltf = gltf, .buffers = buffers };
+    }
+
+    /// Build a document from a caller-owned source snapshot.  External buffers
+    /// are still loaded here, but the primary .gltf bytes are never reopened.
+    pub fn loadGltfFromBytes(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        source_dir: std.Io.Dir,
+        file_path: []const u8,
+        json_bytes: []const u8,
+    ) !GltfDocument {
+        var gltf = try Gltf.parse(json_bytes, allocator);
+        errdefer gltf.deinit();
+
+        const buffers = try allocator.alloc([]const u8, gltf.value.buffers.len);
+        errdefer allocator.free(buffers);
+
+        var loaded_count: usize = 0;
+        errdefer for (buffers[0..loaded_count]) |bytes| allocator.free(bytes);
+
+        for (gltf.value.buffers, 0..) |buffer, i| {
+            const uri = buffer.uri orelse return GltfUriError.UnsupportedUri;
+            const path = try resolveRelativeUri(allocator, file_path, uri);
+            defer allocator.free(path);
+
+            const result = try file_read.readFileAllocChunked(allocator, io, source_dir, path, .{ .chunk_size = 256 * 1024 });
+            errdefer allocator.free(result.bytes);
+
+            if (result.bytes.len < buffer.byteLength) {
+                return error.UnexpectedEndOfStream;
+            }
+            buffers[i] = result.bytes;
+            loaded_count += 1;
+        }
+        return .{ .allocator = allocator, .json_bytes = null, .gltf = gltf, .buffers = buffers };
     }
 
     pub fn deinit(self: *GltfDocument) void {
@@ -72,7 +104,9 @@ pub const GltfDocument = struct {
         }
         self.allocator.free(self.buffers);
         self.gltf.deinit();
-        self.allocator.free(self.json_bytes);
+        if (self.json_bytes) |bytes| {
+            self.allocator.free(bytes);
+        }
         self.* = undefined;
     }
 };
@@ -214,10 +248,10 @@ test "resolveRelativeUri rejects absolute and remote uri forms" {
 }
 
 test "appendExternalDependencies returns buffers and images" {
-    var buffers = [_]@import("gltf_json_parser.zig").GltfBuffer{
+    var buffers = [_]GltfBuffer{
         .{ .byteLength = 1, .uri = "mesh.bin" },
     };
-    var images = [_]@import("gltf_json_parser.zig").GltfImage{
+    var images = [_]GltfImage{
         .{ .uri = "albedo.png" },
     };
     const gltf = GltfJson{
