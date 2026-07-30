@@ -12,10 +12,10 @@ const fnv1a = source_file_mod.fnv1a;
 const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
 const log = @import("../logger.zig");
-const atomic_file = @import("../shared/atomic_file.zig");
+const AtomicFile = @import("../shared/atomic_file.zig").AtomicFile;
 const wire = @import("../shared/wire.zig");
 
-pub const VERSION = 4;
+pub const VERSION = 5;
 pub const MAGIC = "ZACHE";
 
 pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16); // magic + version + entry_count + output_dir_len + host_os_len
@@ -39,6 +39,7 @@ pub const Cache = struct {
     source_dir: std.Io.Dir,
     output_dir_path: []const u8 = "",
     host_os: []const u8 = "",
+    dirty: bool = true,
 
     pub fn init(allocator: std.mem.Allocator, source_dir: std.Io.Dir, output_dir_path: []const u8) !Cache {
         const owned_output_dir_path = try allocator.dupe(u8, output_dir_path);
@@ -73,10 +74,19 @@ pub const Cache = struct {
         return !std.mem.eql(u8, self.host_os, currentHostOsName());
     }
 
+    pub fn markDirty(self: *Cache) void {
+        self.dirty = true;
+    }
+
     pub fn setCurrentHostOs(self: *Cache, allocator: std.mem.Allocator) !void {
+        if (std.mem.eql(u8, self.host_os, currentHostOsName())) {
+            return;
+        }
+
         const host_os = try allocator.dupe(u8, currentHostOsName());
         allocator.free(self.host_os);
         self.host_os = host_os;
+        self.dirty = true;
     }
 
     pub fn pushCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry) !void {
@@ -89,6 +99,7 @@ pub const Cache = struct {
         }
         try self.entry_map.put(entry.source_path_hash, @intCast(idx));
         self.header.entry_count += 1;
+        self.dirty = true;
     }
 
     pub fn overwriteCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry, idx: u32) !void {
@@ -96,79 +107,61 @@ pub const Cache = struct {
         allocator.free(old.source_path);
         allocator.free(old.cooked_path);
         self.entries.items[idx] = entry;
+        self.dirty = true;
     }
 
     pub fn lookupEntryMut(self: *Cache, source_file: SourceFile) ?*CacheEntry {
-        const path_hash = source_file.hashPath();
-        if (self.entry_map.get(path_hash)) |entry_idx| {
-            return &self.entries.items[entry_idx];
-        }
-
-        return null;
+        const idx = self.getIdx(source_file) orelse return null;
+        return &self.entries.items[idx];
     }
 
     pub fn pruneDeleted(self: *Cache, allocator: std.mem.Allocator, source_files: []const SourceFile) u32 {
-        var source_hashes: std.AutoHashMap(Hash, void) = .init(allocator);
-        defer source_hashes.deinit();
+        var source_paths = std.StringHashMap(void).init(allocator);
+        defer source_paths.deinit();
 
-        const has_hash_set = blk: {
-            source_hashes.ensureTotalCapacity(@intCast(source_files.len)) catch break :blk false;
-            for (source_files) |sf| {
-                source_hashes.putAssumeCapacity(sf.hashPath(), {});
-            }
+        const has_source_paths = blk: {
+            source_paths.ensureTotalCapacity(@intCast(source_files.len)) catch break :blk false;
+            for (source_files) |sf| source_paths.putAssumeCapacity(sf.path, {});
             break :blk true;
         };
 
-        const sourceExists = struct {
-            fn check(
-                file_hash_set_enabled: bool,
-                file_hashes: *const std.AutoHashMap(Hash, void),
-                source_list: []const SourceFile,
-                source_hash: Hash,
-            ) bool {
-                if (file_hash_set_enabled) {
-                    return file_hashes.contains(source_hash);
-                }
-
-                for (source_list) |sf| {
-                    if (sf.hashPath() == source_hash) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-        }.check;
-
         var removed: u32 = 0;
-        var i: usize = 0;
-        while (i < self.entries.items.len) {
-            const entry = self.entries.items[i];
-            if (!sourceExists(has_hash_set, &source_hashes, source_files, entry.source_path_hash)) {
+        var write_index: usize = 0;
+        for (self.entries.items) |entry| {
+            const exists = if (has_source_paths)
+                source_paths.contains(entry.source_path)
+            else
+                sourceExists(source_files, entry.source_path);
+
+            if (!exists) {
                 log.debug("Source file not found, removing cooked file {s}", .{entry.cooked_path});
                 allocator.free(entry.source_path);
                 allocator.free(entry.cooked_path);
-                _ = self.entries.orderedRemove(i);
-                _ = self.entry_map.remove(entry.source_path_hash);
                 self.header.entry_count -= 1;
                 removed += 1;
             } else {
-                i += 1;
+                self.entries.items[write_index] = entry;
+                write_index += 1;
             }
         }
+        self.entries.items.len = write_index;
 
         // Rebuild entry_map indices after removals
         if (removed > 0) {
-            self.entry_map.clearRetainingCapacity();
-            for (self.entries.items, 0..) |entry, idx| {
-                self.entry_map.putAssumeCapacity(entry.source_path_hash, @intCast(idx));
-            }
+            self.rebuildEntryMap();
+            self.dirty = true;
         }
 
         return removed;
     }
 
     pub fn pruneDeletedDependencyRows(self: *Cache, allocator: std.mem.Allocator, source_files: []const SourceFile) u32 {
-        return self.dependency_graph.pruneDeleted(allocator, source_files);
+        const removed = self.dependency_graph.pruneDeleted(allocator, source_files);
+        if (removed > 0) {
+            self.dirty = true;
+        }
+
+        return removed;
     }
 
     pub fn lookupDependencyRow(self: *const Cache, source_file: SourceFile) ?*const DependencyRow {
@@ -184,12 +177,29 @@ pub const Cache = struct {
     ) !void {
         var row = try DependencyRow.create(allocator, source_file, info, dependencies);
         errdefer row.deinit(allocator);
+
         try self.dependency_graph.upsert(allocator, row);
+        self.dirty = true;
     }
 
     pub fn getIdx(self: *const Cache, source_file: SourceFile) ?u32 {
-        const path_hash = source_file.hashPath();
-        return self.entry_map.get(path_hash);
+        return self.getIdxByPath(source_file.hashPath(), source_file.path);
+    }
+
+    fn getIdxByPath(self: *const Cache, path_hash: Hash, path: []const u8) ?u32 {
+        if (self.entry_map.get(path_hash)) |idx| {
+            const entry = self.entries.items[idx];
+            if (std.mem.eql(u8, entry.source_path, path)) {
+                return idx;
+            }
+        }
+
+        for (self.entries.items, 0..) |entry, i| {
+            if (entry.source_path_hash == path_hash and std.mem.eql(u8, entry.source_path, path)) {
+                return @intCast(i);
+            }
+        }
+        return null;
     }
 
     pub fn upsertEntry(self: *Cache, allocator: std.mem.Allocator, source_file: SourceFile, entry: CacheEntry) !void {
@@ -201,15 +211,19 @@ pub const Cache = struct {
     }
 
     pub fn write(
-        self: *const Cache,
+        self: *Cache,
         allocator: std.mem.Allocator,
         io: std.Io,
         cache_dir: std.Io.Dir,
         cache_path: []const u8,
     ) !void {
-        var allocating: std.Io.Writer.Allocating = .init(allocator);
-        defer allocating.deinit();
-        const io_writer = &allocating.writer;
+        if (!self.dirty) return;
+
+        var pending = try AtomicFile.create(allocator, io, cache_dir, cache_path);
+        defer pending.deinit();
+        var buf: [8192]u8 = undefined;
+        var file_writer = pending.file.writer(io, &buf);
+        const io_writer = &file_writer.interface;
 
         try io_writer.writeAll(MAGIC);
         try io_writer.writeInt(u16, self.header.version, .little);
@@ -248,7 +262,9 @@ pub const Cache = struct {
             }
         }
 
-        try atomic_file.writeFileAtomic(allocator, io, cache_dir, cache_path, allocating.written());
+        try file_writer.flush();
+        try pending.commit();
+        self.dirty = false;
     }
 
     pub fn readFromDir(
@@ -273,15 +289,11 @@ pub const Cache = struct {
         }
 
         const version = try reader.takeInt(u16, .little);
-        if (version == 0 or version > VERSION) {
-            return error.UnsupportedVersion;
-        }
-
-        if (version < VERSION) {
+        if (version != VERSION) {
             return error.StaleVersion;
         }
 
-        var cache = try readEntries(allocator, version, reader);
+        var cache = try readEntries(allocator, reader);
         cache.source_dir = source_dir;
 
         if (!std.mem.eql(u8, cache.output_dir_path, output_dir_path)) {
@@ -302,15 +314,17 @@ pub const Cache = struct {
     pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Cache {
         const version = try reader.takeInt(u16, .little);
         if (version != VERSION) {
-            return error.UnsupportedVersion;
+            return error.StaleVersion;
         }
 
-        return readEntries(allocator, version, reader);
+        return readEntries(allocator, reader);
     }
 
-    fn readEntries(allocator: std.mem.Allocator, version: u16, reader: *std.Io.Reader) !Cache {
+    fn readEntries(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Cache {
         const entry_count = try reader.takeInt(u32, .little);
-        if (entry_count > 1_000_000) return error.TooManyCacheEntries;
+        if (entry_count > 1_000_000) {
+            return error.TooManyCacheEntries;
+        }
 
         const output_dir_path_len = try reader.takeInt(u16, .little);
         const output_dir_path = try allocator.alloc(u8, output_dir_path_len);
@@ -372,7 +386,10 @@ pub const Cache = struct {
         }
 
         const dependency_row_count = try reader.takeInt(u32, .little);
-        if (dependency_row_count > 1_000_000) return error.TooManyDependencyRows;
+        if (dependency_row_count > 1_000_000) {
+            return error.TooManyDependencyRows;
+        }
+
         try dependency_graph.rows.ensureTotalCapacity(allocator, dependency_row_count);
         try dependency_graph.row_map.ensureTotalCapacity(@intCast(dependency_row_count));
 
@@ -422,7 +439,7 @@ pub const Cache = struct {
 
         return .{
             .header = .{
-                .version = version,
+                .version = VERSION,
                 .entry_count = entry_count,
             },
             .entry_map = entry_map,
@@ -431,9 +448,24 @@ pub const Cache = struct {
             .source_dir = .cwd(),
             .output_dir_path = output_dir_path,
             .host_os = host_os,
+            .dirty = false,
         };
     }
+
+    fn rebuildEntryMap(self: *Cache) void {
+        self.entry_map.clearRetainingCapacity();
+        for (self.entries.items, 0..) |entry, idx| {
+            self.entry_map.putAssumeCapacity(entry.source_path_hash, @intCast(idx));
+        }
+    }
 };
+
+fn sourceExists(source_files: []const SourceFile, path: []const u8) bool {
+    for (source_files) |source| {
+        if (std.mem.eql(u8, source.path, path)) return true;
+    }
+    return false;
+}
 
 fn writeString(writer: *std.Io.Writer, value: []const u8) !void {
     try writer.writeInt(u16, @intCast(value.len), .little);
@@ -487,6 +519,22 @@ test "upsertEntry replaces existing entry without growing cache" {
     try testing.expectEqual(@as(usize, 1), cache.entries.items.len);
     try testing.expectEqual(@as(u64, 2), cache.entries.items[0].content_hash);
     try testing.expectEqualStrings("", cache.entries.items[0].cooked_path);
+}
+
+test "path-hash collisions keep cache rows distinct" {
+    var cache = try Cache.init(testing.allocator, .cwd(), ".");
+    defer cache.deinit(testing.allocator);
+
+    const hash: Hash = 1;
+    var first = try makeTestEntry(testing.allocator, "first.glsl", "first.zshdr");
+    first.source_path_hash = hash;
+    var second = try makeTestEntry(testing.allocator, "second.glsl", "second.zshdr");
+    second.source_path_hash = hash;
+    try cache.pushCacheEntry(testing.allocator, first);
+    try cache.pushCacheEntry(testing.allocator, second);
+
+    try testing.expectEqual(@as(u32, 0), cache.getIdxByPath(hash, "first.glsl").?);
+    try testing.expectEqual(@as(u32, 1), cache.getIdxByPath(hash, "second.glsl").?);
 }
 
 const testing = std.testing;
@@ -912,7 +960,7 @@ test "read accepts zero entries" {
     try testing.expectEqual(@as(usize, 0), c.entries.items.len);
 }
 
-test "read returns UnsupportedVersion for wrong version" {
+test "read returns StaleVersion for wrong version" {
     var buf: [64]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
 
@@ -921,7 +969,7 @@ test "read returns UnsupportedVersion for wrong version" {
     try writer.writeInt(u32, 0, .little);
 
     var reader = std.Io.Reader.fixed(buf[MAGIC.len..writer.end]);
-    try testing.expectError(error.UnsupportedVersion, Cache.read(testing.allocator, &reader));
+    try testing.expectError(error.StaleVersion, Cache.read(testing.allocator, &reader));
 }
 
 test "read handles entry with empty paths" {

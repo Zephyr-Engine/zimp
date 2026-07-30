@@ -49,6 +49,10 @@ pub const DepGraph = struct {
         return self.edges.get(source.hashPath());
     }
 
+    pub fn getDependenciesByHash(self: *const DepGraph, source: Hash) ?Dependencies {
+        return self.edges.get(source);
+    }
+
     pub fn dependencyCount(self: *const DepGraph, source: *const SourceFile) usize {
         if (self.edges.get(source.hashPath())) |entry| {
             return entry.items.len;

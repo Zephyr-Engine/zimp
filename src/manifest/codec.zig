@@ -114,6 +114,17 @@ pub fn writeToDir(
 ) !void {
     const bytes = try encodeAlloc(gpa, m);
     defer gpa.free(bytes);
+    const current = dir.readFileAlloc(io, name, gpa, .limited(max_manifest_bytes)) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+
+    if (current) |existing| {
+        defer gpa.free(existing);
+        if (std.mem.eql(u8, existing, bytes)) {
+            return;
+        }
+    }
     try atomic_file.writeFileAtomic(gpa, io, dir, name, bytes);
 }
 

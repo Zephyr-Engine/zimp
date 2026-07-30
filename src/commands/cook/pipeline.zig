@@ -12,8 +12,6 @@ const Cache = @import("../../cache/cache.zig").Cache;
 const manifest_builder = @import("../../manifest/builder.zig");
 const manifest_codec = @import("../../manifest/codec.zig");
 const meta_store_mod = @import("../../manifest/meta_store.zig");
-const meta_mod = @import("../../manifest/meta.zig");
-const AssetManifest = @import("../../manifest/model.zig").AssetManifest;
 const log = @import("../../logger.zig");
 
 pub fn run(
@@ -48,21 +46,20 @@ pub fn run(
                 &metrics,
                 &cache_session.cache,
                 plan.records.items,
-                plan.levels,
-                &plan.reverse,
+                plan.dependencies,
+                plan.dependents,
                 counting,
             );
             try executor.run(ctx.io, progress);
-        }
 
-        const cache_write_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
-        try cache_session.persist(allocator, ctx);
-        const cache_write_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
-        metrics.cache_write_ns = @intCast(cache_write_start.durationTo(cache_write_end).raw.nanoseconds);
-        metrics.cache_bytes_written = cache_session_mod.CacheSession.cacheBytesWritten(ctx);
+            const cache_write_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
+            metrics.cache_bytes_written = try cache_session.persist(allocator, ctx);
+            const cache_write_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
+            metrics.cache_write_ns = @intCast(cache_write_start.durationTo(cache_write_end).raw.nanoseconds);
 
-        if (ctx.project) |proj| {
-            try buildAndWriteManifest(allocator, ctx, proj, &cache_session.cache);
+            if (ctx.project) |proj| {
+                try buildAndWriteManifest(allocator, ctx, proj, &cache_session.cache, plan.orphan_sidecars.items);
+            }
         }
 
         metrics.pipeline_live_bytes = counting.currentRequestedBytes();
@@ -85,6 +82,7 @@ fn buildAndWriteManifest(
     ctx: *const CookContext,
     proj: ProjectCookInfo,
     cache: *const Cache,
+    orphan_sidecars: []const []const u8,
 ) !void {
     var metas = meta_store_mod.MetaStore.init(allocator, ctx.io, ctx.source);
     defer metas.deinit();
@@ -103,7 +101,7 @@ fn buildAndWriteManifest(
     try manifest_codec.writeToDir(allocator, ctx.io, proj.root_dir, proj.manifest_path, &manifest);
     const sidecars_written = try metas.flush(allocator);
 
-    warnOrphanedSidecars(allocator, ctx, &manifest);
+    warnOrphanedSidecars(orphan_sidecars);
 
     log.info("Asset manifest: {d} entries ({d} sidecar, {d} derived, {d} new); {d} sidecar(s) written", .{
         stats.entries,
@@ -116,43 +114,9 @@ fn buildAndWriteManifest(
 
 /// A sidecar whose source file is gone is authored identity with nothing to
 /// identify — warn, never delete (the user may be mid-rename or mid-revert).
-fn warnOrphanedSidecars(allocator: std.mem.Allocator, ctx: *const CookContext, manifest: *const AssetManifest) void {
-    warnOrphansInDir(allocator, ctx, manifest, ctx.source, "") catch |err| {
-        log.warn("orphaned-sidecar sweep failed: {s}", .{@errorName(err)});
-    };
-}
-
-fn warnOrphansInDir(
-    allocator: std.mem.Allocator,
-    ctx: *const CookContext,
-    manifest: *const AssetManifest,
-    dir: std.Io.Dir,
-    prefix: []const u8,
-) !void {
-    var iter = dir.iterate();
-    while (try iter.next(ctx.io)) |entry| {
-        if (entry.kind == .directory) {
-            const subdir = try std.Io.Dir.openDir(dir, ctx.io, entry.name, .{ .iterate = true });
-            defer subdir.close(ctx.io);
-            const subprefix = try std.fs.path.join(allocator, &.{ prefix, entry.name });
-            defer allocator.free(subprefix);
-            try warnOrphansInDir(allocator, ctx, manifest, subdir, subprefix);
-            continue;
-        }
-        if (entry.kind != .file or !meta_mod.isMetaPath(entry.name)) {
-            continue;
-        }
-
-        const source_name = entry.name[0 .. entry.name.len - meta_mod.meta_extension.len];
-        dir.access(ctx.io, source_name, .{}) catch {
-            const source_path = if (prefix.len > 0)
-                try std.fs.path.join(allocator, &.{ prefix, source_name })
-            else
-                try allocator.dupe(u8, source_name);
-            defer allocator.free(source_path);
-            log.warn("orphaned sidecar '{s}{s}': source file '{s}' no longer exists. " ++
-                "If the asset was renamed, move the sidecar with it to preserve its id; " ++
-                "if it was deleted, delete the sidecar too.", .{ source_path, meta_mod.meta_extension, source_path });
-        };
+fn warnOrphanedSidecars(sidecars: []const []const u8) void {
+    for (sidecars) |sidecar| {
+        const source = sidecar[0 .. sidecar.len - ".zmeta".len];
+        log.warn("orphaned sidecar '{s}': source file '{s}' no longer exists. If the asset was renamed, move the sidecar with it to preserve its id; if it was deleted, delete the sidecar too.", .{ sidecar, source });
     }
 }

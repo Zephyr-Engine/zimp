@@ -11,9 +11,21 @@ const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
 const material_generator = @import("../../parsers/gltf/material_generator.zig");
 
-const Dependencies = std.ArrayList(Hash);
-pub const DependentsMap = std.AutoHashMap(Hash, Dependencies);
 pub const SourceIndex = u32;
+
+pub const CsrGraph = struct {
+    offsets: []u32,
+    edges: []SourceIndex,
+
+    pub fn deinit(self: CsrGraph, allocator: std.mem.Allocator) void {
+        allocator.free(self.offsets);
+        allocator.free(self.edges);
+    }
+
+    pub fn edgesFrom(self: CsrGraph, index: SourceIndex) []const SourceIndex {
+        return self.edges[self.offsets[index]..self.offsets[index + 1]];
+    }
+};
 
 /// Stable, dense source state.  Paths are sorted before records are assigned so
 /// indexes are deterministic across identical scans.
@@ -27,40 +39,37 @@ pub const SourceRecord = struct {
 
 pub const CookPlan = struct {
     records: std.ArrayList(SourceRecord),
-    levels: [][]SourceIndex,
-    reverse: DependentsMap,
+    dependencies: CsrGraph,
+    dependents: CsrGraph,
+    orphan_sidecars: std.ArrayList([]u8),
 
     pub fn deinit(self: *CookPlan, allocator: std.mem.Allocator) void {
         for (self.records.items) |record| {
             allocator.free(record.source.path);
-            if (record.output_path) |path| allocator.free(path);
+            if (record.output_path) |path| {
+                allocator.free(path);
+            }
         }
         self.records.deinit(allocator);
 
-        freeLevels(allocator, self.levels);
-
-        var reverse_iter = self.reverse.iterator();
-        while (reverse_iter.next()) |entry| {
-            entry.value_ptr.deinit(allocator);
+        self.dependencies.deinit(allocator);
+        self.dependents.deinit(allocator);
+        for (self.orphan_sidecars.items) |path| {
+            allocator.free(path);
         }
-        self.reverse.deinit();
+        self.orphan_sidecars.deinit(allocator);
     }
 };
 
 pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cache, metrics: *CookMetrics) !CookPlan {
     const scan_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     const scanner = AssetScanner.init(allocator, ctx.io, ctx.source);
-    var scanned = try scanner.scan();
-    errdefer {
-        for (scanned.items) |file| {
-            allocator.free(file.path);
-        }
-        scanned.deinit(allocator);
-    }
+    var scanned = try scanner.scanDetailed();
+    errdefer scanner.deinitDetailed(&scanned);
 
     var generation_sources: std.ArrayList(SourceFile) = .empty;
     defer generation_sources.deinit(allocator);
-    for (scanned.items) |source| {
+    for (scanned.files.items) |source| {
         if (try needsMaterialGeneration(source, ctx, cache)) {
             try generation_sources.append(allocator, source);
         }
@@ -69,13 +78,13 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
     const generated_materials = try material_generator.generateForSources(allocator, ctx.io, ctx.source, generation_sources.items);
     if (generated_materials > 0) {
         log.debug("Generated {d} material source file(s), rescanning assets", .{generated_materials});
-        scanner.deinit(&scanned);
-        scanned = try scanner.scan();
+        scanner.deinitDetailed(&scanned);
+        scanned = try scanner.scanDetailed();
     }
     const scan_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 
     metrics.scan_ns = @intCast(scan_start.durationTo(scan_end).raw.nanoseconds);
-    std.mem.sort(SourceFile, scanned.items, {}, struct {
+    std.mem.sort(SourceFile, scanned.files.items, {}, struct {
         fn lessThan(_: void, a: SourceFile, b: SourceFile) bool {
             return std.mem.order(u8, a.path, b.path) == .lt;
         }
@@ -89,8 +98,8 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         }
         records.deinit(allocator);
     }
-    try records.ensureTotalCapacity(allocator, scanned.items.len);
-    for (scanned.items) |source| {
+    try records.ensureTotalCapacity(allocator, scanned.files.items.len);
+    for (scanned.files.items) |source| {
         const descriptor = asset_registry.descriptorForSource(source);
         const info = try source.getFileInfo(ctx.source, ctx.io);
         const output_path = if (descriptor.cooker) |cooker|
@@ -106,8 +115,8 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         });
     }
     // Ownership of paths moved into records.
-    scanned.deinit(allocator);
-    scanned = .empty;
+    scanned.files.deinit(allocator);
+    scanned.files = .empty;
 
     metrics.assets_total = @intCast(records.items.len);
 
@@ -127,20 +136,16 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         records.items.len,
     });
 
-    const source_files = try sourceSlice(allocator, records.items);
-    defer allocator.free(source_files);
-    const source_levels = try dep_graph.cookLevels(source_files);
-    defer DepGraph.freeLevels(allocator, source_levels);
-    const levels = try indexLevels(allocator, records.items, source_levels);
-    errdefer freeLevels(allocator, levels);
-
-    var reverse = try dep_graph.buildReverse(allocator);
-    errdefer deinitReverse(allocator, &reverse);
+    const graphs = try buildCsrGraphs(allocator, &dep_graph, records.items);
+    errdefer graphs.dependencies.deinit(allocator);
+    errdefer graphs.dependents.deinit(allocator);
+    try validateAcyclic(allocator, graphs.dependencies, graphs.dependents);
 
     return .{
         .records = records,
-        .levels = levels,
-        .reverse = reverse,
+        .dependencies = graphs.dependencies,
+        .dependents = graphs.dependents,
+        .orphan_sidecars = scanned.orphan_sidecars,
     };
 }
 
@@ -174,7 +179,7 @@ pub fn sourceSlice(allocator: std.mem.Allocator, records: []const SourceRecord) 
     return files;
 }
 
-fn indexLevels(allocator: std.mem.Allocator, records: []const SourceRecord, source_levels: []const []const SourceFile) ![][]SourceIndex {
+fn buildCsrGraphs(allocator: std.mem.Allocator, graph: *const DepGraph, records: []const SourceRecord) !struct { dependencies: CsrGraph, dependents: CsrGraph } {
     var indexes = std.AutoHashMap(Hash, SourceIndex).init(allocator);
     defer indexes.deinit();
     try indexes.ensureTotalCapacity(@intCast(records.len));
@@ -182,26 +187,88 @@ fn indexLevels(allocator: std.mem.Allocator, records: []const SourceRecord, sour
         indexes.putAssumeCapacity(record.source.hashPath(), @intCast(index));
     }
 
-    const levels = try allocator.alloc([]SourceIndex, source_levels.len);
-    errdefer allocator.free(levels);
-    var built: usize = 0;
-    errdefer {
-        for (levels[0..built]) |level| allocator.free(level);
-    }
-    for (source_levels, 0..) |source_level, level_index| {
-        const level = try allocator.alloc(SourceIndex, source_level.len);
-        levels[level_index] = level;
-        built += 1;
-        for (source_level, level) |source, *index| {
-            index.* = indexes.get(source.hashPath()) orelse return error.MissingSourceRecord;
+    const degree = try allocator.alloc(u32, records.len);
+    defer allocator.free(degree);
+    const dependent_degree = try allocator.alloc(u32, records.len);
+    defer allocator.free(dependent_degree);
+    @memset(degree, 0);
+    @memset(dependent_degree, 0);
+
+    var edge_count: usize = 0;
+    for (records, 0..) |record, index| {
+        if (graph.getDependenciesByHash(record.source.hashPath())) |deps| {
+            for (deps.items) |dependency| {
+                const dependency_index = indexes.get(dependency) orelse continue;
+                degree[index] += 1;
+                dependent_degree[dependency_index] += 1;
+                edge_count += 1;
+            }
         }
     }
-    return levels;
+
+    var dependencies = try makeCsr(allocator, degree, edge_count);
+    errdefer dependencies.deinit(allocator);
+    var dependents = try makeCsr(allocator, dependent_degree, edge_count);
+    errdefer dependents.deinit(allocator);
+    const dependency_cursor = try allocator.dupe(u32, dependencies.offsets[0..records.len]);
+    defer allocator.free(dependency_cursor);
+    const dependent_cursor = try allocator.dupe(u32, dependents.offsets[0..records.len]);
+    defer allocator.free(dependent_cursor);
+
+    for (records, 0..) |record, index| {
+        if (graph.getDependenciesByHash(record.source.hashPath())) |deps| {
+            for (deps.items) |dependency| {
+                const dependency_index = indexes.get(dependency) orelse continue;
+                dependencies.edges[dependency_cursor[index]] = dependency_index;
+                dependency_cursor[index] += 1;
+                dependents.edges[dependent_cursor[dependency_index]] = @intCast(index);
+                dependent_cursor[dependency_index] += 1;
+            }
+        }
+    }
+
+    return .{ .dependencies = dependencies, .dependents = dependents };
 }
 
-fn freeLevels(allocator: std.mem.Allocator, levels: [][]SourceIndex) void {
-    for (levels) |level| allocator.free(level);
-    allocator.free(levels);
+fn makeCsr(allocator: std.mem.Allocator, degree: []const u32, edge_count: usize) !CsrGraph {
+    const offsets = try allocator.alloc(u32, degree.len + 1);
+    errdefer allocator.free(offsets);
+    offsets[0] = 0;
+
+    for (degree, 0..) |count, index| {
+        offsets[index + 1] = offsets[index] + count;
+    }
+    return .{ .offsets = offsets, .edges = try allocator.alloc(SourceIndex, edge_count) };
+}
+
+fn validateAcyclic(allocator: std.mem.Allocator, dependencies: CsrGraph, dependents: CsrGraph) !void {
+    const remaining = try allocator.alloc(u32, dependencies.offsets.len - 1);
+    defer allocator.free(remaining);
+    var ready: std.ArrayList(SourceIndex) = .empty;
+    defer ready.deinit(allocator);
+
+    for (remaining, 0..) |*count, index| {
+        count.* = @intCast(dependencies.edgesFrom(@intCast(index)).len);
+        if (count.* == 0) {
+            try ready.append(allocator, @intCast(index));
+        }
+    }
+
+    var emitted: usize = 0;
+    var cursor: usize = 0;
+    while (cursor < ready.items.len) : (cursor += 1) {
+        emitted += 1;
+        for (dependents.edgesFrom(ready.items[cursor])) |dependent| {
+            remaining[dependent] -= 1;
+            if (remaining[dependent] == 0) {
+                try ready.append(allocator, dependent);
+            }
+        }
+    }
+
+    if (emitted != remaining.len) {
+        return error.CycleDetected;
+    }
 }
 
 fn validateUniqueOutputs(allocator: std.mem.Allocator, records: []const SourceRecord) !void {
@@ -261,14 +328,6 @@ fn buildDependencyGraph(
 
         try cache.upsertDependencyRow(allocator, source, record.info, deps);
     }
-}
-
-fn deinitReverse(allocator: std.mem.Allocator, reverse: *DependentsMap) void {
-    var iter = reverse.iterator();
-    while (iter.next()) |entry| {
-        entry.value_ptr.deinit(allocator);
-    }
-    reverse.deinit();
 }
 
 const testing = std.testing;
