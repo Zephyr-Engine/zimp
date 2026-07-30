@@ -115,22 +115,30 @@ pub const Pixels = union(enum) {
     hdr: []f32,
 };
 
+/// Identifies how `pixels` is released.
+pub const PixelOwner = enum {
+    borrowed,
+    allocator,
+    stb,
+};
+
 pub const RawTexture = struct {
     width: u32,
     height: u32,
     channels: u32,
     pixels: Pixels,
     class: TextureClass,
+    owner: PixelOwner = .borrowed,
 
-    pub fn init(filename: []const u8, file_bytes: []u8, allocator: std.mem.Allocator) !RawTexture {
+    pub fn init(filename: []const u8, file_bytes: []u8) !RawTexture {
         const class = TextureClass.classify(filename);
         return if (class == .hdr_linear)
-            initHdr(file_bytes, allocator, class)
+            initHdr(file_bytes, class)
         else
-            initLdr(file_bytes, allocator, class);
+            initLdr(file_bytes, class);
     }
 
-    fn initLdr(file_bytes: []u8, allocator: std.mem.Allocator, class: TextureClass) !RawTexture {
+    fn initLdr(file_bytes: []u8, class: TextureClass) !RawTexture {
         var width: c_int = 0;
         var height: c_int = 0;
         var channels: c_int = 0;
@@ -143,22 +151,19 @@ pub const RawTexture = struct {
             4,
         );
         if (stb_pixels == null) return error.StbLoadFailed;
-        defer stb.stbi_image_free(stb_pixels);
 
         const len = @as(usize, @intCast(width)) * @as(usize, @intCast(height)) * 4;
-        const pixels = try allocator.alloc(u8, len);
-        @memcpy(pixels, stb_pixels[0..len]);
-
         return RawTexture{
             .width = @as(u32, @intCast(width)),
             .height = @as(u32, @intCast(height)),
             .channels = 4,
-            .pixels = .{ .ldr = pixels },
+            .pixels = .{ .ldr = stb_pixels[0..len] },
             .class = class,
+            .owner = .stb,
         };
     }
 
-    fn initHdr(file_bytes: []u8, allocator: std.mem.Allocator, class: TextureClass) !RawTexture {
+    fn initHdr(file_bytes: []u8, class: TextureClass) !RawTexture {
         var width: c_int = 0;
         var height: c_int = 0;
         var channels: c_int = 0;
@@ -171,25 +176,29 @@ pub const RawTexture = struct {
             3,
         );
         if (stb_pixels == null) return error.StbLoadFailed;
-        defer stb.stbi_image_free(stb_pixels);
 
         const len = @as(usize, @intCast(width)) * @as(usize, @intCast(height)) * 3;
-        const pixels = try allocator.alloc(f32, len);
-        @memcpy(pixels, stb_pixels[0..len]);
-
         return RawTexture{
             .width = @as(u32, @intCast(width)),
             .height = @as(u32, @intCast(height)),
             .channels = 3,
-            .pixels = .{ .hdr = pixels },
+            .pixels = .{ .hdr = stb_pixels[0..len] },
             .class = class,
+            .owner = .stb,
         };
     }
 
     pub fn deinit(self: *const RawTexture, allocator: std.mem.Allocator) void {
-        switch (self.pixels) {
-            .ldr => |p| allocator.free(p),
-            .hdr => |p| allocator.free(p),
+        switch (self.owner) {
+            .borrowed => {},
+            .allocator => switch (self.pixels) {
+                .ldr => |p| allocator.free(p),
+                .hdr => |p| allocator.free(p),
+            },
+            .stb => switch (self.pixels) {
+                .ldr => |p| stb.stbi_image_free(@ptrCast(p.ptr)),
+                .hdr => |p| stb.stbi_image_free(@ptrCast(p.ptr)),
+            },
         }
     }
 
@@ -222,54 +231,22 @@ pub const RawTexture = struct {
         std.mem.copyForwards(u8, self.pixels.ldr[idx .. idx + self.channels], color);
     }
 
-    /// Generates a full mip chain down to 1x1. Each level preserves the source's pixel
-    /// representation (LDR u8 or HDR f32) and channel count. LDR mips filter in
-    /// class-appropriate linear space; HDR mips filter directly in linear f32.
-    /// Format-specific channel extraction (e.g., RG for normal maps) happens later during cooking.
-    pub fn generateMipmaps(self: *const RawTexture, allocator: std.mem.Allocator) ![]RawTexture {
-        if (self.class == .normal_linear) {
-            self.validateNormals();
+    pub fn mipScratchLen(self: *const RawTexture) usize {
+        return @as(usize, @max(1, self.width / 2)) * @as(usize, self.height) * self.channels;
+    }
+
+    pub fn downsample(self: *const RawTexture, allocator: std.mem.Allocator, scratch: []f32) !RawTexture {
+        var next = try allocateMip(allocator, self, @max(1, self.width / 2), @max(1, self.height / 2));
+        errdefer next.deinit(allocator);
+        switch (self.pixels) {
+            .ldr => try kaiserFilter(self, &next, scratch),
+            .hdr => try kaiserFilterHdr(self, &next, scratch),
         }
-
-        const count = std.math.log2(@max(self.width, self.height)) + 1;
-
-        const images = try allocator.alloc(RawTexture, count);
-        for (0..count) |i| {
-            const shift: u5 = @intCast(i);
-            const mip_width = @max(1, self.width >> shift);
-            const mip_height = @max(1, self.height >> shift);
-            const sample_count = @as(usize, mip_width) * @as(usize, mip_height) * self.channels;
-
-            var image: RawTexture = switch (self.pixels) {
-                .ldr => .{
-                    .width = mip_width,
-                    .height = mip_height,
-                    .channels = self.channels,
-                    .pixels = .{ .ldr = try allocator.alloc(u8, sample_count) },
-                    .class = self.class,
-                },
-                .hdr => .{
-                    .width = mip_width,
-                    .height = mip_height,
-                    .channels = self.channels,
-                    .pixels = .{ .hdr = try allocator.alloc(f32, sample_count) },
-                    .class = self.class,
-                },
-            };
-
-            switch (self.pixels) {
-                .ldr => try self.kaiserFilter(&image, allocator),
-                .hdr => try self.kaiserFilterHdr(&image, allocator),
-            }
-
-            images[i] = image;
-        }
-
-        return images;
+        return next;
     }
 
     /// Warns if any pixel in the normal map has a significantly non-unit normal.
-    fn validateNormals(self: *const RawTexture) void {
+    pub fn validateNormals(self: *const RawTexture) void {
         const tolerance = 0.1;
         var bad_count: u32 = 0;
         for (0..self.height) |y| {
@@ -295,17 +272,11 @@ pub const RawTexture = struct {
     /// Separable Kaiser-windowed sinc filter for 2x downsampling of LDR data.
     /// Filters in linear space (class.decode → accumulate → class.encode),
     /// applies clamp-to-edge at borders.
-    fn kaiserFilter(original_image: *const RawTexture, new_image: *RawTexture, allocator: std.mem.Allocator) !void {
+    fn kaiserFilter(original_image: *const RawTexture, new_image: *RawTexture, scratch: []f32) !void {
         const class = original_image.class;
-        var weights: [kaiser_taps]f32 = undefined;
-        computeKaiserWeights(&weights);
-
         const ch = original_image.channels;
-        const scratch = try allocator.alloc(
-            f32,
-            @as(usize, new_image.width) * @as(usize, original_image.height) * ch,
-        );
-        defer allocator.free(scratch);
+        const scratch_len = @as(usize, new_image.width) * @as(usize, original_image.height) * ch;
+        std.debug.assert(scratch.len >= scratch_len);
 
         // Horizontal pass: source -> scratch (new_width × original_height, linear f32)
         for (0..original_image.height) |y| {
@@ -319,7 +290,7 @@ pub const RawTexture = struct {
                         @as(i32, @intCast(original_image.width)) - 1,
                     ));
                     const color = original_image.getPixel(src_x, @intCast(y)).?;
-                    const w = weights[i];
+                    const w = kaiser_weights[i];
                     c[0] += class.decode(color[0]) * w;
                     c[1] += class.decode(color[1]) * w;
                     c[2] += class.decode(color[2]) * w;
@@ -345,7 +316,7 @@ pub const RawTexture = struct {
                         @as(i32, @intCast(original_image.height)) - 1,
                     ));
                     const idx = (@as(usize, src_y) * new_image.width + x) * ch;
-                    const w = weights[i];
+                    const w = kaiser_weights[i];
                     c[0] += scratch[idx + 0] * w;
                     c[1] += scratch[idx + 1] * w;
                     c[2] += scratch[idx + 2] * w;
@@ -365,19 +336,13 @@ pub const RawTexture = struct {
 
     /// Separable Kaiser-windowed sinc filter for 2x downsampling of HDR f32 data.
     /// No gamma conversion (already linear) and no normal-map normalization.
-    fn kaiserFilterHdr(original_image: *const RawTexture, new_image: *RawTexture, allocator: std.mem.Allocator) !void {
-        var weights: [kaiser_taps]f32 = undefined;
-        computeKaiserWeights(&weights);
-
+    fn kaiserFilterHdr(original_image: *const RawTexture, new_image: *RawTexture, scratch: []f32) !void {
         const ch = original_image.channels;
         const src = original_image.pixels.hdr;
         const dst = new_image.pixels.hdr;
 
-        const scratch = try allocator.alloc(
-            f32,
-            @as(usize, new_image.width) * @as(usize, original_image.height) * ch,
-        );
-        defer allocator.free(scratch);
+        const scratch_len = @as(usize, new_image.width) * @as(usize, original_image.height) * ch;
+        std.debug.assert(scratch.len >= scratch_len);
 
         // Horizontal pass
         for (0..original_image.height) |y| {
@@ -391,7 +356,7 @@ pub const RawTexture = struct {
                         @as(i32, @intCast(original_image.width)) - 1,
                     ));
                     const src_idx = (@as(usize, y) * original_image.width + src_x) * ch;
-                    const w = weights[i];
+                    const w = kaiser_weights[i];
                     for (0..ch) |c_idx| c[c_idx] += src[src_idx + c_idx] * w;
                 }
                 const scratch_idx = (y * new_image.width + x) * ch;
@@ -411,7 +376,7 @@ pub const RawTexture = struct {
                         @as(i32, @intCast(original_image.height)) - 1,
                     ));
                     const scratch_idx = (@as(usize, src_y) * new_image.width + x) * ch;
-                    const w = weights[i];
+                    const w = kaiser_weights[i];
                     for (0..ch) |c_idx| c[c_idx] += scratch[scratch_idx + c_idx] * w;
                 }
                 const dst_idx = (y * new_image.width + x) * ch;
@@ -421,12 +386,46 @@ pub const RawTexture = struct {
     }
 };
 
+fn allocateMip(
+    allocator: std.mem.Allocator,
+    source: *const RawTexture,
+    width: u32,
+    height: u32,
+) !RawTexture {
+    const sample_count = @as(usize, width) * @as(usize, height) * source.channels;
+    return switch (source.pixels) {
+        .ldr => .{
+            .width = width,
+            .height = height,
+            .channels = source.channels,
+            .pixels = .{ .ldr = try allocator.alloc(u8, sample_count) },
+            .class = source.class,
+            .owner = .allocator,
+        },
+        .hdr => .{
+            .width = width,
+            .height = height,
+            .channels = source.channels,
+            .pixels = .{ .hdr = try allocator.alloc(f32, sample_count) },
+            .class = source.class,
+            .owner = .allocator,
+        },
+    };
+}
+
 // Kaiser filter kernel parameters. Output pixel x's kernel center sits at source coord
 // 2x + 1 (between two source pixels); offsets {-5..6} relative to 2x cover radius 3.
 const kaiser_taps: usize = 12;
 const kaiser_start_offset: i32 = -5;
 const kaiser_radius: f32 = 3.0;
 const kaiser_alpha: f32 = 4.0;
+const kaiser_weights: [kaiser_taps]f32 = makeKaiserWeights();
+
+fn makeKaiserWeights() [kaiser_taps]f32 {
+    var weights: [kaiser_taps]f32 = undefined;
+    computeKaiserWeights(&weights);
+    return weights;
+}
 
 fn computeKaiserWeights(weights: *[kaiser_taps]f32) void {
     var weight_sum: f32 = 0;
@@ -659,9 +658,23 @@ test "srgb LUT: midpoint is less than 0.5 due to gamma" {
     try testing.expect(TextureClass.srgb_to_linear_lut[128] < 0.25);
 }
 
-fn freeMips(alloc: std.mem.Allocator, mipmaps: []RawTexture) void {
-    for (mipmaps) |mip| mip.deinit(alloc);
-    alloc.free(mipmaps);
+test "init retains stb-owned decoded pixels" {
+    var ppm = [_]u8{
+        'P', '6', '\n', '1', ' ', '1', '\n', '2', '5', '5', '\n',
+        10,  20,  30,
+    };
+    const image = try RawTexture.init("pixel.png", &ppm);
+    defer image.deinit(testing.allocator);
+
+    try testing.expectEqual(PixelOwner.stb, image.owner);
+    try testing.expectEqualSlices(u8, &.{ 10, 20, 30, 255 }, image.pixels.ldr);
+}
+
+test "deinit leaves borrowed pixels alone" {
+    var pixels = [_]u8{ 10, 20, 30, 255 };
+    const image = RawTexture{ .width = 1, .height = 1, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .color_srgb };
+    image.deinit(testing.allocator);
+    try testing.expectEqualSlices(u8, &.{ 10, 20, 30, 255 }, &pixels);
 }
 
 test "getPixel: returns null for out of bounds x" {
@@ -707,88 +720,53 @@ test "setPixel: returns error for wrong color length" {
     try testing.expectError(error.InvalidColor, image.setPixel(0, 0, &.{ 0, 0, 0 }));
 }
 
-test "generateMipmaps: 4x4 produces correct mip count" {
+test "downsample uses the preceding level" {
     const alloc = testing.allocator;
-    var pixels = [_]u8{128} ** (4 * 4 * 4);
-    const image = RawTexture{ .width = 4, .height = 4, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .single_linear };
-    const mipmaps = try image.generateMipmaps(alloc);
-    defer freeMips(alloc, mipmaps);
-    try testing.expectEqual(@as(usize, 3), mipmaps.len);
-    try testing.expectEqual(@as(u32, 4), mipmaps[0].width);
-    try testing.expectEqual(@as(u32, 2), mipmaps[1].width);
-    try testing.expectEqual(@as(u32, 1), mipmaps[2].width);
-}
-
-test "generateMipmaps: uniform linear image preserves value" {
-    const alloc = testing.allocator;
-    var pixels = [_]u8{100} ** (4 * 4 * 4);
-    const image = RawTexture{ .width = 4, .height = 4, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .single_linear };
-    const mipmaps = try image.generateMipmaps(alloc);
-    defer freeMips(alloc, mipmaps);
-    const smallest = mipmaps[mipmaps.len - 1].pixels.ldr;
-    try testing.expectEqual(@as(u8, 100), smallest[0]);
-    try testing.expectEqual(@as(u8, 100), smallest[1]);
-    try testing.expectEqual(@as(u8, 100), smallest[2]);
-    try testing.expectEqual(@as(u8, 100), smallest[3]);
-}
-
-test "generateMipmaps: mips stay 4-channel" {
-    const alloc = testing.allocator;
-    var pixels = [_]u8{ 128, 128, 255, 255 } ** (2 * 2);
-    const image = RawTexture{ .width = 2, .height = 2, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .normal_linear };
-    const mipmaps = try image.generateMipmaps(alloc);
-    defer freeMips(alloc, mipmaps);
-    for (mipmaps) |mip| {
-        try testing.expectEqual(@as(u32, 4), mip.channels);
+    var pixels: [8 * 4]u8 = undefined;
+    for (0..8) |x| {
+        pixels[x * 4 + 0] = @intCast(x * 31);
+        pixels[x * 4 + 1] = @intCast(x * 17);
+        pixels[x * 4 + 2] = @intCast(x * 9);
+        pixels[x * 4 + 3] = @intCast(255 - x * 13);
     }
+    const image = RawTexture{ .width = 8, .height = 1, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .single_linear };
+    const scratch = try alloc.alloc(f32, image.mipScratchLen());
+    defer alloc.free(scratch);
+
+    var first = try image.downsample(alloc, scratch);
+    defer first.deinit(alloc);
+    var second = try first.downsample(alloc, scratch);
+    defer second.deinit(alloc);
+    var direct = try image.downsample(alloc, scratch);
+    defer direct.deinit(alloc);
+    try testing.expect(!std.mem.eql(u8, direct.pixels.ldr, second.pixels.ldr));
 }
 
-test "generateMipmaps: mips inherit texture class" {
+test "downsample handles non-power-of-two and single-axis dimensions" {
     const alloc = testing.allocator;
-    var pixels = [_]u8{128} ** (2 * 2 * 4);
-    const image = RawTexture{ .width = 2, .height = 2, .channels = 4, .pixels = .{ .ldr = &pixels }, .class = .normal_linear };
-    const mipmaps = try image.generateMipmaps(alloc);
-    defer freeMips(alloc, mipmaps);
-    for (mipmaps) |mip| {
-        try testing.expectEqual(TextureClass.normal_linear, mip.class);
-    }
-}
+    var npot_pixels = [_]u8{128} ** (5 * 3 * 4);
+    const npot = RawTexture{ .width = 5, .height = 3, .channels = 4, .pixels = .{ .ldr = &npot_pixels }, .class = .single_linear };
+    const npot_scratch = try alloc.alloc(f32, npot.mipScratchLen());
+    defer alloc.free(npot_scratch);
+    var npot_next = try npot.downsample(alloc, npot_scratch);
+    defer npot_next.deinit(alloc);
+    var npot_last = try npot_next.downsample(alloc, npot_scratch);
+    defer npot_last.deinit(alloc);
+    try testing.expectEqual(@as(u32, 2), npot_next.width);
+    try testing.expectEqual(@as(u32, 1), npot_next.height);
+    try testing.expectEqual(@as(u32, 1), npot_last.width);
+    try testing.expectEqual(@as(u32, 1), npot_last.height);
 
-test "generateMipmaps: HDR produces 3-channel f32 mip chain" {
-    const alloc = testing.allocator;
-    var pixels = [_]f32{ 1.5, 0.75, 0.25 } ** (4 * 4);
-    const image = RawTexture{ .width = 4, .height = 4, .channels = 3, .pixels = .{ .hdr = &pixels }, .class = .hdr_linear };
-    const mipmaps = try image.generateMipmaps(alloc);
-    defer freeMips(alloc, mipmaps);
-    try testing.expectEqual(@as(usize, 3), mipmaps.len);
-    for (mipmaps) |mip| {
-        try testing.expectEqual(@as(u32, 3), mip.channels);
-        try testing.expectEqual(TextureClass.hdr_linear, mip.class);
-        try testing.expect(mip.pixels == .hdr);
-    }
-}
-
-test "generateMipmaps: HDR uniform image preserves f32 values" {
-    const alloc = testing.allocator;
-    var pixels = [_]f32{ 2.0, 3.5, 0.125 } ** (4 * 4);
-    const image = RawTexture{ .width = 4, .height = 4, .channels = 3, .pixels = .{ .hdr = &pixels }, .class = .hdr_linear };
-    const mipmaps = try image.generateMipmaps(alloc);
-    defer freeMips(alloc, mipmaps);
-    const smallest = mipmaps[mipmaps.len - 1].pixels.hdr;
-    try testing.expectApproxEqAbs(@as(f32, 2.0), smallest[0], 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 3.5), smallest[1], 0.001);
-    try testing.expectApproxEqAbs(@as(f32, 0.125), smallest[2], 0.001);
-}
-
-test "generateMipmaps: HDR preserves values >1.0 (no gamma clipping)" {
-    const alloc = testing.allocator;
-    var pixels = [_]f32{ 8.0, 4.0, 16.0 } ** (2 * 2);
-    const image = RawTexture{ .width = 2, .height = 2, .channels = 3, .pixels = .{ .hdr = &pixels }, .class = .hdr_linear };
-    const mipmaps = try image.generateMipmaps(alloc);
-    defer freeMips(alloc, mipmaps);
-    const smallest = mipmaps[mipmaps.len - 1].pixels.hdr;
-    // Kaiser filter on uniform data should preserve the value, including values >1.0.
-    try testing.expectApproxEqAbs(@as(f32, 8.0), smallest[0], 0.01);
-    try testing.expectApproxEqAbs(@as(f32, 4.0), smallest[1], 0.01);
-    try testing.expectApproxEqAbs(@as(f32, 16.0), smallest[2], 0.01);
+    var vertical_pixels = [_]u8{128} ** (5 * 4);
+    const vertical = RawTexture{ .width = 1, .height = 5, .channels = 4, .pixels = .{ .ldr = &vertical_pixels }, .class = .single_linear };
+    const vertical_scratch = try alloc.alloc(f32, vertical.mipScratchLen());
+    defer alloc.free(vertical_scratch);
+    var vertical_next = try vertical.downsample(alloc, vertical_scratch);
+    defer vertical_next.deinit(alloc);
+    var vertical_last = try vertical_next.downsample(alloc, vertical_scratch);
+    defer vertical_last.deinit(alloc);
+    try testing.expectEqual(@as(u32, 1), vertical_next.width);
+    try testing.expectEqual(@as(u32, 2), vertical_next.height);
+    try testing.expectEqual(@as(u32, 1), vertical_last.width);
+    try testing.expectEqual(@as(u32, 1), vertical_last.height);
 }

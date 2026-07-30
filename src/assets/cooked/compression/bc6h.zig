@@ -38,6 +38,37 @@ pub fn encode(src: []const u8, width: u32, height: u32, dst: []u8) void {
     }
 }
 
+pub fn encodeF32(src: []const f32, width: u32, height: u32, pixel_stride: u32, dst: []u8) void {
+    std.debug.assert(pixel_stride >= 3);
+    std.debug.assert(src.len >= @as(usize, width) * @as(usize, height) * pixel_stride);
+    const blocks_x = (width + 3) / 4;
+    const blocks_y = (height + 3) / 4;
+    std.debug.assert(dst.len == @as(usize, blocks_x) * @as(usize, blocks_y) * 16);
+
+    var block: [16 * 6]u8 = undefined;
+    for (0..blocks_y) |by| {
+        for (0..blocks_x) |bx| {
+            const origin_x = @as(u32, @intCast(bx)) * 4;
+            const origin_y = @as(u32, @intCast(by)) * 4;
+            for (0..4) |ly| {
+                const y = @min(origin_y + @as(u32, @intCast(ly)), height - 1);
+                for (0..4) |lx| {
+                    const x = @min(origin_x + @as(u32, @intCast(lx)), width - 1);
+                    const src_idx = (@as(usize, y) * width + x) * pixel_stride;
+                    const block_idx = (ly * 4 + lx) * 6;
+                    for (0..3) |channel| {
+                        const half: f16 = @floatCast(src[src_idx + channel]);
+                        std.mem.writeInt(u16, block[block_idx + channel * 2 ..][0..2], @bitCast(half), .little);
+                    }
+                }
+            }
+            const encoded = encodeBlockMode3(block);
+            const dst_off = (by * blocks_x + bx) * 16;
+            @memcpy(dst[dst_off..][0..16], &encoded);
+        }
+    }
+}
+
 /// 4-bit index weights, scaled by 64.
 const weights4 = [16]u32{ 0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64 };
 
@@ -242,4 +273,22 @@ test "encode: output size matches ceil(w/4)*ceil(h/4)*16" {
 
     encode(src, 5, 3, dst);
     try testing.expectEqual(@as(usize, 32), dst.len);
+}
+
+test "encodeF32 matches preconverted f16 input" {
+    var floats: [2 * 2 * 3]f32 = undefined;
+    var half_bytes: [2 * 2 * 6]u8 = undefined;
+    for (0..(2 * 2)) |i| {
+        for (0..3) |channel| {
+            const value = @as(f32, @floatFromInt(i * 3 + channel)) / 3.0;
+            floats[i * 3 + channel] = value;
+            const half: f16 = @floatCast(value);
+            std.mem.writeInt(u16, half_bytes[(i * 3 + channel) * 2 ..][0..2], @bitCast(half), .little);
+        }
+    }
+    var expected: [16]u8 = undefined;
+    var actual: [16]u8 = undefined;
+    encode(&half_bytes, 2, 2, &expected);
+    encodeF32(&floats, 2, 2, 3, &actual);
+    try testing.expectEqualSlices(u8, &expected, &actual);
 }
