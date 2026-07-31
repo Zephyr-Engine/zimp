@@ -12,7 +12,7 @@ const cook_metrics = @import("../cook_metrics.zig");
 const CountingAllocator = @import("../../shared/counting_allocator.zig").CountingAllocator;
 const log = @import("../../logger.zig");
 const CookContext = @import("context.zig").CookContext;
-const DependentsMap = @import("planner.zig").DependentsMap;
+const CsrGraph = @import("planner.zig").CsrGraph;
 const SourceIndex = @import("planner.zig").SourceIndex;
 const SourceRecord = @import("planner.zig").SourceRecord;
 const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
@@ -59,8 +59,11 @@ const CookJob = struct {
     cook_node: std.Progress.Node,
 
     pub fn execute(self: @This()) !CookJobResult {
+        var arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer arena.deinit();
+
         var runner = CookJobRunner{
-            .allocator = self.allocator,
+            .allocator = arena.allocator(),
             .ctx = self.ctx,
             .cache = self.cache,
             .record = self.record,
@@ -335,7 +338,9 @@ fn currentCookedHeader(asset_type: AssetType) ?CookedHeader {
 }
 
 fn cookedFileIsCurrent(io: std.Io, output: std.Io.Dir, cooked_path: []const u8, asset_type: AssetType) bool {
-    if (cooked_path.len == 0) return false;
+    if (cooked_path.len == 0) {
+        return false;
+    }
 
     const file = output.openFile(io, cooked_path, .{}) catch return false;
     defer file.close(io);
@@ -386,7 +391,10 @@ const CookCacheUpdater = struct {
             .none => {},
             .source_mtime => |mtime| {
                 if (self.cache.lookupEntryMut(result.entry)) |cache_entry| {
-                    cache_entry.source_mtime = mtime;
+                    if (cache_entry.source_mtime != mtime) {
+                        cache_entry.source_mtime = mtime;
+                        self.cache.markDirty();
+                    }
                 }
             },
             .cooked => |cooked_size| try self.cacheCooked(result, cooked_size),
@@ -429,37 +437,45 @@ const CookCacheUpdater = struct {
     }
 };
 
-const InvalidationTracker = struct {
-    reverse: *const DependentsMap,
-    forced: std.AutoHashMap(Hash, void),
+const Completion = struct {
+    index: SourceIndex,
+    result: anyerror!CookJobResult,
+};
 
-    fn init(allocator: std.mem.Allocator, reverse: *const DependentsMap) InvalidationTracker {
-        return .{
-            .reverse = reverse,
-            .forced = .init(allocator),
-        };
+const CompletionQueue = struct {
+    io: std.Io,
+    mutex: std.Io.Mutex = .init,
+    cond: std.Io.Condition = .init,
+    items: []Completion,
+    len: usize = 0,
+
+    fn push(self: *CompletionQueue, completion: Completion) void {
+        self.mutex.lockUncancelable(self.io);
+        self.items[self.len] = completion;
+        self.len += 1;
+        self.cond.signal(self.io);
+        self.mutex.unlock(self.io);
     }
 
-    fn deinit(self: *InvalidationTracker) void {
-        self.forced.deinit();
-    }
-
-    fn isForced(self: *const InvalidationTracker, entry: SourceFile) bool {
-        return self.forced.contains(entry.hashPath());
-    }
-
-    fn enqueueIfChanged(self: *InvalidationTracker, result: CookJobResult) !void {
-        if (result.result == .cooked or result.result == .dependency_changed) {
-            try self.enqueueDependents(result.entry.hashPath());
+    fn pop(self: *CompletionQueue) Completion {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        while (self.len == 0) {
+            self.cond.waitUncancelable(self.io, &self.mutex);
         }
-    }
 
-    fn enqueueDependents(self: *InvalidationTracker, hash: Hash) !void {
-        if (self.reverse.get(hash)) |dependents| {
-            for (dependents.items) |dep_hash| {
-                try self.forced.put(dep_hash, {});
-            }
-        }
+        self.len -= 1;
+        return self.items[self.len];
+    }
+};
+
+const QueuedCookJob = struct {
+    index: SourceIndex,
+    job: CookJob,
+    completions: *CompletionQueue,
+
+    pub fn execute(self: @This()) void {
+        self.completions.push(.{ .index = self.index, .result = self.job.execute() });
     }
 };
 
@@ -469,8 +485,8 @@ pub const Executor = struct {
     metrics: *CookMetrics,
     cache: *Cache,
     records: []const SourceRecord,
-    levels: [][]SourceIndex,
-    reverse: *const DependentsMap,
+    dependencies: CsrGraph,
+    dependents: CsrGraph,
     counting: *CountingAllocator,
 
     pub fn init(
@@ -479,8 +495,8 @@ pub const Executor = struct {
         metrics: *CookMetrics,
         cache: *Cache,
         records: []const SourceRecord,
-        levels: [][]SourceIndex,
-        reverse: *const DependentsMap,
+        dependencies: CsrGraph,
+        dependents: CsrGraph,
         counting: *CountingAllocator,
     ) Executor {
         return .{
@@ -489,18 +505,14 @@ pub const Executor = struct {
             .metrics = metrics,
             .cache = cache,
             .records = records,
-            .levels = levels,
-            .reverse = reverse,
+            .dependencies = dependencies,
+            .dependents = dependents,
             .counting = counting,
         };
     }
 
     pub fn run(self: *Executor, io: std.Io, progress: std.Progress.Node) !void {
         var scheduler = zob.Scheduler.init(io, self.allocator);
-        const job_allocator = self.allocator;
-
-        var invalidation = InvalidationTracker.init(self.allocator, self.reverse);
-        defer invalidation.deinit();
         var cache_updater = CookCacheUpdater{
             .allocator = self.allocator,
             .io = self.ctx.io,
@@ -515,34 +527,101 @@ pub const Executor = struct {
         const cook_node = progress.start("Cooking assets", self.totalAssetCount());
         defer cook_node.end();
 
-        for (self.levels) |level| {
-            const jobs = try self.allocator.alloc(CookJob, level.len);
-            defer self.allocator.free(jobs);
+        const count = self.records.len;
+        const remaining = try self.allocator.alloc(u32, count);
+        defer self.allocator.free(remaining);
 
-            for (level, jobs) |source_index, *job| {
-                const record = &self.records[source_index];
-                job.* = .{
-                    .allocator = job_allocator,
-                    .ctx = self.ctx,
-                    .cache = self.cache,
-                    .record = record,
-                    .force_recook = invalidation.isForced(record.source),
-                    .cook_node = cook_node,
+        const forced = try self.allocator.alloc(bool, count);
+        defer self.allocator.free(forced);
+
+        const completions = try self.allocator.alloc(Completion, count);
+        defer self.allocator.free(completions);
+
+        const futures = try self.allocator.alloc(zob.Future(void), count);
+        defer self.allocator.free(futures);
+        @memset(forced, false);
+
+        var queue = CompletionQueue{ .io = io, .items = completions };
+        var ready: std.ArrayList(SourceIndex) = .empty;
+        defer ready.deinit(self.allocator);
+        try ready.ensureTotalCapacity(self.allocator, count);
+        for (remaining, 0..) |*degree, index| {
+            degree.* = @intCast(self.dependencies.edgesFrom(@intCast(index)).len);
+            if (degree.* == 0) {
+                ready.appendAssumeCapacity(@intCast(index));
+            }
+        }
+
+        var submitted: usize = 0;
+        var completed: usize = 0;
+        var ready_index: usize = 0;
+        var first_error: ?anyerror = null;
+        while (completed < count) {
+            while (ready_index < ready.items.len) : (ready_index += 1) {
+                const index = ready.items[ready_index];
+                const record = &self.records[index];
+                const queued = QueuedCookJob{
+                    .index = index,
+                    .job = .{
+                        .allocator = self.allocator,
+                        .ctx = self.ctx,
+                        .cache = self.cache,
+                        .record = record,
+                        .force_recook = forced[index],
+                        .cook_node = cook_node,
+                    },
+                    .completions = &queue,
                 };
+                futures[submitted] = scheduler.submit(QueuedCookJob, queued, .normal);
+                submitted += 1;
             }
 
-            var batch = try scheduler.submitBatch(CookJob, jobs, .normal);
-            defer batch.deinit();
+            if (submitted == completed) {
+                return error.CycleDetected;
+            }
 
-            const results = try batch.awaitAll(io);
-            defer self.allocator.free(results);
-
-            for (results) |result| {
+            const completion = queue.pop();
+            completed += 1;
+            if (completion.result) |result| {
                 metrics_accumulator.recordJobResult(result);
-                try cache_updater.apply(result);
-                try invalidation.enqueueIfChanged(result);
+                cache_updater.apply(result) catch |err| {
+                    if (first_error == null) {
+                        first_error = err;
+                    }
+                };
+                const changed = result.result == .cooked or result.result == .dependency_changed;
+
+                for (self.dependents.edgesFrom(completion.index)) |dependent| {
+                    if (changed) {
+                        forced[dependent] = true;
+                    }
+
+                    remaining[dependent] -= 1;
+                    if (remaining[dependent] == 0) {
+                        ready.appendAssumeCapacity(dependent);
+                    }
+                }
                 metrics_accumulator.markPeak();
+            } else |err| {
+                if (first_error == null) {
+                    first_error = err;
+                }
+
+                for (self.dependents.edgesFrom(completion.index)) |dependent| {
+                    remaining[dependent] -= 1;
+                    if (remaining[dependent] == 0) {
+                        ready.appendAssumeCapacity(dependent);
+                    }
+                }
             }
+        }
+
+        for (futures[0..submitted]) |*future| {
+            future.await(io);
+        }
+
+        if (first_error) |err| {
+            return err;
         }
 
         const cook_end = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
@@ -550,11 +629,7 @@ pub const Executor = struct {
     }
 
     fn totalAssetCount(self: *const Executor) usize {
-        var total: usize = 0;
-        for (self.levels) |level| {
-            total += level.len;
-        }
-        return total;
+        return self.records.len;
     }
 };
 

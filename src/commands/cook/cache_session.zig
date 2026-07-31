@@ -38,7 +38,6 @@ pub const CacheSession = struct {
                 switch (err) {
                     error.OutputDirChanged => log.debug("Output directory changed, rebuilding cache", .{}),
                     error.StaleVersion => log.debug("Outdated cache version found, rebuilding entire cache", .{}),
-                    error.UnsupportedVersion => log.debug("Corrupt cache found, rebuilding entire cache", .{}),
                     error.FileNotFound => log.debug("No existing cache found, starting fresh", .{}),
                     else => log.debug("Failed to read cache ({s}), starting fresh", .{@errorName(err)}),
                 }
@@ -65,10 +64,15 @@ pub const CacheSession = struct {
         }
     }
 
-    pub fn persist(self: *CacheSession, allocator: std.mem.Allocator, ctx: *const CookContext) !void {
+    pub fn persist(self: *CacheSession, allocator: std.mem.Allocator, ctx: *const CookContext) !u64 {
         try self.cache.setCurrentHostOs(allocator);
+        if (!self.cache.dirty) {
+            return 0;
+        }
+
         const cache_location = location(ctx);
         try self.cache.write(allocator, ctx.io, cache_location.dir, cache_location.path);
+        return cacheBytesWritten(ctx);
     }
 
     pub fn cacheBytesWritten(ctx: *const CookContext) u64 {

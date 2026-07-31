@@ -166,7 +166,7 @@ test "Cache.read parses a valid zcache" {
     try testing.expectEqual(@as(usize, 2), c.entries.items.len);
 }
 
-test "Cache.read returns UnsupportedVersion for wrong version" {
+test "Cache.read returns StaleVersion for wrong version" {
     var buf: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&buf);
 
@@ -175,7 +175,7 @@ test "Cache.read returns UnsupportedVersion for wrong version" {
     try writer.writeAll(&(.{0} ** 50));
 
     var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
-    try testing.expectError(error.UnsupportedVersion, cache.Cache.read(testing.allocator, &reader));
+    try testing.expectError(error.StaleVersion, cache.Cache.read(testing.allocator, &reader));
 }
 
 test "Cache.read accepts zero entries" {

@@ -79,12 +79,24 @@ pub const CacheDepGraph = struct {
     }
 
     pub fn get(self: *const CacheDepGraph, source: SourceFile) ?*const DependencyRow {
-        const idx = self.row_map.get(source.hashPath()) orelse return null;
-        return &self.rows.items[idx];
+        const hash = source.hashPath();
+        if (self.row_map.get(hash)) |idx| {
+            const row = &self.rows.items[idx];
+            if (std.mem.eql(u8, row.source_path, source.path)) {
+                return row;
+            }
+        }
+
+        for (self.rows.items) |*row| {
+            if (row.source_path_hash == hash and std.mem.eql(u8, row.source_path, source.path)) {
+                return row;
+            }
+        }
+        return null;
     }
 
     pub fn upsert(self: *CacheDepGraph, allocator: std.mem.Allocator, row: DependencyRow) !void {
-        if (self.row_map.get(row.source_path_hash)) |idx| {
+        if (self.findIndex(row.source_path_hash, row.source_path)) |idx| {
             self.rows.items[idx].deinit(allocator);
             self.rows.items[idx] = row;
             return;
@@ -98,35 +110,31 @@ pub const CacheDepGraph = struct {
     }
 
     pub fn pruneDeleted(self: *CacheDepGraph, allocator: std.mem.Allocator, source_files: []const SourceFile) u32 {
-        var source_hashes: std.AutoHashMap(Hash, void) = .init(allocator);
-        defer source_hashes.deinit();
-
-        const has_hash_set = blk: {
-            source_hashes.ensureTotalCapacity(@intCast(source_files.len)) catch break :blk false;
-            for (source_files) |sf| {
-                source_hashes.putAssumeCapacity(sf.hashPath(), {});
-            }
+        var source_paths = std.StringHashMap(void).init(allocator);
+        defer source_paths.deinit();
+        const has_source_paths = blk: {
+            source_paths.ensureTotalCapacity(@intCast(source_files.len)) catch break :blk false;
+            for (source_files) |sf| source_paths.putAssumeCapacity(sf.path, {});
             break :blk true;
         };
 
         var removed: u32 = 0;
-        var i: usize = 0;
-        while (i < self.rows.items.len) {
-            const source_hash = self.rows.items[i].source_path_hash;
-            const exists = if (has_hash_set)
-                source_hashes.contains(source_hash)
+        var write_index: usize = 0;
+        for (self.rows.items) |row| {
+            const exists = if (has_source_paths)
+                source_paths.contains(row.source_path)
             else
-                sourceExistsSlow(source_files, source_hash);
-
+                sourceExists(source_files, row.source_path);
             if (!exists) {
-                self.rows.items[i].deinit(allocator);
-                _ = self.rows.orderedRemove(i);
-                _ = self.row_map.remove(source_hash);
+                var removed_row = row;
+                removed_row.deinit(allocator);
                 removed += 1;
             } else {
-                i += 1;
+                self.rows.items[write_index] = row;
+                write_index += 1;
             }
         }
+        self.rows.items.len = write_index;
 
         if (removed > 0) {
             self.rebuildMap();
@@ -149,11 +157,26 @@ pub const CacheDepGraph = struct {
             self.row_map.putAssumeCapacity(row.source_path_hash, @intCast(idx));
         }
     }
+
+    fn findIndex(self: *const CacheDepGraph, hash: Hash, path: []const u8) ?u32 {
+        if (self.row_map.get(hash)) |idx| {
+            if (std.mem.eql(u8, self.rows.items[idx].source_path, path)) {
+                return idx;
+            }
+        }
+
+        for (self.rows.items, 0..) |row, i| {
+            if (row.source_path_hash == hash and std.mem.eql(u8, row.source_path, path)) {
+                return @intCast(i);
+            }
+        }
+        return null;
+    }
 };
 
-fn sourceExistsSlow(source_files: []const SourceFile, source_hash: Hash) bool {
-    for (source_files) |sf| {
-        if (sf.hashPath() == source_hash) return true;
+fn sourceExists(source_files: []const SourceFile, path: []const u8) bool {
+    for (source_files) |source| {
+        if (std.mem.eql(u8, source.path, path)) return true;
     }
     return false;
 }
