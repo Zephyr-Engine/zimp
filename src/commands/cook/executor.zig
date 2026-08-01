@@ -513,6 +513,7 @@ pub const Executor = struct {
 
     pub fn run(self: *Executor, io: std.Io, progress: std.Progress.Node) !void {
         var scheduler = zob.Scheduler.init(io, self.allocator);
+        defer scheduler.deinit();
         var cache_updater = CookCacheUpdater{
             .allocator = self.allocator,
             .io = self.ctx.io,
