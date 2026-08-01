@@ -5,8 +5,8 @@
     .minimum_zig_version = "0.16.0",
     .dependencies = .{
         .zob = .{
-            .url = "git+https://github.com/Zephyr-Engine/zob#5b578d7d533fae9f8ba559f79ad6fd18190c5979",
-            .hash = "zob-1.1.0-qYajyI-vAACic_tymTCZQK-z_X2AHSScToGPjYea9FmT",
+            .url = "git+https://github.com/Zephyr-Engine/zob.git#c4ee545ba07e59c4aac95bd5c39f932d2ee9668d",
+            .hash = "zob-1.2.0-qYajyLa8AAA0NgQZaYY6DTC8GuKqWlgpOXkq-Xze4soh",
         },
     },
     .paths = .{
