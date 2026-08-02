@@ -291,6 +291,20 @@ test "Watcher runs an initial cook and recooks a changed asset" {
             "v 0 1 0\n" ++
             "f 1 2 3\n",
     });
+    try source_tmp.dir.createDirPath(testing.io, "materials");
+    try source_tmp.dir.createDirPath(testing.io, "shaders");
+    try source_tmp.dir.writeFile(testing.io, .{
+        .sub_path = "materials/triangle_DefaultMaterial.zamat",
+        .data = "[material]\nshader = \"shaders/basic\"\n",
+    });
+    try source_tmp.dir.writeFile(testing.io, .{
+        .sub_path = "shaders/basic.vert",
+        .data = "#version 450\nvoid main() { gl_Position = vec4(0.0); }\n",
+    });
+    try source_tmp.dir.writeFile(testing.io, .{
+        .sub_path = "shaders/basic.frag",
+        .data = "#version 450\nlayout(location = 0) out vec4 color;\nvoid main() { color = vec4(1.0); }\n",
+    });
 
     const source = try source_tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
     defer source.close(testing.io);

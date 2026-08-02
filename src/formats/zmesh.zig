@@ -3,7 +3,7 @@ const mesh = @import("../assets/cooked/mesh.zig");
 const wire = @import("../shared/wire.zig");
 
 pub const MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH;
-pub const ZMESH_VERSION: u32 = 2;
+pub const ZMESH_VERSION: u32 = 3;
 pub const Transform = [16]f32;
 pub const identity_transform: Transform = .{
     1, 0, 0, 0,
@@ -434,7 +434,13 @@ pub const MeshPart = struct {
 /// A cooked model is one or more independently drawable meshes with
 /// local-to-model transforms.
 pub const ZMesh = struct {
+    material_slots: [][]u8,
     parts: []Part,
+
+    pub const CookPart = struct {
+        mesh: mesh.CookedMesh,
+        transform: Transform,
+    };
 
     pub const Part = struct {
         mesh: MeshPart,
@@ -455,6 +461,26 @@ pub const ZMesh = struct {
         if (@as(u64, part_count) * minimum_part_size > wire.max_asset_bytes)
             return error.AssetTooLarge;
 
+        const material_slot_count = try reader.takeInt(u16, .little);
+        if (material_slot_count == 0) return error.NoMaterialSlots;
+
+        const material_slots = try allocator.alloc([]u8, material_slot_count);
+        errdefer allocator.free(material_slots);
+
+        var slots_initialized: usize = 0;
+        var total_path_bytes: u64 = 0;
+        errdefer for (material_slots[0..slots_initialized]) |path| allocator.free(path);
+
+        for (material_slots) |*slot| {
+            const path_len = try reader.takeInt(u16, .little);
+            if (path_len == 0) return error.EmptyMaterialPath;
+            total_path_bytes += path_len;
+            if (total_path_bytes > wire.max_asset_bytes) return error.AssetTooLarge;
+            slot.* = try allocator.alloc(u8, path_len);
+            try reader.readSliceAll(slot.*);
+            slots_initialized += 1;
+        }
+
         const parts = try allocator.alloc(Part, part_count);
         errdefer allocator.free(parts);
         var initialized: usize = 0;
@@ -466,17 +492,44 @@ pub const ZMesh = struct {
             }
             part.mesh = try MeshPart.read(allocator, reader);
             initialized += 1;
+            for (part.mesh.submeshes) |submesh| {
+                if (submesh.material_index >= material_slots.len)
+                    return error.InvalidMaterialIndex;
+            }
         }
 
-        return .{ .parts = parts };
+        return .{ .material_slots = material_slots, .parts = parts };
     }
 
-    pub fn write(writer: *std.Io.Writer, parts: anytype) !void {
+    pub fn write(writer: *std.Io.Writer, material_slots: []const []const u8, parts: []const CookPart) !void {
         if (parts.len == 0) return error.NoMeshes;
+        if (material_slots.len == 0) return error.NoMaterialSlots;
+        if (material_slots.len > std.math.maxInt(u16)) return error.TooManyMaterialSlots;
+
+        var total_path_bytes: u64 = 0;
+        for (material_slots) |path| {
+            if (path.len == 0) return error.EmptyMaterialPath;
+            if (path.len > std.math.maxInt(u16)) return error.MaterialPathTooLong;
+
+            total_path_bytes += path.len;
+            if (total_path_bytes > wire.max_asset_bytes) return error.AssetTooLarge;
+        }
+        for (parts) |part| {
+            for (part.mesh.submeshes) |submesh| {
+                if (submesh.material_index >= material_slots.len) {
+                    return error.InvalidMaterialIndex;
+                }
+            }
+        }
 
         try writer.writeAll(MAGIC);
         try writer.writeInt(u32, ZMESH_VERSION, .little);
         try writer.writeInt(u32, @intCast(parts.len), .little);
+        try writer.writeInt(u16, @intCast(material_slots.len), .little);
+        for (material_slots) |path| {
+            try writer.writeInt(u16, @intCast(path.len), .little);
+            try writer.writeAll(path);
+        }
         for (parts) |part| {
             for (part.transform) |value| {
                 try writer.writeInt(u32, @bitCast(value), .little);
@@ -486,6 +539,8 @@ pub const ZMesh = struct {
     }
 
     pub fn deinit(self: *ZMesh, allocator: std.mem.Allocator) void {
+        for (self.material_slots) |path| allocator.free(path);
+        allocator.free(self.material_slots);
         for (self.parts) |*part| part.mesh.deinit(allocator);
         allocator.free(self.parts);
         self.* = undefined;
@@ -499,8 +554,8 @@ pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Mesh {
     return Mesh.read(allocator, reader);
 }
 
-pub fn write(writer: *std.Io.Writer, parts: anytype) !void {
-    return Mesh.write(writer, parts);
+pub fn write(writer: *std.Io.Writer, material_slots: []const []const u8, parts: []const ZMesh.CookPart) !void {
+    return Mesh.write(writer, material_slots, parts);
 }
 
 const testing = std.testing;
@@ -864,9 +919,8 @@ test "ZMesh round-trips multiple mesh parts and transforms" {
     const submeshes = [_]raw_mesh.RawSubmesh{
         .{ .index_offset = 0, .index_count = 3, .material_index = 0 },
     };
-    const Part = struct {
-        mesh: mesh.CookedMesh,
-        transform: Transform,
+    const submeshes_b = [_]raw_mesh.RawSubmesh{
+        .{ .index_offset = 0, .index_count = 3, .material_index = 1 },
     };
     const translated: Transform = .{
         1, 0, 0, 0,
@@ -874,28 +928,33 @@ test "ZMesh round-trips multiple mesh parts and transforms" {
         0, 0, 1, 0,
         2, 3, 4, 1,
     };
-    const parts = [_]Part{
+    const parts = [_]ZMesh.CookPart{
         .{
             .mesh = makeCookedMesh(&verts_a, .{ .u16 = @constCast(&indices), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 1, 1, 0 } }),
             .transform = identity_transform,
         },
         .{
-            .mesh = makeCookedMesh(&verts_b, .{ .u16 = @constCast(&indices), .u32 = null }, &submeshes, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 1, 1 } }),
+            .mesh = makeCookedMesh(&verts_b, .{ .u16 = @constCast(&indices), .u32 = null }, &submeshes_b, .{}, .{ .min = .{ 0, 0, 0 }, .max = .{ 0, 1, 1 } }),
             .transform = translated,
         },
     };
 
     var bytes: [4096]u8 = undefined;
     var writer = std.Io.Writer.fixed(&bytes);
-    try ZMesh.write(&writer, &parts);
+    const material_slots = [_][]const u8{ "materials/stone.zamat", "materials/metal.zamat" };
+    try ZMesh.write(&writer, &material_slots, &parts);
     try testing.expectEqual(ZMESH_VERSION, readU32(&bytes, MAGIC.len));
 
     var reader = std.Io.Reader.fixed(bytes[0..writer.end]);
     var model = try ZMesh.read(testing.allocator, &reader);
     defer model.deinit(testing.allocator);
 
+    try testing.expectEqual(@as(usize, 2), model.material_slots.len);
+    try testing.expectEqualStrings("materials/stone.zamat", model.material_slots[0]);
+    try testing.expectEqualStrings("materials/metal.zamat", model.material_slots[1]);
     try testing.expectEqual(@as(usize, 2), model.parts.len);
     try testing.expectEqual(@as(u32, 3), model.parts[0].mesh.vertex_count);
+    try testing.expectEqual(@as(u16, 1), model.parts[1].mesh.submeshes[0].material_index);
     try testing.expectEqual(@as(f32, 2), model.parts[1].transform[12]);
     try testing.expectEqual(@as(f32, 3), model.parts[1].transform[13]);
     try testing.expectEqual(@as(f32, 4), model.parts[1].transform[14]);
@@ -924,6 +983,9 @@ pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
     try writer.writeAll(MAGIC);
     try writer.writeInt(u32, ZMESH_VERSION, .little);
     try writer.writeInt(u32, 1, .little);
+    try writer.writeInt(u16, 1, .little);
+    try writer.writeInt(u16, "materials/test.zamat".len, .little);
+    try writer.writeAll("materials/test.zamat");
     for (identity_transform) |value| {
         try writer.writeInt(u32, @bitCast(value), .little);
     }

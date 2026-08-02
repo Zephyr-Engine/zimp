@@ -5,6 +5,7 @@ const raw_mesh = @import("../../assets/raw/mesh.zig");
 const gltf_parser = @import("gltf_json_parser.zig");
 const GltfJson = gltf_parser.GltfJson;
 const GltfMesh = @import("mesh.zig").GltfMesh;
+const ZMesh = @import("../../formats/zmesh.zig").ZMesh;
 
 pub const Transform = [16]f32;
 
@@ -19,10 +20,7 @@ pub const CookedModel = struct {
     allocator: std.mem.Allocator,
     parts: []Part,
 
-    pub const Part = struct {
-        mesh: cooked_mesh.CookedMesh,
-        transform: Transform,
-    };
+    pub const Part = ZMesh.CookPart;
 
     pub fn build(
         allocator: std.mem.Allocator,

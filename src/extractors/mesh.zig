@@ -33,6 +33,7 @@ fn extractMeshDeps(
         for (dep_paths.items) |path| allocator.free(path);
         dep_paths.deinit(allocator);
     }
+
     try gltf_document.appendExternalDependencies(allocator, &gltf.value, source.path, &dep_paths);
 
     const deps = try allocator.alloc(SourceFile, dep_paths.items.len);
@@ -49,6 +50,7 @@ fn extractMeshDeps(
 const testing = std.testing;
 
 fn writeFile(dir: std.Io.Dir, path: []const u8, bytes: []const u8) !void {
+    if (std.fs.path.dirname(path)) |dirname| try dir.createDirPath(testing.io, dirname);
     const file = try dir.createFile(testing.io, path, .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);

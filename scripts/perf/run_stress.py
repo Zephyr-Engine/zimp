@@ -171,7 +171,7 @@ def write_mesh(path: Path, grid: int) -> None:
             for x in range(grid):
                 a = y * side + x + 1
                 b = a + 1
-                c = a + side + 1
+                c = a + side
                 d = c + 1
                 output.write(f"f {a}/{a}/{a} {b}/{b}/{b} {c}/{c}/{c}\n")
                 output.write(f"f {a}/{a}/{a} {c}/{c}/{c} {d}/{d}/{d}\n")
@@ -227,6 +227,26 @@ def write_shaders(shader_dir: Path, include_depth: int) -> None:
         "  vec3 color = texture(u_albedo, v_uv).rgb * u_tint;\n"
         "  frag_color = vec4(color * (v + u_roughness_scale), 1.0);\n"
         "}\n",
+        encoding="utf-8",
+    )
+
+    # Material-less glTF/OBJ fixtures receive zimp's generated DefaultMaterial,
+    # whose stable shader path is shaders/basic.
+    (shader_dir / "basic.vert").write_text(
+        "#version 330 core\n"
+        "layout(location = 0) in vec3 a_position;\n"
+        "uniform mat4 u_model;\n"
+        "void main() { gl_Position = u_model * vec4(a_position, 1.0); }\n",
+        encoding="utf-8",
+    )
+    (shader_dir / "basic.frag").write_text(
+        "#version 330 core\n"
+        "uniform vec4 u_base_color;\n"
+        "uniform float u_metallic;\n"
+        "uniform float u_roughness;\n"
+        "uniform vec3 u_emissive;\n"
+        "out vec4 frag_color;\n"
+        "void main() { frag_color = vec4(u_base_color.rgb + u_emissive * (1.0 - u_metallic), u_base_color.a); }\n",
         encoding="utf-8",
     )
 
@@ -396,9 +416,9 @@ def generate_fixture(source: Path, texture_size: int, mesh_grid: int, materials:
     return {
         "textures": len(texture_specs),
         "meshes": 1,
-        "shader_stages": 2,
+        "shader_stages": 4,
         "shader_includes": include_depth + 4,
-        "materials": materials,
+        "materials": materials + 3,
         "unique_geometry_count": 2,
         "repeated_instance_count": instances,
         "interleaved_accessor_meshes": 1,
@@ -407,7 +427,7 @@ def generate_fixture(source: Path, texture_size: int, mesh_grid: int, materials:
         "large_scene_entities": scene_entities,
         "metadata_assets": metadata_assets,
         # Every material depends directly on two stages and five textures.
-        "direct_material_edges": materials * 7,
+        "direct_material_edges": materials * 7 + 3 * 2,
     }
 
 

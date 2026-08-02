@@ -252,10 +252,15 @@ fn parseFaceVertex(tok: []const u8, pos_count: usize, normal_count: usize, uv_co
 /// Parse an OBJ index (1-based, possibly negative) and return a 1-based positive index.
 fn resolveIndex(s: []const u8, count: usize) ?u32 {
     const val = std.fmt.parseInt(i32, s, 10) catch return null;
-    if (val > 0) return @intCast(val);
+    if (val > 0) {
+        const resolved: u32 = @intCast(val);
+        if (resolved > count) return null;
+        return resolved;
+    }
     if (val < 0) {
-        const resolved = @as(i32, @intCast(count)) + val + 1;
-        if (resolved < 1) return null;
+        const count_i64 = std.math.cast(i64, count) orelse return null;
+        const resolved = count_i64 + val + 1;
+        if (resolved < 1 or resolved > std.math.maxInt(u32)) return null;
         return @intCast(resolved);
     }
     return null; // 0 is invalid in OBJ
@@ -306,6 +311,7 @@ test "parseFaceVertex handles pos//normal" {
 
 test "resolveIndex positive" {
     try testing.expectEqual(@as(?u32, 5), resolveIndex("5", 10));
+    try testing.expectEqual(@as(?u32, null), resolveIndex("11", 10));
 }
 
 test "resolveIndex negative" {

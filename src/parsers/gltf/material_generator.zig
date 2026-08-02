@@ -27,7 +27,10 @@ pub fn generateForSources(
 ) !usize {
     var generated: usize = 0;
     for (sources) |source| {
-        if (source.extension != .glb and source.extension != .gltf) continue;
+        if (source.extension != .glb and source.extension != .gltf and source.extension != .obj) {
+            continue;
+        }
+
         generated += generateForSource(allocator, io, source_dir, source.path, source.extension) catch |err| {
             log.warn("Failed to auto-generate materials for '{s}': {s}", .{ source.path, @errorName(err) });
             continue;
@@ -64,6 +67,7 @@ pub fn generateForSource(
             defer document.deinit();
             return generateFromGltf(allocator, io, source_dir, file_path, &document.gltf.value, document.buffers);
         },
+        .obj => return generateDefaultMaterial(allocator, io, source_dir, file_path),
         else => return 0,
     }
 }
@@ -76,7 +80,9 @@ pub fn generateFromGltf(
     gltf: *const GltfJson,
     buffers: []const []const u8,
 ) !usize {
-    if (gltf.materials.len == 0) return 0;
+    if (gltf.materials.len == 0) {
+        return generateDefaultMaterial(allocator, io, source_dir, source_path);
+    }
 
     try source_dir.createDirPath(io, GENERATED_MATERIAL_DIR);
     try source_dir.createDirPath(io, GENERATED_TEXTURE_DIR);
@@ -128,6 +134,92 @@ pub fn generateFromGltf(
     }
 
     return generated;
+}
+
+pub fn resolveMaterialPaths(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    source_dir: std.Io.Dir,
+    source_path: []const u8,
+    gltf: *const GltfJson,
+) ![][]u8 {
+    const count = @max(gltf.materials.len, 1);
+    const paths = try allocator.alloc([]u8, count);
+    errdefer allocator.free(paths);
+    var initialized: usize = 0;
+    errdefer for (paths[0..initialized]) |path| allocator.free(path);
+
+    for (0..count) |i| {
+        const material_name = if (gltf.materials.len == 0)
+            "DefaultMaterial"
+        else
+            gltf.materials[i].name orelse try std.fmt.allocPrint(allocator, "material_{d}", .{i});
+        const allocated_name = gltf.materials.len != 0 and gltf.materials[i].name == null;
+        defer if (allocated_name) allocator.free(material_name);
+
+        const generated_path = try generatedMaterialPath(allocator, source_path, material_name);
+        const handwritten_path = try handwrittenMaterialPath(allocator, std.fs.path.basename(generated_path));
+        if (file_read.fileExists(source_dir, io, handwritten_path)) {
+            allocator.free(generated_path);
+            paths[i] = handwritten_path;
+        } else {
+            allocator.free(handwritten_path);
+            paths[i] = generated_path;
+        }
+        initialized += 1;
+    }
+    return paths;
+}
+
+pub fn resolveDefaultMaterialPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    source_dir: std.Io.Dir,
+    source_path: []const u8,
+) ![]u8 {
+    const empty: GltfJson = .{};
+    const paths = try resolveMaterialPaths(allocator, io, source_dir, source_path, &empty);
+    defer allocator.free(paths);
+    return paths[0];
+}
+
+pub fn freeMaterialPaths(allocator: std.mem.Allocator, paths: [][]u8) void {
+    for (paths) |path| allocator.free(path);
+    allocator.free(paths);
+}
+
+fn generateDefaultMaterial(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    source_dir: std.Io.Dir,
+    source_path: []const u8,
+) !usize {
+    try source_dir.createDirPath(io, GENERATED_MATERIAL_DIR);
+
+    const output_path = try generatedMaterialPath(allocator, source_path, "DefaultMaterial");
+    defer allocator.free(output_path);
+    const hand_path = try handwrittenMaterialPath(allocator, std.fs.path.basename(output_path));
+    defer allocator.free(hand_path);
+    if (file_read.fileExists(source_dir, io, hand_path)) return 0;
+
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(allocator);
+    const empty: GltfJson = .{};
+    try writeMaterialText(&text, allocator, io, source_dir, source_path, &empty, &.{}, .{
+        .name = "DefaultMaterial",
+        .pbrMetallicRoughness = .{},
+    }, "DefaultMaterial");
+    if (try fileMatches(source_dir, io, allocator, output_path, text.items)) return 0;
+
+    var pending = try AtomicFile.create(allocator, io, source_dir, output_path);
+    defer pending.deinit();
+    var buf: [4096]u8 = undefined;
+    var writer = pending.file.writer(io, &buf);
+    try writer.interface.writeAll(text.items);
+    try writer.interface.flush();
+    try pending.commit();
+    log.debug("Generated default material '{s}' from '{s}'", .{ output_path, source_path });
+    return 1;
 }
 
 fn fileMatches(dir: std.Io.Dir, io: std.Io, allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) !bool {
@@ -531,6 +623,46 @@ test "generateFromGltf writes material with no textures" {
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.") == null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "value = [1, 0, 0, 1]") != null);
+}
+
+test "generateFromGltf creates a default slot material when gltf has no materials" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const gltf: GltfJson = .{};
+    const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/plain.gltf", &gltf, &.{});
+    try testing.expectEqual(@as(usize, 1), count);
+
+    const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/plain_DefaultMaterial.zamat");
+    defer testing.allocator.free(bytes);
+    try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"shaders/basic\"") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
+}
+
+test "resolveMaterialPaths preserves gltf order and selects handwritten overrides" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try writeTestFile(tmp.dir, "materials/model_Second.zamat", "[material]\n");
+
+    const materials = [_]GltfMaterial{
+        .{ .name = "First" },
+        .{ .name = "Second" },
+    };
+    const gltf: GltfJson = .{ .materials = @constCast(&materials) };
+    const paths = try resolveMaterialPaths(testing.allocator, testing.io, tmp.dir, "meshes/model.glb", &gltf);
+    defer freeMaterialPaths(testing.allocator, paths);
+
+    try testing.expectEqualStrings("generated/materials/model_First.zamat", paths[0]);
+    try testing.expectEqualStrings("materials/model_Second.zamat", paths[1]);
+}
+
+test "generateForSource creates a default material for obj" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    const count = try generateForSource(testing.allocator, testing.io, tmp.dir, "meshes/monkey.obj", .obj);
+    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expect(file_read.fileExists(tmp.dir, testing.io, "generated/materials/monkey_DefaultMaterial.zamat"));
 }
 
 test "generateFromGltf disables depth writes for blended materials" {

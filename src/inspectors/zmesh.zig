@@ -44,13 +44,24 @@ fn streamEnabled(flags: mesh.FormatFlags, index: usize) bool {
     };
 }
 
-fn inspectZmesh(_: std.mem.Allocator, reader: *std.Io.Reader) !void {
+fn inspectZmesh(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     const version = try reader.takeInt(u32, .little);
     if (version != zmesh.ZMESH_VERSION) return error.UnsupportedVersion;
     const part_count = try reader.takeInt(u32, .little);
     if (part_count == 0) return error.InvalidSubmeshCount;
+    const material_slot_count = try reader.takeInt(u16, .little);
+    if (material_slot_count == 0) return error.InvalidSubmeshCount;
 
     log.info("zmesh v{d}", .{version});
+    log.info("Material slots: {d}", .{material_slot_count});
+    for (0..material_slot_count) |slot_index| {
+        const path_len = try reader.takeInt(u16, .little);
+        if (path_len == 0) return error.InvalidSubmeshCount;
+        const path = try allocator.alloc(u8, path_len);
+        defer allocator.free(path);
+        try reader.readSliceAll(path);
+        log.info("  [{d}] {s}", .{ slot_index, path });
+    }
     log.info("Mesh parts: {d}", .{part_count});
     for (0..part_count) |part_index| {
         var transform: zmesh.Transform = undefined;
@@ -302,6 +313,9 @@ fn writeTestZmesh(writer: *std.Io.Writer, opts: TestZmeshOpts) !void {
     try writer.writeAll(zmesh.MAGIC);
     try writer.writeInt(u32, zmesh.ZMESH_VERSION, .little);
     try writer.writeInt(u32, 1, .little);
+    try writer.writeInt(u16, 1, .little);
+    try writer.writeInt(u16, "materials/test.zamat".len, .little);
+    try writer.writeAll("materials/test.zamat");
     for (zmesh.identity_transform) |value| {
         try writer.writeInt(u32, @bitCast(value), .little);
     }

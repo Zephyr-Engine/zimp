@@ -81,6 +81,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         scanner.deinitDetailed(&scanned);
         scanned = try scanner.scanDetailed();
     }
+    const material_topology_changed = try materialTopologyChanged(allocator, scanned.files.items, cache);
     const scan_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 
     metrics.scan_ns = @intCast(scan_start.durationTo(scan_end).raw.nanoseconds);
@@ -111,7 +112,10 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
             .info = info,
             .descriptor = descriptor,
             .output_path = output_path,
-            .cached_index = cache.getIdx(source),
+            .cached_index = if (material_topology_changed and descriptor.asset_type == .mesh)
+                null
+            else
+                cache.getIdx(source),
         });
     }
     // Ownership of paths moved into records.
@@ -150,7 +154,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
 }
 
 fn needsMaterialGeneration(source: SourceFile, ctx: *const CookContext, cache: *const Cache) !bool {
-    if (source.extension != .glb and source.extension != .gltf) {
+    if (source.extension != .glb and source.extension != .gltf and source.extension != .obj) {
         return false;
     }
 
@@ -169,6 +173,29 @@ fn needsMaterialGeneration(source: SourceFile, ctx: *const CookContext, cache: *
     }
 
     return entry.content_hash != try source.hash(ctx.source, ctx.io);
+}
+
+fn materialTopologyChanged(allocator: std.mem.Allocator, sources: []const SourceFile, cache: *const Cache) !bool {
+    var current_paths = std.StringHashMap(void).init(allocator);
+    defer current_paths.deinit();
+
+    for (sources) |source| {
+        if (source.extension != .zamat) {
+            continue;
+        }
+        try current_paths.put(source.path, {});
+
+        if (cache.getIdx(source) == null) {
+            return true;
+        }
+    }
+
+    for (cache.entries.items) |entry| {
+        if (entry.asset_type == .material and !current_paths.contains(entry.source_path)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 pub fn sourceSlice(allocator: std.mem.Allocator, records: []const SourceRecord) ![]SourceFile {
