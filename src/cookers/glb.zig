@@ -6,6 +6,7 @@ const ZMesh = @import("../formats/zmesh.zig").ZMesh;
 const GLBFile = @import("../parsers/gltf/glb_parser.zig").GLBFile;
 const Gltf = @import("../parsers/gltf/gltf_json_parser.zig").Gltf;
 const CookedModel = @import("../parsers/gltf/model.zig").CookedModel;
+const material_generator = @import("../parsers/gltf/material_generator.zig");
 
 pub fn cooker() Cooker {
     return .{ .cook_fn = cookGlb, .asset_type = .mesh };
@@ -21,5 +22,9 @@ fn cookGlb(input: *const CookInput) !void {
     const buffers = [_][]const u8{glb_file.bin};
     var model = try CookedModel.build(input.allocator, &gltf.value, &buffers);
     defer model.deinit();
-    try ZMesh.write(input.writer, model.parts);
+
+    const material_paths = try material_generator.resolveMaterialPaths(input.allocator, input.io, input.source_dir, input.source.path, &gltf.value);
+    defer material_generator.freeMaterialPaths(input.allocator, material_paths);
+
+    try ZMesh.write(input.writer, material_paths, model.parts);
 }

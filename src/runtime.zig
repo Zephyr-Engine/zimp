@@ -127,11 +127,9 @@ test "loadFromFile loads zmesh" {
     const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    const parts = [_]struct {
-        mesh: mesh_mod.CookedMesh,
-        transform: mesh_format.Transform,
-    }{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
-    try mesh_format.write(&writer.interface, &parts);
+    const parts = [_]mesh_format.ZMesh.CookPart{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
+    const material_slots = [_][]const u8{"materials/test.zamat"};
+    try mesh_format.write(&writer.interface, &material_slots, &parts);
     try writer.flush();
     file.close(testing.io);
 
@@ -172,11 +170,9 @@ test "Asset deinit frees resources" {
     const file = try tmp.dir.createFile(testing.io, "test.zmesh", .{});
     var buf: [4096]u8 = undefined;
     var writer = file.writer(testing.io, &buf);
-    const parts = [_]struct {
-        mesh: mesh_mod.CookedMesh,
-        transform: mesh_format.Transform,
-    }{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
-    try mesh_format.write(&writer.interface, &parts);
+    const parts = [_]mesh_format.ZMesh.CookPart{.{ .mesh = cooked, .transform = mesh_format.identity_transform }};
+    const material_slots = [_][]const u8{"materials/test.zamat"};
+    try mesh_format.write(&writer.interface, &material_slots, &parts);
     try writer.flush();
     file.close(testing.io);
 

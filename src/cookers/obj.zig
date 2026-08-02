@@ -5,6 +5,7 @@ const CookInput = @import("cooker.zig").CookInput;
 const zmesh = @import("../formats/zmesh.zig");
 const ObjParser = @import("../parsers/obj/obj_parser.zig").ObjParser;
 const CookedMesh = @import("../assets/cooked/mesh.zig").CookedMesh;
+const material_generator = @import("../parsers/gltf/material_generator.zig");
 
 pub fn cooker() Cooker {
     return .{ .cook_fn = cookObj, .asset_type = .mesh };
@@ -22,12 +23,13 @@ fn cookObj(input: *const CookInput) !void {
     var cooked_mesh = try CookedMesh.cook(input.allocator, &raw_mesh);
     defer cooked_mesh.deinit(input.allocator);
 
-    const parts = [_]struct {
-        mesh: CookedMesh,
-        transform: zmesh.Transform,
-    }{.{
+    const parts = [_]zmesh.ZMesh.CookPart{.{
         .mesh = cooked_mesh,
         .transform = zmesh.identity_transform,
     }};
-    try zmesh.ZMesh.write(input.writer, &parts);
+    const material_path = try material_generator.resolveDefaultMaterialPath(input.allocator, input.io, input.source_dir, input.source.path);
+    defer input.allocator.free(material_path);
+
+    const material_paths = [_][]const u8{material_path};
+    try zmesh.ZMesh.write(input.writer, &material_paths, &parts);
 }
