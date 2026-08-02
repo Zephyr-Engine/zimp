@@ -16,7 +16,9 @@ fn extractMeshDeps(
     io: std.Io,
     allocator: std.mem.Allocator,
 ) ![]const SourceFile {
-    if (source.extension != .gltf) return &.{};
+    if (source.extension != .gltf) {
+        return &.{};
+    }
 
     const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path, .{
         .chunk_size = 256 * 1024,
