@@ -102,6 +102,15 @@ pub const SceneDocument = struct {
         try atomic_file.writeFileAtomic(allocator, io, dir, self.file_name, bytes);
     }
 
+    pub fn entityIndex(self: *const SceneDocument, id: id_types.SceneEntityId) ?usize {
+        for (self.entities, 0..) |entity, index| {
+            if (entity.id.eql(id)) {
+                return index;
+            }
+        }
+        return null;
+    }
+
     pub fn clone(self: *const SceneDocument, allocator: std.mem.Allocator) !SceneDocument {
         var result = try SceneDocument.init(allocator, self.scene_id, self.project_id, self.name);
         errdefer result.deinit();
@@ -138,17 +147,6 @@ pub const SceneDocument = struct {
         }
         return result;
     }
-
-    fn cloneFields(allocator: std.mem.Allocator, source: []value.SceneField) ![]value.SceneField {
-        const result = try allocator.alloc(value.SceneField, source.len);
-        for (source, result) |*src, *dst| {
-            dst.* = .{
-                .number = src.number,
-                .value = try src.value.clone(allocator),
-            };
-        }
-        return result;
-    }
 };
 
 pub const SceneEntity = struct {
@@ -157,6 +155,15 @@ pub const SceneEntity = struct {
     name: []const u8,
     components: []SceneComponent,
     prefab: PrefabInstanceMetadata,
+
+    pub fn componentIndex(self: *const SceneEntity, id: id_types.ComponentTypeId) ?usize {
+        for (self.components, 0..) |component, index| {
+            if (component.type_id.eql(id)) {
+                return index;
+            }
+        }
+        return null;
+    }
 };
 
 pub const SceneComponent = struct {
@@ -167,6 +174,27 @@ pub const SceneComponent = struct {
     pub fn asData(self: *const SceneComponent) value.SceneComponentData {
         return .{ .component = self.type_id, .fields = self.fields };
     }
+
+    pub fn clone(self: *const SceneComponent, allocator: std.mem.Allocator) !SceneComponent {
+        const result = try allocator.create(SceneComponent);
+        errdefer allocator.destroy(result);
+
+        result.* = .{
+            .type_id = self.type_id,
+            .version = self.version,
+            .fields = try cloneFields(allocator, self.fields),
+        };
+        return result.*;
+    }
+
+    pub fn fieldIndex(self: *const SceneComponent, number: u32) ?usize {
+        for (self.fields, 0..) |field, index| {
+            if (field.number == number) {
+                return index;
+            }
+        }
+        return null;
+    }
 };
 
 pub const PrefabInstanceMetadata = struct {
@@ -174,6 +202,17 @@ pub const PrefabInstanceMetadata = struct {
     source_entity: ?id_types.SceneEntityId = null,
     override_set_id: ?Uuid = null,
 };
+
+fn cloneFields(allocator: std.mem.Allocator, source: []value.SceneField) ![]value.SceneField {
+    const result = try allocator.alloc(value.SceneField, source.len);
+    for (source, result) |*src, *dst| {
+        dst.* = .{
+            .number = src.number,
+            .value = try src.value.clone(allocator),
+        };
+    }
+    return result;
+}
 
 const testing = std.testing;
 
