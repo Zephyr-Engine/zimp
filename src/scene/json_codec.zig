@@ -5,7 +5,7 @@ const id = @import("../id/id_types.zig");
 const Uuid = @import("../id/uuid.zig").Uuid;
 
 pub const scene_format = "zephyr.scene";
-pub const scene_version: u32 = 1;
+pub const scene_version: u32 = 2;
 pub const max_scene_bytes: usize = 64 * 1024 * 1024;
 
 pub const DecodeError = error{
@@ -28,7 +28,7 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, scene: *const document.SceneDoc
     try out.appendSlice(allocator, "{\n  \"format\": ");
     try json(allocator, &out, scene_format);
 
-    try out.appendSlice(allocator, ",\n  \"version\": 1,\n  \"scene_id\": ");
+    try out.appendSlice(allocator, ",\n  \"version\": 2,\n  \"scene_id\": ");
     try json(allocator, &out, scene.scene_id);
 
     try out.appendSlice(allocator, ",\n  \"project_id\": ");
@@ -42,11 +42,6 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, scene: *const document.SceneDoc
 
     try out.appendSlice(allocator, ",\n  \"asset_manifest_hash\": ");
     try json(allocator, &out, scene.asset_manifest_hash);
-
-    if (scene.active_camera) |v| {
-        try out.appendSlice(allocator, ",\n  \"active_camera\": ");
-        try json(allocator, &out, v);
-    }
 
     try out.appendSlice(allocator, ",\n  \"entities\": [");
     const entities = try allocator.dupe(document.SceneEntity, scene.entities);
@@ -68,7 +63,7 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !document.SceneDo
     defer parsed.deinit();
 
     const obj = try object(parsed.value);
-    try rejectUnknown(obj, &.{ "format", "version", "scene_id", "project_id", "name", "schema_hash", "asset_manifest_hash", "active_camera", "entities" });
+    try rejectUnknown(obj, &.{ "format", "version", "scene_id", "project_id", "name", "schema_hash", "asset_manifest_hash", "entities" });
 
     const format = try string(try required(obj, "format"));
     if (!std.mem.eql(u8, format, scene_format)) {
@@ -85,7 +80,6 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !document.SceneDo
     const name = try string(try required(obj, "name"));
     const schema_hash = try optionalU64(obj, "schema_hash");
     const asset_manifest_hash = try optionalU64(obj, "asset_manifest_hash");
-    const active_camera = try optionalId(id.SceneEntityId, obj, "active_camera");
 
     var scene = try document.SceneDocument.init(allocator, scene_id, project_id, name);
     errdefer scene.deinit();
@@ -94,7 +88,6 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !document.SceneDo
     scene.version = version;
     scene.schema_hash = schema_hash;
     scene.asset_manifest_hash = asset_manifest_hash;
-    scene.active_camera = active_camera;
 
     const items = try array(try required(obj, "entities"));
     scene.entities = try storage.alloc(document.SceneEntity, items.len);

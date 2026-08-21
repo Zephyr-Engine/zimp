@@ -23,7 +23,6 @@ pub const SceneDocument = struct {
     name: []const u8,
     schema_hash: u64 = 0,
     asset_manifest_hash: u64 = 0,
-    active_camera: ?id_types.SceneEntityId = null,
     entities: []SceneEntity,
     file_name: []const u8,
 
@@ -37,7 +36,7 @@ pub const SceneDocument = struct {
         var self = SceneDocument{
             .arena = arena,
             .format = undefined,
-            .version = 1,
+            .version = 2,
             .scene_id = scene_id,
             .project_id = project_id,
             .name = undefined,
@@ -120,7 +119,6 @@ pub const SceneDocument = struct {
         result.version = self.version;
         result.schema_hash = self.schema_hash;
         result.asset_manifest_hash = self.asset_manifest_hash;
-        result.active_camera = self.active_camera;
         result.entities = try arena.alloc(SceneEntity, self.entities.len);
 
         for (self.entities, result.entities) |src, *dst| {
@@ -247,7 +245,6 @@ test "SceneDocument.clone preserves document data in independent storage" {
     source.format = try storage.dupe(u8, "zephyr.scene.test");
     source.schema_hash = 123;
     source.asset_manifest_hash = 456;
-    source.active_camera = entity_id;
 
     var cloned = try source.clone(testing.allocator);
     defer cloned.deinit();
@@ -259,7 +256,6 @@ test "SceneDocument.clone preserves document data in independent storage" {
     try testing.expectEqualStrings(source.name, cloned.name);
     try testing.expectEqual(source.schema_hash, cloned.schema_hash);
     try testing.expectEqual(source.asset_manifest_hash, cloned.asset_manifest_hash);
-    try testing.expectEqual(source.active_camera, cloned.active_camera);
     try testing.expectEqual(@as(usize, 1), cloned.entities.len);
 
     const source_entity = source.entities[0];
