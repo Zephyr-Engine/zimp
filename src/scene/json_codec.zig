@@ -17,8 +17,6 @@ pub const DecodeError = error{
     InvalidValue,
 };
 
-/// Encodes a scene in a canonical form: fixed object key order and collections
-/// sorted by entity id, component type/version, and field number respectively.
 pub fn encodeAlloc(allocator: std.mem.Allocator, scene: *const document.SceneDocument) ![]u8 {
     if (!std.mem.eql(u8, scene.format, scene_format) or scene.version != scene_version) {
         return error.InvalidSceneFormat;
@@ -236,6 +234,7 @@ fn valueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), v: value.Val
     }
     try out.append(allocator, '}');
 }
+
 fn taggedJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), kind: []const u8, item: anytype) !void {
     try json(allocator, out, kind);
     try out.appendSlice(allocator, ", \"value\": ");
@@ -274,8 +273,13 @@ fn prefabFromJson(item: std.json.Value) !document.PrefabInstanceMetadata {
     const obj = try object(item);
     try rejectUnknown(obj, &.{ "prefab_asset", "source_entity", "override_set_id" });
 
-    return .{ .prefab_asset = try optionalId(id.AssetId, obj, "prefab_asset"), .source_entity = try optionalId(id.SceneEntityId, obj, "source_entity"), .override_set_id = try optionalId(Uuid, obj, "override_set_id") };
+    return .{
+        .prefab_asset = try optionalId(id.AssetId, obj, "prefab_asset"),
+        .source_entity = try optionalId(id.SceneEntityId, obj, "source_entity"),
+        .override_set_id = try optionalId(Uuid, obj, "override_set_id"),
+    };
 }
+
 fn componentFromJson(allocator: std.mem.Allocator, item: std.json.Value) !document.SceneComponent {
     const obj = try object(item);
     try rejectUnknown(obj, &.{ "type_id", "version", "fields" });
@@ -301,7 +305,10 @@ fn fieldFromJson(allocator: std.mem.Allocator, item: std.json.Value) !value.Scen
     const obj = try object(item);
     try rejectUnknown(obj, &.{ "number", "value" });
 
-    return .{ .number = try u32Value(try required(obj, "number")), .value = try valueFromJson(allocator, try required(obj, "value")) };
+    return .{
+        .number = try u32Value(try required(obj, "number")),
+        .value = try valueFromJson(allocator, try required(obj, "value")),
+    };
 }
 
 fn valueFromJson(allocator: std.mem.Allocator, item: std.json.Value) !value.Value {
