@@ -5,14 +5,13 @@ const id = @import("../id/id_types.zig");
 const Uuid = @import("../id/uuid.zig").Uuid;
 
 pub const magic = "ZSCN";
-pub const version: u32 = 1;
+pub const version: u32 = 2;
 pub const SceneBinaryHeader = struct {
     version: u32,
     schema_hash: u64,
     asset_manifest_hash: u64,
     scene_id: [16]u8,
     project_id: [16]u8,
-    active_camera: [16]u8,
     entity_count: u32,
 };
 
@@ -37,7 +36,7 @@ const value_tag = enum(u8) {
     asset_ref,
     entity_ref,
 };
-const header_size = magic.len + 4 + 8 + 8 + 16 + 16 + 16 + 4;
+const header_size = magic.len + 4 + 8 + 8 + 16 + 16 + 4;
 const min_entity_size = 16 + 16 + 4 + 16 + 16 + 16 + 4;
 const min_component_size = 16 + 4 + 4;
 const min_field_size = 4 + 1 + 1;
@@ -59,7 +58,6 @@ pub fn encodeAlloc(allocator: std.mem.Allocator, scene: *const document.SceneDoc
     try appendInt(&out, allocator, u64, scene.asset_manifest_hash);
     try appendUuid(&out, allocator, scene.scene_id.uuid);
     try appendUuid(&out, allocator, scene.project_id.uuid);
-    try appendUuid(&out, allocator, if (scene.active_camera) |v| v.uuid else Uuid.zero);
     try appendInt(&out, allocator, u32, @intCast(scene.entities.len));
 
     var strings: std.ArrayList([]const u8) = .empty;
@@ -96,7 +94,6 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !document.SceneDo
     const asset_manifest_hash = try reader.int(u64);
     const scene_id = id.SceneId.fromUuid(try reader.uuid());
     const project_id = id.ProjectId.fromUuid(try reader.uuid());
-    const active_uuid = try reader.uuid();
     const entity_count = try reader.int(u32);
     if (scene_id.isZero() or project_id.isZero()) {
         return error.InvalidScene;
@@ -113,7 +110,6 @@ pub fn decode(allocator: std.mem.Allocator, bytes: []const u8) !document.SceneDo
     const storage = scene.arena.allocator();
     scene.schema_hash = schema_hash;
     scene.asset_manifest_hash = asset_manifest_hash;
-    scene.active_camera = if (active_uuid.isZero()) null else id.SceneEntityId.fromUuid(active_uuid);
     const strings = try readStringTable(storage, &reader, string_count);
     scene.name = try reader.stringReference(strings);
 
@@ -452,7 +448,7 @@ test "JSON source and cooked binary decode to equivalent documents" {
     const json_codec = @import("json_codec.zig");
     const testing = std.testing;
     const input =
-        \\{"format":"zephyr.scene","version":1,"scene_id":"8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a","project_id":"4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589","name":"Sandbox","entities":[{"id":"00000000-0000-4000-8000-000000000001","name":"Camera","components":[{"type_id":"11111111-1111-4111-8111-111111111111","version":1,"fields":[{"number":1,"value":{"kind":"string","value":"main"}}]}]}]}
+        \\{"format":"zephyr.scene","version":2,"scene_id":"8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a","project_id":"4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589","name":"Sandbox","entities":[{"id":"00000000-0000-4000-8000-000000000001","name":"Camera","components":[{"type_id":"11111111-1111-4111-8111-111111111111","version":1,"fields":[{"number":1,"value":{"kind":"string","value":"main"}}]}]}]}
     ;
     var source = try json_codec.decode(testing.allocator, input);
     defer source.deinit();

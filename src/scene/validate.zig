@@ -127,12 +127,6 @@ fn validateReferencesAndCycles(
     ids: *const std.AutoHashMap(SceneEntityId, usize),
     allocator: std.mem.Allocator,
 ) !void {
-    if (scene.active_camera) |camera| {
-        if (!ids.contains(camera)) {
-            return error.MissingActiveCamera;
-        }
-    }
-
     for (scene.entities) |entity| {
         if (entity.parent_id) |parent| {
             if (entity.id.eql(parent)) {
@@ -244,10 +238,6 @@ test "document rejects bad ids, references, and cycles" {
     scene.entities[0].parent_id = entity_a;
     try testing.expectError(error.SelfParent, validate(&scene, testing.allocator, .{}));
     scene.entities[0].parent_id = null;
-
-    scene.active_camera = entity_b;
-    try testing.expectError(error.MissingActiveCamera, validate(&scene, testing.allocator, .{}));
-    scene.active_camera = null;
 
     const storage = scene.arena.allocator();
     scene.entities = try storage.dupe(SceneEntity, &.{
