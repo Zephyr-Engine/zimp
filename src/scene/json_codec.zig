@@ -216,11 +216,11 @@ fn valueJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), v: value.Val
         .bool => |x| try taggedJson(allocator, out, "bool", x),
         .i32 => |x| try taggedJson(allocator, out, "i32", x),
         .u32 => |x| try taggedJson(allocator, out, "u32", x),
-        .f32 => |x| try taggedJson(allocator, out, "f32", x),
+        .f32 => |x| try taggedF32Json(allocator, out, "f32", x),
         .string => |x| try taggedJson(allocator, out, "string", x),
-        .vec2 => |x| try taggedJson(allocator, out, "vec2", x),
-        .vec3 => |x| try taggedJson(allocator, out, "vec3", x),
-        .quat => |x| try taggedJson(allocator, out, "quat", x),
+        .vec2 => |x| try taggedF32VectorJson(allocator, out, "vec2", &x),
+        .vec3 => |x| try taggedF32VectorJson(allocator, out, "vec3", &x),
+        .quat => |x| try taggedF32VectorJson(allocator, out, "quat", &x),
         .asset_ref => |x| try taggedJson(allocator, out, "asset_ref", x),
         .entity_ref => |x| try taggedJson(allocator, out, "entity_ref", x),
         .none => return error.InvalidValue,
@@ -232,6 +232,31 @@ fn taggedJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), kind: []con
     try json(allocator, out, kind);
     try out.appendSlice(allocator, ", \"value\": ");
     try json(allocator, out, item);
+}
+
+/// `std.json.Stringify` promotes f32 values to f64 before formatting. Format
+/// scene floats directly so their shortest f32 representation is preserved.
+fn taggedF32Json(allocator: std.mem.Allocator, out: *std.ArrayList(u8), kind: []const u8, item: f32) !void {
+    try json(allocator, out, kind);
+    try out.appendSlice(allocator, ", \"value\": ");
+    try f32Json(allocator, out, item);
+}
+
+fn taggedF32VectorJson(allocator: std.mem.Allocator, out: *std.ArrayList(u8), kind: []const u8, items: []const f32) !void {
+    try json(allocator, out, kind);
+    try out.appendSlice(allocator, ", \"value\": [");
+    for (items, 0..) |item, i| {
+        if (i != 0) try out.append(allocator, ',');
+        try f32Json(allocator, out, item);
+    }
+    try out.append(allocator, ']');
+}
+
+fn f32Json(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item: f32) !void {
+    if (!std.math.isFinite(item)) return error.InvalidValue;
+    var buf: [std.fmt.float.bufferSize(.decimal, f32)]u8 = undefined;
+    const text = try std.fmt.bufPrint(&buf, "{}", .{item});
+    try out.appendSlice(allocator, text);
 }
 
 fn entityFromJson(allocator: std.mem.Allocator, item: std.json.Value) !document.SceneEntity {
@@ -418,9 +443,11 @@ fn rejectUnknown(obj: std.json.ObjectMap, allowed: []const []const u8) !void {
 }
 
 fn json(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item: anytype) !void {
-    const bytes = try std.json.Stringify.valueAlloc(allocator, item, .{});
-    defer allocator.free(bytes);
-    try out.appendSlice(allocator, bytes);
+    var writer = std.Io.Writer.Allocating.fromArrayList(allocator, out);
+    defer out.* = writer.toArrayList();
+
+    var stringify = std.json.Stringify{ .writer = &writer.writer };
+    try stringify.write(item);
 }
 
 fn spaces(allocator: std.mem.Allocator, out: *std.ArrayList(u8), n: usize) !void {
@@ -494,4 +521,48 @@ test "load save load preserves a source scene and canonicalizes ordering" {
     try testing.expect(decoded.entities[0].components[0].type_id.eql(component_a));
     try testing.expectEqual(@as(u32, 2), decoded.entities[0].components[1].fields[0].number);
     try testing.expectEqualStrings("owned after decoding", decoded_again.entities[0].components[1].fields[1].value.string);
+}
+
+test "encode emits concise f32 values without promoting them to f64" {
+    const testing = std.testing;
+    const scene_id = id.SceneId.parseComptime("8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a");
+    const project_id = id.ProjectId.parseComptime("4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589");
+    const entity_id = id.SceneEntityId.parseComptime("11111111-1111-4111-8111-111111111111");
+    const component_id = id.ComponentTypeId.parseComptime("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+
+    var fields = [_]value.SceneField{
+        .{ .number = 1, .value = .{ .f32 = 0.8 } },
+        .{ .number = 2, .value = .{ .vec3 = .{ 2.1, 0.012, 0.8 } } },
+    };
+    var components = [_]document.SceneComponent{
+        .{ .type_id = component_id, .fields = fields[0..] },
+    };
+    var entities = [_]document.SceneEntity{
+        .{ .id = entity_id, .name = "Entity", .components = components[0..], .prefab = .{} },
+    };
+    var source = try document.SceneDocument.init(testing.allocator, scene_id, project_id, "Sandbox");
+    defer source.deinit();
+    source.entities = entities[0..];
+
+    const encoded = try encodeAlloc(testing.allocator, &source);
+    defer testing.allocator.free(encoded);
+    try testing.expect(std.mem.indexOf(u8, encoded, "\"value\": 0.8") != null);
+    try testing.expect(std.mem.indexOf(u8, encoded, "\"value\": [2.1,0.012,0.8]") != null);
+    try testing.expect(std.mem.indexOf(u8, encoded, "0.800000011920929") == null);
+    try testing.expect(std.mem.indexOf(u8, encoded, "2.0999999046325684") == null);
+
+    var decoded = try decode(testing.allocator, encoded);
+    defer decoded.deinit();
+    try testing.expectEqual(@as(f32, 0.8), decoded.entities[0].components[0].fields[0].value.f32);
+    try testing.expectEqual([3]f32{ 2.1, 0.012, 0.8 }, decoded.entities[0].components[0].fields[1].value.vec3);
+}
+
+test "json appends escaped values without a temporary allocation" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+
+    try out.appendSlice(std.testing.allocator, "prefix:");
+    try json(std.testing.allocator, &out, "quoted \"newline\n");
+
+    try std.testing.expectEqualStrings("prefix:\"quoted \\\"newline\\n\"", out.items);
 }

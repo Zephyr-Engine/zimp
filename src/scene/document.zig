@@ -24,7 +24,6 @@ pub const SceneDocument = struct {
     schema_hash: u64 = 0,
     asset_manifest_hash: u64 = 0,
     entities: []SceneEntity,
-    file_name: []const u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -41,14 +40,12 @@ pub const SceneDocument = struct {
             .project_id = project_id,
             .name = undefined,
             .entities = &.{},
-            .file_name = undefined,
         };
         errdefer self.arena.deinit();
 
         const storage = self.arena.allocator();
         self.format = try storage.dupe(u8, "zephyr.scene");
         self.name = try storage.dupe(u8, name);
-        self.file_name = try storage.dupe(u8, name);
 
         return self;
     }
@@ -85,7 +82,7 @@ pub const SceneDocument = struct {
         format: Format,
     };
 
-    pub fn write(self: *const SceneDocument, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, options: WriteOptions) !void {
+    pub fn write(self: *const SceneDocument, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8, options: WriteOptions) !void {
         try validate.validate(
             self,
             allocator,
@@ -98,7 +95,7 @@ pub const SceneDocument = struct {
         };
         defer allocator.free(bytes);
 
-        try atomic_file.writeFileAtomic(allocator, io, dir, self.file_name, bytes);
+        try atomic_file.writeFileAtomic(allocator, io, dir, file, bytes);
     }
 
     pub fn entityIndex(self: *const SceneDocument, id: id_types.SceneEntityId) ?usize {
@@ -291,12 +288,12 @@ test "SceneDocument.write round trips JSON and binary scenes" {
     defer tmp.cleanup();
 
     inline for ([_]Format{ .json, .binary }) |format| {
-        try scene.write(testing.allocator, testing.io, tmp.dir, .{
+        try scene.write(testing.allocator, testing.io, tmp.dir, "test.json", .{
             .project_id = project_id,
             .format = format,
         });
 
-        var loaded = try SceneDocument.load(testing.allocator, testing.io, tmp.dir, "scene.zscene", .{
+        var loaded = try SceneDocument.load(testing.allocator, testing.io, tmp.dir, "test.json", .{
             .expected_project_id = project_id,
         });
         defer loaded.deinit();
@@ -317,7 +314,7 @@ test "SceneDocument.write rejects a mismatched project" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try testing.expectError(error.UnexpectedProjectId, scene.write(testing.allocator, testing.io, tmp.dir, .{
+    try testing.expectError(error.UnexpectedProjectId, scene.write(testing.allocator, testing.io, tmp.dir, "test.json", .{
         .project_id = other_project_id,
         .format = .json,
     }));
