@@ -13,7 +13,25 @@ pub const RawVertex = struct {
     joint_weights: ?[4]f32,
 
     pub fn hash(self: *const RawVertex) u64 {
-        return std.hash.XxHash64.hash(0, std.mem.asBytes(self));
+        var hasher = std.hash.XxHash64.init(0);
+        hasher.update(std.mem.asBytes(&self.position));
+        hashOptional(&hasher, self.normal);
+        hashOptional(&hasher, self.tangent);
+        hashOptional(&hasher, self.uv0);
+        hashOptional(&hasher, self.uv1);
+        hashOptional(&hasher, self.joint_indices);
+        hashOptional(&hasher, self.joint_weights);
+        return hasher.final();
+    }
+
+    pub fn eql(self: *const RawVertex, other: *const RawVertex) bool {
+        return std.mem.eql(u8, std.mem.asBytes(&self.position), std.mem.asBytes(&other.position)) and
+            eqlOptional(self.normal, other.normal) and
+            eqlOptional(self.tangent, other.tangent) and
+            eqlOptional(self.uv0, other.uv0) and
+            eqlOptional(self.uv1, other.uv1) and
+            eqlOptional(self.joint_indices, other.joint_indices) and
+            eqlOptional(self.joint_weights, other.joint_weights);
     }
 
     pub fn quantizeUV0(self: *const RawVertex) ?[2]u16 {
@@ -102,6 +120,27 @@ pub const RawVertex = struct {
         return result;
     }
 };
+
+fn hashOptional(hasher: *std.hash.XxHash64, optional: anytype) void {
+    if (optional) |value| {
+        const present: [1]u8 = .{1};
+        hasher.update(&present);
+        hasher.update(std.mem.asBytes(&value));
+    } else {
+        const absent: [1]u8 = .{0};
+        hasher.update(&absent);
+    }
+}
+
+fn eqlOptional(a: anytype, b: @TypeOf(a)) bool {
+    if (a) |a_value| {
+        if (b) |b_value| {
+            return std.mem.eql(u8, std.mem.asBytes(&a_value), std.mem.asBytes(&b_value));
+        }
+        return false;
+    }
+    return b == null;
+}
 
 pub const RawSubmesh = struct {
     index_offset: u32,
@@ -256,7 +295,7 @@ pub const RawMesh = struct {
             if (map.get(h)) |first_candidate| {
                 var candidate = first_candidate;
                 while (true) {
-                    if (std.mem.eql(u8, std.mem.asBytes(&deduped.items[candidate]), std.mem.asBytes(&vertex))) {
+                    if (deduped.items[candidate].eql(&vertex)) {
                         remap[i] = candidate;
                         break;
                     }

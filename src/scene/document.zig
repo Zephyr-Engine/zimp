@@ -288,12 +288,12 @@ test "SceneDocument.write round trips JSON and binary scenes" {
     defer tmp.cleanup();
 
     inline for ([_]Format{ .json, .binary }) |format| {
-        try scene.write(testing.allocator, testing.io, tmp.dir, .{
+        try scene.write(testing.allocator, testing.io, tmp.dir, "test.json", .{
             .project_id = project_id,
             .format = format,
         });
 
-        var loaded = try SceneDocument.load(testing.allocator, testing.io, tmp.dir, "scene.zscene", .{
+        var loaded = try SceneDocument.load(testing.allocator, testing.io, tmp.dir, "test.json", .{
             .expected_project_id = project_id,
         });
         defer loaded.deinit();
@@ -314,7 +314,7 @@ test "SceneDocument.write rejects a mismatched project" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    try testing.expectError(error.UnexpectedProjectId, scene.write(testing.allocator, testing.io, tmp.dir, .{
+    try testing.expectError(error.UnexpectedProjectId, scene.write(testing.allocator, testing.io, tmp.dir, "test.json", .{
         .project_id = other_project_id,
         .format = .json,
     }));
