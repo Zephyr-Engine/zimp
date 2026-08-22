@@ -443,9 +443,11 @@ fn rejectUnknown(obj: std.json.ObjectMap, allowed: []const []const u8) !void {
 }
 
 fn json(allocator: std.mem.Allocator, out: *std.ArrayList(u8), item: anytype) !void {
-    const bytes = try std.json.Stringify.valueAlloc(allocator, item, .{});
-    defer allocator.free(bytes);
-    try out.appendSlice(allocator, bytes);
+    var writer = std.Io.Writer.Allocating.fromArrayList(allocator, out);
+    defer out.* = writer.toArrayList();
+
+    var stringify = std.json.Stringify{ .writer = &writer.writer };
+    try stringify.write(item);
 }
 
 fn spaces(allocator: std.mem.Allocator, out: *std.ArrayList(u8), n: usize) !void {
@@ -553,4 +555,14 @@ test "encode emits concise f32 values without promoting them to f64" {
     defer decoded.deinit();
     try testing.expectEqual(@as(f32, 0.8), decoded.entities[0].components[0].fields[0].value.f32);
     try testing.expectEqual([3]f32{ 2.1, 0.012, 0.8 }, decoded.entities[0].components[0].fields[1].value.vec3);
+}
+
+test "json appends escaped values without a temporary allocation" {
+    var out: std.ArrayList(u8) = .empty;
+    defer out.deinit(std.testing.allocator);
+
+    try out.appendSlice(std.testing.allocator, "prefix:");
+    try json(std.testing.allocator, &out, "quoted \"newline\n");
+
+    try std.testing.expectEqualStrings("prefix:\"quoted \\\"newline\\n\"", out.items);
 }
