@@ -24,7 +24,6 @@ pub const SceneDocument = struct {
     schema_hash: u64 = 0,
     asset_manifest_hash: u64 = 0,
     entities: []SceneEntity,
-    file_name: []const u8,
 
     pub fn init(
         allocator: std.mem.Allocator,
@@ -41,14 +40,12 @@ pub const SceneDocument = struct {
             .project_id = project_id,
             .name = undefined,
             .entities = &.{},
-            .file_name = undefined,
         };
         errdefer self.arena.deinit();
 
         const storage = self.arena.allocator();
         self.format = try storage.dupe(u8, "zephyr.scene");
         self.name = try storage.dupe(u8, name);
-        self.file_name = try storage.dupe(u8, name);
 
         return self;
     }
@@ -85,7 +82,7 @@ pub const SceneDocument = struct {
         format: Format,
     };
 
-    pub fn write(self: *const SceneDocument, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, options: WriteOptions) !void {
+    pub fn write(self: *const SceneDocument, allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, file: []const u8, options: WriteOptions) !void {
         try validate.validate(
             self,
             allocator,
@@ -98,7 +95,7 @@ pub const SceneDocument = struct {
         };
         defer allocator.free(bytes);
 
-        try atomic_file.writeFileAtomic(allocator, io, dir, self.file_name, bytes);
+        try atomic_file.writeFileAtomic(allocator, io, dir, file, bytes);
     }
 
     pub fn entityIndex(self: *const SceneDocument, id: id_types.SceneEntityId) ?usize {
