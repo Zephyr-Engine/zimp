@@ -89,7 +89,7 @@ pub const SceneDocument = struct {
         try validate.validate(
             self,
             allocator,
-            .{ .project_id = options.project_id },
+            .{ .expected_project_id = options.project_id },
         );
 
         const bytes = switch (options.format) {
