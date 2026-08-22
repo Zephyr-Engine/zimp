@@ -280,3 +280,45 @@ test "SceneDocument.clone preserves document data in independent storage" {
     try testing.expect(source_entity.components[0].fields.ptr != cloned_entity.components[0].fields.ptr);
     try testing.expect(source_entity.components[0].fields[0].value.string.ptr != cloned_entity.components[0].fields[0].value.string.ptr);
 }
+
+test "SceneDocument.write round trips JSON and binary scenes" {
+    const scene_id = id_types.SceneId.parseComptime("8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a");
+    const project_id = id_types.ProjectId.parseComptime("4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589");
+    var scene = try SceneDocument.init(testing.allocator, scene_id, project_id, "scene.zscene");
+    defer scene.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    inline for ([_]Format{ .json, .binary }) |format| {
+        try scene.write(testing.allocator, testing.io, tmp.dir, .{
+            .project_id = project_id,
+            .format = format,
+        });
+
+        var loaded = try SceneDocument.load(testing.allocator, testing.io, tmp.dir, "scene.zscene", .{
+            .expected_project_id = project_id,
+        });
+        defer loaded.deinit();
+
+        try testing.expect(loaded.scene_id.eql(scene_id));
+        try testing.expect(loaded.project_id.eql(project_id));
+        try testing.expectEqualStrings(scene.name, loaded.name);
+    }
+}
+
+test "SceneDocument.write rejects a mismatched project" {
+    const scene_id = id_types.SceneId.parseComptime("8a6ab21b-319a-4fd7-85cb-4bf563a0ff9a");
+    const project_id = id_types.ProjectId.parseComptime("4e6e1f6a-9cc0-4f58-b6e5-3b91c1d91589");
+    const other_project_id = id_types.ProjectId.parseComptime("d9b8e01a-f070-4cd7-bc83-19f8a6e40d17");
+    var scene = try SceneDocument.init(testing.allocator, scene_id, project_id, "scene.zscene");
+    defer scene.deinit();
+
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try testing.expectError(error.UnexpectedProjectId, scene.write(testing.allocator, testing.io, tmp.dir, .{
+        .project_id = other_project_id,
+        .format = .json,
+    }));
+}
