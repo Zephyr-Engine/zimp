@@ -4,6 +4,7 @@ const wire = @import("../shared/wire.zig");
 
 pub const MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH;
 pub const ZMESH_VERSION: u32 = 3;
+
 pub const Transform = [16]f32;
 pub const identity_transform: Transform = .{
     1, 0, 0, 0,
@@ -23,7 +24,8 @@ pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u16) // submesh_count
 + @sizeOf(u32) // submesh_table_offset
 + @sizeOf(u16) // lod_count
-+ @sizeOf(u32); // lod_table_offset
++ @sizeOf(u32) // lod_table_offset
++ @sizeOf([2]f32) * 2; // uv0_min + uv0_scale
 
 pub const ZMeshHeader = struct {
     magic: [5]u8 = MAGIC.*,
@@ -37,6 +39,8 @@ pub const ZMeshHeader = struct {
     submesh_table_offset: u32,
     lod_count: u16,
     lod_table_offset: u32,
+    uv0_min: [2]f32,
+    uv0_scale: [2]f32,
 
     pub fn init(cooked_mesh: mesh.CookedMesh) ZMeshHeader {
         const vertex_count: u32 = @intCast(cooked_mesh.vertices.len);
