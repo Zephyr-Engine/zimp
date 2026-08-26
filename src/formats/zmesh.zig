@@ -186,8 +186,13 @@ pub const ZMeshHeader = struct {
 pub const MeshPart = struct {
     vertex_count: u32,
     index_count: u32,
+
     aabb_min: [3]f32,
     aabb_max: [3]f32,
+
+    uv0_min: [2]f32,
+    uv0_scale: [2]f32,
+
     submeshes: []const Submesh,
 
     positions: [][3]f32,
@@ -355,6 +360,8 @@ pub const MeshPart = struct {
             .index_count = index_count,
             .aabb_min = header.aabb.min,
             .aabb_max = header.aabb.max,
+            .uv0_min = header.uv0_bounds.min,
+            .uv0_scale = header.uv0_bounds.scale,
             .submeshes = submeshes,
             .positions = positions,
             .normals = normals,

@@ -1,9 +1,10 @@
 const std = @import("std");
 
-const asset = @import("../asset.zig");
 const file_read = @import("../../shared/file_read.zig");
-const log = @import("../../logger.zig");
+const builtin = @import("../../builtin/registry.zig");
 const path_helpers = @import("../../path.zig");
+const log = @import("../../logger.zig");
+const asset = @import("../asset.zig");
 
 pub const VariantKey = struct {
     bits: u32,
@@ -51,19 +52,18 @@ pub const RawShader = struct {
         allocator: std.mem.Allocator,
         io: std.Io,
         source_dir: std.Io.Dir,
-        path: []const u8,
-        source_bytes: []const u8,
+        source: *const builtin.Source,
     ) !RawShader {
-        const ext = asset.Extension.fromName(std.fs.path.basename(path));
+        const ext = asset.Extension.fromName(std.fs.path.basename(source.path));
         const stage = stageFromExtension(ext) orelse return error.NotCookableShader;
 
-        const owned_path = try allocator.dupe(u8, path);
+        const owned_path = try allocator.dupe(u8, source.path);
         errdefer allocator.free(owned_path);
 
-        const variants = try parseVariantNames(source_bytes, allocator);
+        const variants = try parseVariantNames(source.bytes, allocator);
         errdefer freeVariantNames(allocator, variants);
 
-        const preprocessed = try preprocessShader(source_bytes, path, source_dir, io, allocator);
+        const preprocessed = try preprocessShader(source, source_dir, io, allocator);
         errdefer preprocessed.deinit(allocator);
 
         return .{
@@ -142,8 +142,7 @@ pub fn includeUsesAngleBrackets(line: []const u8) bool {
 }
 
 pub fn preprocessShader(
-    source: []const u8,
-    source_path: []const u8,
+    source: *const builtin.Source,
     dir: std.Io.Dir,
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -163,7 +162,7 @@ pub fn preprocessShader(
         for (ctx.includes.items) |path| allocator.free(path);
     }
 
-    try ctx.preprocessInto(source, source_path);
+    try ctx.preprocessInto(source.bytes, source.path);
 
     const out_source = try ctx.output.toOwnedSlice(allocator);
     errdefer allocator.free(out_source);

@@ -1,14 +1,15 @@
 const std = @import("std");
 
-const Cooker = @import("cooker.zig").Cooker;
-const CookInput = @import("cooker.zig").CookInput;
-const file_read = @import("../shared/file_read.zig");
+const slotNameToIndex = @import("../assets/cooked/material.zig").slotNameToIndex;
+const CookedMaterial = @import("../assets/cooked/material.zig").CookedMaterial;
+const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const raw_material = @import("../assets/raw/material.zig");
 const raw_shader = @import("../assets/raw/shader.zig");
-const SourceFile = @import("../assets/source_file.zig").SourceFile;
-const CookedMaterial = @import("../assets/cooked/material.zig").CookedMaterial;
-const slotNameToIndex = @import("../assets/cooked/material.zig").slotNameToIndex;
+const file_read = @import("../shared/file_read.zig");
+const builtin = @import("../builtin/registry.zig");
+const CookInput = @import("cooker.zig").CookInput;
 const zamat = @import("../formats/zamat.zig");
+const Cooker = @import("cooker.zig").Cooker;
 const log = @import("../logger.zig");
 
 pub fn cooker() Cooker {
@@ -39,16 +40,18 @@ fn validateReferences(
     const frag_path = try std.fmt.allocPrint(allocator, "{s}.frag", .{source.shader_path});
     defer allocator.free(frag_path);
 
-    if (!file_read.fileExists(source_dir, io, vert_path)) {
-        log.err("{s}: shader '{s}' not found - missing {s}", .{ file_path, source.shader_path, vert_path });
-        return error.MissingShader;
-    }
-    if (!file_read.fileExists(source_dir, io, frag_path)) {
-        log.err("{s}: shader '{s}' not found - missing {s}", .{ file_path, source.shader_path, frag_path });
-        return error.MissingShader;
-    }
+    const vert = try lookupPath(allocator, io, source_dir, file_path, vert_path);
+    defer allocator.free(vert.bytes);
+    const frag = try lookupPath(allocator, io, source_dir, file_path, frag_path);
+    defer allocator.free(frag.bytes);
 
-    var reflected = try reflectMaterialShaders(allocator, io, source_dir, vert_path, frag_path);
+    var reflected = try reflectMaterialShaders(
+        allocator,
+        io,
+        source_dir,
+        &vert,
+        &frag,
+    );
     defer reflected.deinit(allocator);
 
     for (source.textures) |slot| {
@@ -67,6 +70,26 @@ fn validateReferences(
 
     try validateBindings(file_path, source);
     source.required_variants = try selectRequiredVariants(allocator, source, reflected.variants);
+}
+
+fn lookupPath(
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    source_dir: std.Io.Dir,
+    file_path: []const u8,
+    shader_path: []const u8,
+) !builtin.Source {
+    if (builtin.find(shader_path)) |src| {
+        return src;
+    }
+
+    if (!file_read.fileExists(source_dir, io, shader_path)) {
+        log.err("{s}: shader '{s}' not found", .{ file_path, shader_path });
+        return error.MissingShader;
+    }
+
+    const result = try file_read.readFileAllocChunked(allocator, io, source_dir, shader_path, .{});
+    return .{ .path = shader_path, .bytes = result.bytes };
 }
 
 const UniformKind = enum {
@@ -116,8 +139,8 @@ fn reflectMaterialShaders(
     allocator: std.mem.Allocator,
     io: std.Io,
     source_dir: std.Io.Dir,
-    vert_path: []const u8,
-    frag_path: []const u8,
+    vert: *const builtin.Source,
+    frag: *const builtin.Source,
 ) !ReflectedShaders {
     var uniforms: std.ArrayList(Uniform) = .empty;
     errdefer {
@@ -130,8 +153,8 @@ fn reflectMaterialShaders(
         variants.deinit(allocator);
     }
 
-    try reflectShaderFile(allocator, io, source_dir, vert_path, &uniforms, &variants);
-    try reflectShaderFile(allocator, io, source_dir, frag_path, &uniforms, &variants);
+    try reflectShaderFile(allocator, io, source_dir, vert, &uniforms, &variants);
+    try reflectShaderFile(allocator, io, source_dir, frag, &uniforms, &variants);
 
     return .{
         .uniforms = try uniforms.toOwnedSlice(allocator),
@@ -143,16 +166,11 @@ fn reflectShaderFile(
     allocator: std.mem.Allocator,
     io: std.Io,
     source_dir: std.Io.Dir,
-    path: []const u8,
+    source: *const builtin.Source,
     uniforms: *std.ArrayList(Uniform),
     variants: *std.ArrayList([]const u8),
 ) !void {
-    const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, path, .{
-        .chunk_size = 256 * 1024,
-    });
-    defer allocator.free(file_result.bytes);
-
-    var shader = try raw_shader.RawShader.init(allocator, io, source_dir, path, file_result.bytes);
+    var shader = try raw_shader.RawShader.init(allocator, io, source_dir, source);
     defer shader.deinit(allocator);
 
     for (shader.variants) |variant| {
