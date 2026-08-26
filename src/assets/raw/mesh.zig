@@ -1,7 +1,41 @@
 const std = @import("std");
-const log = @import("../../logger.zig");
+
 pub const MeshScratch = @import("mesh_scratch.zig").MeshScratch;
+const log = @import("../../logger.zig");
+
 const Map = std.AutoHashMap(u64, u32);
+
+pub const UV0Bounds = struct {
+    min: [2]f32,
+    scale: [2]f32,
+
+    pub fn compute(vertices: []const RawVertex) UV0Bounds {
+        var min: [2]f32 = .{ std.math.inf(f32), std.math.inf(f32) };
+        var max: [2]f32 = .{ -std.math.inf(f32), -std.math.inf(f32) };
+
+        for (vertices) |v| {
+            const uv = v.uv0 orelse continue;
+            for (0..2) |i| {
+                min[i] = @min(min[i], uv[i]);
+                max[i] = @max(max[i], uv[i]);
+            }
+        }
+
+        var scale: [2]f32 = undefined;
+        for (0..2) |i| {
+            // no UVs
+            if (min[i] > max[i]) {
+                min[i] = 0;
+                max[i] = 1;
+            }
+
+            const range = max[i] - min[i];
+            scale[i] = if (range > 1e-8) range else 1.0;
+        }
+
+        return .{ .min = min, .scale = scale };
+    }
+};
 
 pub const RawVertex = struct {
     position: [3]f32,
@@ -34,18 +68,28 @@ pub const RawVertex = struct {
             eqlOptional(self.joint_weights, other.joint_weights);
     }
 
-    pub fn quantizeUV0(self: *const RawVertex) ?[2]u16 {
+    pub fn quantizeUV0(self: *const RawVertex, bounds: *const UV0Bounds) ?[2]u16 {
         if (self.uv0) |uv| {
-            return quantizeUV(uv);
+            return quantizeUV(uv, bounds);
         }
         return null;
     }
 
     pub fn quantizeUV1(self: *const RawVertex) ?[2]u16 {
-        if (self.uv1) |uv| {
-            return quantizeUV(uv);
+        const uv = self.uv1 orelse return null;
+
+        for (0..2) |i| {
+            if (uv[i] < 0.0 or uv[i] > 1.0) {
+                log.warn("uv1 value {d} is outside [0,1]", .{uv[i]});
+            }
+            break;
         }
-        return null;
+
+        const bounds = UV0Bounds{
+            .min = .{ 0, 0 },
+            .scale = .{ 1, 1 },
+        };
+        return quantizeUV(uv, &bounds);
     }
 
     pub fn quantizeTangent(self: *const RawVertex) ?[4]f16 {
@@ -106,14 +150,10 @@ pub const RawVertex = struct {
         return if (x >= 0.0) 1.0 else -1.0;
     }
 
-    fn quantizeUV(uv: [2]f32) [2]u16 {
+    fn quantizeUV(uv: [2]f32, bounds: *const UV0Bounds) [2]u16 {
         var result: [2]u16 = undefined;
         for (0..2) |i| {
-            if (uv[i] < 0.0 or uv[i] > 1.0) {
-                log.warn("Found UV outside 0-1 range: {d}", .{uv[i]});
-            }
-
-            const clamped = std.math.clamp(uv[i], 0.0, 1.0);
+            const clamped = std.math.clamp((uv[i] - bounds.min[i]) / bounds.scale[i], 0.0, 1.0);
             result[i] = @intFromFloat(clamped * 65535.0);
         }
 
@@ -1292,31 +1332,36 @@ test "vertices differing only in optional fields are not deduplicated" {
 }
 
 test "quantizeUV maps the normalized range to all u16 values" {
-    const result = RawVertex.quantizeUV(.{ 0.0, 1.0 });
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const result = RawVertex.quantizeUV(.{ 0.0, 1.0 }, &bounds);
     try std.testing.expectEqual(@as(u16, 0), result[0]);
     try std.testing.expectEqual(@as(u16, 65535), result[1]);
 }
 
 test "quantizeUV maps 0.5 to midpoint" {
-    const result = RawVertex.quantizeUV(.{ 0.5, 0.5 });
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const result = RawVertex.quantizeUV(.{ 0.5, 0.5 }, &bounds);
     try std.testing.expectEqual(@as(u16, 32767), result[0]);
     try std.testing.expectEqual(@as(u16, 32767), result[1]);
 }
 
 test "quantizeUV clamps values below 0" {
-    const result = RawVertex.quantizeUV(.{ -0.5, -1.0 });
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const result = RawVertex.quantizeUV(.{ -0.5, -1.0 }, &bounds);
     try std.testing.expectEqual(@as(u16, 0), result[0]);
     try std.testing.expectEqual(@as(u16, 0), result[1]);
 }
 
 test "quantizeUV clamps values above 1" {
-    const result = RawVertex.quantizeUV(.{ 1.5, 2.0 });
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const result = RawVertex.quantizeUV(.{ 1.5, 2.0 }, &bounds);
     try std.testing.expectEqual(@as(u16, 65535), result[0]);
     try std.testing.expectEqual(@as(u16, 65535), result[1]);
 }
 
 test "quantizeUV handles independent channels" {
-    const result = RawVertex.quantizeUV(.{ 0.25, 0.75 });
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const result = RawVertex.quantizeUV(.{ 0.25, 0.75 }, &bounds);
     try std.testing.expectEqual(@as(u16, 16383), result[0]);
     try std.testing.expectEqual(@as(u16, 49151), result[1]);
 }
@@ -1324,14 +1369,16 @@ test "quantizeUV handles independent channels" {
 test "quantizeUV0 returns quantized value when present" {
     var v = makeVertex(0, 0, 0);
     v.uv0 = .{ 0.0, 1.0 };
-    const result = v.quantizeUV0().?;
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const result = v.quantizeUV0(&bounds).?;
     try std.testing.expectEqual(@as(u16, 0), result[0]);
     try std.testing.expectEqual(@as(u16, 65535), result[1]);
 }
 
 test "quantizeUV0 returns null when absent" {
     const v = makeVertex(0, 0, 0);
-    try std.testing.expectEqual(@as(?[2]u16, null), v.quantizeUV0());
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    try std.testing.expectEqual(@as(?[2]u16, null), v.quantizeUV0(&bounds));
 }
 
 test "quantizeUV1 returns quantized value when present" {

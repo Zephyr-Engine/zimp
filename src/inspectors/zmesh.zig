@@ -126,6 +126,17 @@ fn inspectPart(reader: *std.Io.Reader, header: zmesh.ZMeshHeader) !void {
     log.info("  extent: [{d:.4}, {d:.4}, {d:.4}]", .{ extent[0], extent[1], extent[2] });
     log.info("  center: [{d:.4}, {d:.4}, {d:.4}]", .{ center[0], center[1], center[2] });
 
+    if (flags.has_uv0) {
+        log.info("", .{});
+        log.info("UV0 Bounds:", .{});
+        log.info("  min:   [{d:.4}, {d:.4}]", .{ header.uv0_bounds.min[0], header.uv0_bounds.min[1] });
+        log.info("  scale: [{d:.4}, {d:.4}]", .{ header.uv0_bounds.scale[0], header.uv0_bounds.scale[1] });
+        log.info("  max:   [{d:.4}, {d:.4}]", .{
+            header.uv0_bounds.min[0] + header.uv0_bounds.scale[0],
+            header.uv0_bounds.min[1] + header.uv0_bounds.scale[1],
+        });
+    }
+
     log.info("", .{});
     log.info("Stream Layout:", .{});
     log.info("  {s: <12} {s: <10} {s: >6}  {s: >8}  {s: >10}", .{ "stream", "type", "elem", "offset", "size" });
@@ -328,6 +339,10 @@ fn writeTestZmesh(writer: *std.Io.Writer, opts: TestZmeshOpts) !void {
     try writer.writeInt(u8, @bitCast(flags), .little);
     for (opts.aabb_min) |v| try writer.writeInt(u32, @bitCast(v), .little);
     for (opts.aabb_max) |v| try writer.writeInt(u32, @bitCast(v), .little);
+    const uv0_min: [2]f32 = .{ 0, 0 };
+    const uv0_scale: [2]f32 = .{ 1, 1 };
+    for (uv0_min) |v| try writer.writeInt(u32, @bitCast(v), .little);
+    for (uv0_scale) |v| try writer.writeInt(u32, @bitCast(v), .little);
     try writer.writeInt(u16, opts.submesh_count, .little);
     try writer.writeInt(u32, submesh_table_offset, .little);
     try writer.writeInt(u16, 0, .little);

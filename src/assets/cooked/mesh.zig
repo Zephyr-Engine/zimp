@@ -1,9 +1,10 @@
 const std = @import("std");
 
 const raw_mesh = @import("../raw/mesh.zig");
-const RawVertex = raw_mesh.RawVertex;
-const RawMesh = raw_mesh.RawMesh;
 const MeshScratch = raw_mesh.MeshScratch;
+const RawVertex = raw_mesh.RawVertex;
+pub const UV0Bounds = raw_mesh.UV0Bounds;
+const RawMesh = raw_mesh.RawMesh;
 
 pub const FormatFlags = packed struct {
     has_normals: bool = false,
@@ -24,12 +25,12 @@ pub const CookedVertex = struct {
     joint_indices: ?[4]u16,
     joint_weights: ?[4]f16,
 
-    pub fn cook(vertex: *const RawVertex) !CookedVertex {
+    pub fn cook(vertex: *const RawVertex, bounds: *const UV0Bounds) !CookedVertex {
         return .{
             .position = vertex.position,
             .normal = vertex.encodeNormalOctahedral(),
             .tangent = vertex.quantizeTangent(),
-            .uv0 = vertex.quantizeUV0(),
+            .uv0 = vertex.quantizeUV0(bounds),
             .uv1 = vertex.quantizeUV1(),
             .joint_indices = vertex.joint_indices,
             .joint_weights = vertex.quantizeJointWeights(),
@@ -88,6 +89,7 @@ pub const CookedMesh = struct {
     format_flags: FormatFlags,
     bounds: AABB,
     name: ?[]const u8,
+    uv0_bounds: UV0Bounds = .{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } },
 
     pub fn deinit(self: *CookedMesh, allocator: std.mem.Allocator) void {
         allocator.free(self.vertices);
@@ -122,8 +124,9 @@ pub const CookedMesh = struct {
             .max = .{ -std.math.inf(f32), -std.math.inf(f32), -std.math.inf(f32) },
         };
 
+        const uv0_bounds = UV0Bounds.compute(mesh.vertices);
         for (mesh.vertices, cooked_verts) |*raw_vert, *cooked| {
-            cooked.* = try CookedVertex.cook(raw_vert);
+            cooked.* = try CookedVertex.cook(raw_vert, &uv0_bounds);
 
             for (0..3) |axis| {
                 bounds.min[axis] = @min(bounds.min[axis], raw_vert.position[axis]);
@@ -145,6 +148,7 @@ pub const CookedMesh = struct {
             .format_flags = flags,
             .bounds = bounds,
             .name = name,
+            .uv0_bounds = uv0_bounds,
         };
     }
 };
@@ -240,13 +244,15 @@ test "FormatFlags roundtrips through u8" {
 
 test "CookedVertex.cook preserves position" {
     const raw = makeRawVertex(1.5, -2.0, 3.0);
-    const cooked = try CookedVertex.cook(&raw);
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const cooked = try CookedVertex.cook(&raw, &bounds);
     try std.testing.expectEqual(raw.position, cooked.position);
 }
 
 test "CookedVertex.cook sets optional fields to null when absent" {
     const raw = makeRawVertex(0, 0, 0);
-    const cooked = try CookedVertex.cook(&raw);
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const cooked = try CookedVertex.cook(&raw, &bounds);
     try std.testing.expectEqual(@as(?[2]i16, null), cooked.normal);
     try std.testing.expectEqual(@as(?[4]f16, null), cooked.tangent);
     try std.testing.expectEqual(@as(?[2]u16, null), cooked.uv0);
@@ -264,7 +270,8 @@ test "CookedVertex.cook quantizes all present fields" {
     raw.joint_indices = .{ 0, 1, 2, 3 };
     raw.joint_weights = .{ 0.5, 0.25, 0.125, 0.125 };
 
-    const cooked = try CookedVertex.cook(&raw);
+    const bounds = UV0Bounds{ .min = .{ 0, 0 }, .scale = .{ 1, 1 } };
+    const cooked = try CookedVertex.cook(&raw, &bounds);
     try std.testing.expect(cooked.normal != null);
     try std.testing.expect(cooked.tangent != null);
     try std.testing.expect(cooked.uv0 != null);
