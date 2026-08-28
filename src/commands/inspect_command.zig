@@ -51,6 +51,7 @@ pub const InspectCommand = struct {
             return InspectError.UnknownFormat;
         };
 
+        try file_reader.seekTo(0);
         try inspector.inspect(self.allocator, reader);
     }
 

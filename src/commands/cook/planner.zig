@@ -395,8 +395,8 @@ test "buildDependencyGraph reuses fresh cached dependency rows" {
 
     try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{.{ .source = source, .info = info, .descriptor = asset_registry.descriptorForSource(source), .output_path = null, .cached_index = null }});
 
-    try testing.expectEqual(@as(usize, 1), graph.dependencyCount(&source));
-    const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
+    const deps = graph.getDependenciesByHash(source.hashPath()) orelse return error.MissingDependency;
+    try testing.expectEqual(@as(usize, 1), deps.items.len);
     try testing.expectEqual(dep.hashPath(), deps.items[0]);
 }
 
@@ -439,7 +439,7 @@ test "buildDependencyGraph refreshes stale cached dependency rows" {
     try testing.expectEqual(@as(usize, 1), row.dependencies.items.len);
     try testing.expectEqualStrings("new.glsl", row.dependencies.items[0].path);
 
-    const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
+    const deps = graph.getDependenciesByHash(source.hashPath()) orelse return error.MissingDependency;
     try testing.expectEqual(SourceFile.fromPath("new.glsl").hashPath(), deps.items[0]);
 }
 

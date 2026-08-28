@@ -4,183 +4,43 @@ const log = @import("../logger.zig");
 const fmt = @import("utils.zig");
 const FormatInspector = @import("inspect.zig").FormatInspector;
 const zamat = @import("../formats/zamat.zig");
-const wire = @import("../shared/wire.zig");
-
-fn alphaModeName(mode: zamat.AlphaMode) []const u8 {
-    return switch (mode) {
-        .solid => "solid",
-        .alpha_test => "alpha_test",
-        .alpha_blend => "alpha_blend",
-    };
-}
-
-fn cullModeName(mode: zamat.CullMode) []const u8 {
-    return switch (mode) {
-        .none => "none",
-        .front => "front",
-        .back => "back",
-    };
-}
-
-fn blendModeName(mode: zamat.BlendMode) []const u8 {
-    return switch (mode) {
-        .disabled => "disabled",
-        .alpha => "alpha",
-        .premultiplied_alpha => "premultiplied_alpha",
-    };
-}
 
 fn paramTypeName(param_type: zamat.ParamType) []const u8 {
-    return switch (param_type) {
-        .float => "float",
-        .vec2 => "vec2",
-        .vec3 => "vec3",
-        .vec4 => "vec4",
-        .int => "int",
-        .bool => "bool",
-    };
+    return @tagName(param_type);
 }
 
 fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
-    _ = allocator;
-    const header = try zamat.ZamatHeader.read(reader);
+    var material = try zamat.read(allocator, reader);
+    defer material.deinit(allocator);
 
     log.info("zamat v{d}", .{zamat.ZAMAT_VERSION});
     log.info("  Magic:       {s}", .{zamat.MAGIC});
-    log.info("  Version:     {d}", .{header.version});
-    log.info("  Shader hash: 0x{x:0>16}", .{header.shader_path_hash});
-    log.info("  Alpha mode:  {s}", .{alphaModeName(header.render_state.alpha_mode)});
-    log.info("  Alpha cut:   {d}", .{header.render_state.alpha_cutoff});
-    log.info("  Cull mode:   {s}", .{cullModeName(header.render_state.cull_mode)});
-    log.info("  Blend mode:  {s}", .{blendModeName(header.render_state.blend_mode)});
-    log.info("  Textures:    {d}", .{header.texture_slot_count});
-    log.info("  Params:      {d}", .{header.param_count});
-    log.info("  Variants:    {d}", .{header.variant_count});
-
-    var texture_entries: [32]zamat.TextureSlotEntry = undefined;
-    if (header.texture_slot_count > texture_entries.len) return error.TooManyTextureSlots;
-    var runtime_paths_len = @max(
-        @as(usize, header.vertex_shader_path_offset) + header.vertex_shader_path_len,
-        @as(usize, header.fragment_shader_path_offset) + header.fragment_shader_path_len,
-    );
-    for (0..header.texture_slot_count) |i| {
-        texture_entries[i] = .{
-            .slot_name_hash = try reader.takeInt(u64, .little),
-            .texture_path_hash = try reader.takeInt(u64, .little),
-            .slot_index = try reader.takeInt(u16, .little),
-            .uv_set = try reader.takeInt(u16, .little),
-            .sampler_name = undefined,
-            .sampler_name_offset = try reader.takeInt(u16, .little),
-            .sampler_name_len = try reader.takeInt(u16, .little),
-            .cooked_path = undefined,
-            .cooked_path_offset = try reader.takeInt(u16, .little),
-            .cooked_path_len = try reader.takeInt(u16, .little),
-            .sampler = .{
-                .min_filter = try wire.readEnum(reader, zamat.FilterMode, u8),
-                .mag_filter = try wire.readEnum(reader, zamat.FilterMode, u8),
-                .mip_filter = try wire.readEnum(reader, zamat.MipFilterMode, u8),
-                .wrap_s = try wire.readEnum(reader, zamat.WrapMode, u8),
-                .wrap_t = try wire.readEnum(reader, zamat.WrapMode, u8),
-                .max_anisotropy = undefined,
-            },
-            .uv_offset = undefined,
-            .uv_scale = undefined,
-            .uv_rotation = undefined,
-            .normal_scale = undefined,
-            .occlusion_strength = undefined,
-        };
-        _ = try reader.takeInt(u8, .little);
-        texture_entries[i].sampler.max_anisotropy = try readF32FromReader(reader);
-        texture_entries[i].uv_offset = .{ try readF32FromReader(reader), try readF32FromReader(reader) };
-        texture_entries[i].uv_scale = .{ try readF32FromReader(reader), try readF32FromReader(reader) };
-        texture_entries[i].uv_rotation = try readF32FromReader(reader);
-        texture_entries[i].normal_scale = try readF32FromReader(reader);
-        texture_entries[i].occlusion_strength = try readF32FromReader(reader);
-        const sampler_name_end = @as(usize, texture_entries[i].sampler_name_offset) + texture_entries[i].sampler_name_len;
-        if (sampler_name_end > runtime_paths_len) runtime_paths_len = sampler_name_end;
-        const cooked_path_end = @as(usize, texture_entries[i].cooked_path_offset) + texture_entries[i].cooked_path_len;
-        if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
-    }
-
-    var entries: [64]zamat.ParamEntry = undefined;
-    if (header.param_count > entries.len) return error.TooManyParams;
-
-    log.info("", .{});
-    log.info("Params:", .{});
-    log.info("  {s: >5}  {s: <24}  {s: <8}  {s: >8}  {s: >8}  {s}", .{ "index", "name", "type", "offset", "size", "value" });
-    log.info("  {s}", .{"-" ** 78});
-
-    var param_data_len: usize = 0;
-    var param_name_len: usize = 0;
-    for (0..header.param_count) |i| {
-        entries[i] = .{
-            .name = undefined,
-            .name_offset = try reader.takeInt(u16, .little),
-            .name_len = try reader.takeInt(u16, .little),
-            .param_type = try wire.readEnum(reader, zamat.ParamType, u16),
-            .data_offset = try reader.takeInt(u16, .little),
-            .data_size = try reader.takeInt(u16, .little),
-        };
-        _ = try reader.takeInt(u16, .little);
-
-        const end = @as(usize, entries[i].data_offset) + entries[i].data_size;
-        if (end > param_data_len) param_data_len = end;
-        const name_end = @as(usize, entries[i].name_offset) + entries[i].name_len;
-        if (name_end > param_name_len) param_name_len = name_end;
-    }
-
-    var variant_entries: [64]struct { name_offset: u16, name_len: u16 } = undefined;
-    if (header.variant_count > variant_entries.len) return error.TooManyVariants;
-    var variant_name_len: usize = 0;
-    for (0..header.variant_count) |i| {
-        variant_entries[i] = .{
-            .name_offset = try reader.takeInt(u16, .little),
-            .name_len = try reader.takeInt(u16, .little),
-        };
-        const name_end = @as(usize, variant_entries[i].name_offset) + variant_entries[i].name_len;
-        if (name_end > variant_name_len) variant_name_len = name_end;
-    }
-
-    var param_data_buf: [4096]u8 = undefined;
-    if (param_data_len > param_data_buf.len) return error.ParamDataTooLarge;
-    const param_data = param_data_buf[0..param_data_len];
-    try reader.readSliceAll(param_data);
-
-    var param_name_buf: [4096]u8 = undefined;
-    if (param_name_len > param_name_buf.len) return error.ParamNamesTooLarge;
-    const param_names = param_name_buf[0..param_name_len];
-    try reader.readSliceAll(param_names);
-
-    var variant_name_buf: [4096]u8 = undefined;
-    if (variant_name_len > variant_name_buf.len) return error.VariantNamesTooLarge;
-    const variant_names = variant_name_buf[0..variant_name_len];
-    try reader.readSliceAll(variant_names);
-
-    var runtime_path_buf: [4096]u8 = undefined;
-    if (runtime_paths_len > runtime_path_buf.len) return error.RuntimePathsTooLarge;
-    const runtime_paths = runtime_path_buf[0..runtime_paths_len];
-    try reader.readSliceAll(runtime_paths);
+    log.info("  Version:     {d}", .{zamat.ZAMAT_VERSION});
+    log.info("  Shader hash: 0x{x:0>16}", .{material.shader_path_hash});
+    log.info("  Alpha mode:  {s}", .{@tagName(material.render_state.alpha_mode)});
+    log.info("  Alpha cut:   {d}", .{material.render_state.alpha_cutoff});
+    log.info("  Cull mode:   {s}", .{@tagName(material.render_state.cull_mode)});
+    log.info("  Blend mode:  {s}", .{@tagName(material.render_state.blend_mode)});
+    log.info("  Textures:    {d}", .{material.texture_slots.len});
+    log.info("  Params:      {d}", .{material.param_entries.len});
+    log.info("  Variants:    {d}", .{material.required_variants.len});
 
     log.info("", .{});
     log.info("Shader Paths:", .{});
-    log.info("  Vertex:   {s}", .{runtime_paths[header.vertex_shader_path_offset..][0..header.vertex_shader_path_len]});
-    log.info("  Fragment: {s}", .{runtime_paths[header.fragment_shader_path_offset..][0..header.fragment_shader_path_len]});
+    log.info("  Vertex:   {s}", .{material.vertex_shader_path});
+    log.info("  Fragment: {s}", .{material.fragment_shader_path});
 
     log.info("", .{});
     log.info("Required Variants:", .{});
-    for (0..header.variant_count) |i| {
-        const entry = variant_entries[i];
-        log.info("  {s}", .{variant_names[entry.name_offset..][0..entry.name_len]});
+    for (material.required_variants) |variant| {
+        log.info("  {s}", .{variant});
     }
 
     log.info("", .{});
     log.info("Texture Slots:", .{});
     log.info("  {s: >5}  {s: >18}  {s: >18}  {s: <24}  {s}", .{ "index", "slot_hash", "texture_hash", "name", "cooked_path" });
     log.info("  {s}", .{"-" ** 88});
-    for (0..header.texture_slot_count) |i| {
-        var entry = texture_entries[i];
-        entry.sampler_name = runtime_paths[entry.sampler_name_offset..][0..entry.sampler_name_len];
-        entry.cooked_path = runtime_paths[entry.cooked_path_offset..][0..entry.cooked_path_len];
+    for (material.texture_slots, 0..) |entry, i| {
         log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {s: <24}  {s}", .{
             i,
             entry.slot_name_hash,
@@ -190,9 +50,11 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         });
     }
 
-    for (0..header.param_count) |i| {
-        var entry = entries[i];
-        entry.name = param_names[entry.name_offset..][0..entry.name_len];
+    log.info("", .{});
+    log.info("Params:", .{});
+    log.info("  {s: >5}  {s: <24}  {s: <8}  {s: >8}  {s: >8}  {s}", .{ "index", "name", "type", "offset", "size", "value" });
+    log.info("  {s}", .{"-" ** 78});
+    for (material.param_entries, 0..) |entry, i| {
         var value_buf: [96]u8 = undefined;
         log.info("  {d: >5}  {s: <24}  {s: <8}  {d: >8}  {d: >8}  {s}", .{
             i,
@@ -200,38 +62,48 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             paramTypeName(entry.param_type),
             entry.data_offset,
             entry.data_size,
-            formatParamValue(&value_buf, param_data, entry),
+            formatParamValue(&value_buf, material.param_data, entry),
         });
     }
 
+    const texture_table_size: u64 = material.texture_slots.len * zamat.TEXTURE_SLOT_ENTRY_SIZE;
+    const param_table_size: u64 = material.param_entries.len * zamat.PARAM_ENTRY_SIZE;
+    const variant_table_size: u64 = material.required_variants.len * zamat.VARIANT_ENTRY_SIZE;
+    const total_file_size: u64 = zamat.HEADER_SIZE + texture_table_size + param_table_size + variant_table_size +
+        material.param_data.len + material.param_names.len + material.variant_names.len + material.runtime_paths.len;
+
     log.info("", .{});
+    log.info("File Size Summary:", .{});
     var header_buf: [16]u8 = undefined;
     var texture_buf: [16]u8 = undefined;
     var param_buf: [16]u8 = undefined;
+    var variant_buf: [16]u8 = undefined;
     var data_buf: [16]u8 = undefined;
     var name_buf: [16]u8 = undefined;
     var runtime_buf: [16]u8 = undefined;
     var total_buf: [16]u8 = undefined;
-    const texture_table_size = @as(u64, @intCast(header.texture_slot_count)) * zamat.TEXTURE_SLOT_ENTRY_SIZE;
-    const param_table_size = @as(u64, @intCast(header.param_count)) * zamat.PARAM_ENTRY_SIZE;
-    const variant_table_size = @as(u64, @intCast(header.variant_count)) * zamat.VARIANT_ENTRY_SIZE;
-    const total_file_size = zamat.HEADER_SIZE + texture_table_size + param_table_size + variant_table_size + param_data_len + param_name_len + variant_name_len + runtime_paths_len;
-    log.info("File Size Summary:", .{});
     log.info("  Header:         {s: >10}", .{fmt.formatBytes(&header_buf, zamat.HEADER_SIZE)});
     log.info("  Texture table:  {s: >10}", .{fmt.formatBytes(&texture_buf, texture_table_size)});
     log.info("  Param table:    {s: >10}", .{fmt.formatBytes(&param_buf, param_table_size)});
-    log.info("  Variant table:  {s: >10}", .{fmt.formatBytes(&param_buf, variant_table_size)});
-    log.info("  Param data:     {s: >10}", .{fmt.formatBytes(&data_buf, param_data_len)});
-    log.info("  Param names:    {s: >10}", .{fmt.formatBytes(&name_buf, param_name_len)});
-    log.info("  Runtime paths:  {s: >10}", .{fmt.formatBytes(&runtime_buf, runtime_paths_len)});
+    log.info("  Variant table:  {s: >10}", .{fmt.formatBytes(&variant_buf, variant_table_size)});
+    log.info("  Param data:     {s: >10}", .{fmt.formatBytes(&data_buf, material.param_data.len)});
+    log.info("  Param names:    {s: >10}", .{fmt.formatBytes(&name_buf, material.param_names.len)});
+    log.info("  Runtime paths:  {s: >10}", .{fmt.formatBytes(&runtime_buf, material.runtime_paths.len)});
     log.info("  Total:          {s: >10}", .{fmt.formatBytes(&total_buf, total_file_size)});
 }
 
 fn formatParamValue(buf: []u8, data: []const u8, entry: zamat.ParamEntry) []const u8 {
     const start: usize = entry.data_offset;
-    const end = @as(usize, start) + entry.data_size;
+    const end = start + entry.data_size;
     if (end > data.len) return "(out of bounds)";
     const bytes = data[start..end];
+    const expected_size: usize = switch (entry.param_type) {
+        .float, .int, .bool => 4,
+        .vec2 => 8,
+        .vec3 => 12,
+        .vec4 => 16,
+    };
+    if (bytes.len < expected_size) return "(invalid size)";
 
     return switch (entry.param_type) {
         .float => std.fmt.bufPrint(buf, "{d}", .{readF32(bytes[0..4])}) catch "(format error)",
@@ -247,24 +119,14 @@ fn readF32(bytes: *const [4]u8) f32 {
     return @bitCast(std.mem.readInt(u32, bytes, .little));
 }
 
-fn readF32FromReader(reader: *std.Io.Reader) !f32 {
-    return @bitCast(try reader.takeInt(u32, .little));
-}
-
 pub fn inspector() FormatInspector {
     return .{ .inspect_fn = inspectZamat };
 }
 
-const testing = std.testing;
-const raw_material = @import("../assets/raw/material.zig");
-const CookedMaterial = @import("../assets/cooked/material.zig").CookedMaterial;
+test "inspectZamat uses the format reader" {
+    const raw_material = @import("../assets/raw/material.zig");
+    const CookedMaterial = @import("../assets/cooked/material.zig").CookedMaterial;
 
-test "inspector returns a valid FormatInspector" {
-    const insp = inspector();
-    try testing.expectEqual(@as(*const fn (std.mem.Allocator, *std.Io.Reader) anyerror!void, inspectZamat), insp.inspect_fn);
-}
-
-test "inspectZamat runs on a valid material file" {
     var parsed = try raw_material.parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
@@ -273,16 +135,16 @@ test "inspectZamat runs on a valid material file" {
         \\[params]
         \\u_roughness = 0.5
         \\
-    , testing.allocator);
-    defer parsed.deinit(testing.allocator);
+    , std.testing.allocator);
+    defer parsed.deinit(std.testing.allocator);
 
-    var cooked = try CookedMaterial.cook(testing.allocator, &parsed);
-    defer cooked.deinit(testing.allocator);
+    var cooked = try CookedMaterial.cook(std.testing.allocator, &parsed);
+    defer cooked.deinit(std.testing.allocator);
 
-    var buf: [1024]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&buf);
+    var file_buf: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&file_buf);
     try zamat.write(&writer, cooked);
 
-    var reader = std.Io.Reader.fixed(buf[zamat.MAGIC.len..writer.end]);
-    try inspectZamat(testing.allocator, &reader);
+    var reader = std.Io.Reader.fixed(file_buf[0..writer.end]);
+    try inspectZamat(std.testing.allocator, &reader);
 }
