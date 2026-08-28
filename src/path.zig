@@ -1,6 +1,6 @@
 const std = @import("std");
 
-const AssetType = @import("assets/asset.zig").AssetType;
+const AssetKind = @import("assets/asset.zig").AssetKind;
 
 pub const Error = error{
     AbsolutePathNotAllowed,
@@ -155,19 +155,19 @@ pub fn resolveShaderInclude(
     return normalizeRelative(allocator, joined);
 }
 
-pub fn cookedOutput(allocator: std.mem.Allocator, file_path: []const u8, asset_type: AssetType) ![]u8 {
+pub fn cookedOutput(allocator: std.mem.Allocator, file_path: []const u8, asset_kind: AssetKind) ![]u8 {
     const normalized = try normalizeVirtual(allocator, file_path);
     defer allocator.free(normalized);
 
     const basename = std.fs.path.basename(normalized);
-    const name = if (asset_type == .shader)
+    const name = if (asset_kind == .shader_stage)
         basename
     else
         std.fs.path.stem(basename);
 
     const filename = try std.fmt.allocPrint(allocator, "{s}.{s}", .{
         name,
-        asset_type.cookedExtension(),
+        asset_kind.cookedExtension(),
     });
     errdefer allocator.free(filename);
 
@@ -236,7 +236,7 @@ test "resolveShaderInclude returns normalized include when shader has no directo
 }
 
 test "cooked output paths use standardized naming" {
-    const shader = try cookedOutput(testing.allocator, "shaders/basic.vert", .shader);
+    const shader = try cookedOutput(testing.allocator, "shaders/basic.vert", .shader_stage);
     defer testing.allocator.free(shader);
     try testing.expectEqualStrings("shaders/basic.vert.zshdr", shader);
 

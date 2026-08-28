@@ -30,7 +30,7 @@ pub const Staleness = enum {
             return .{ .verdict = .errored };
         }
 
-        if (cache_entry.asset_type.rebuildsOnHostOsChange() and !std.mem.eql(u8, cached_host_os, @tagName(builtin.os.tag))) {
+        if (cache_entry.asset_kind != null and cache_entry.asset_kind.?.rebuildsOnHostOsChange() and !std.mem.eql(u8, cached_host_os, @tagName(builtin.os.tag))) {
             return .{ .verdict = .stale_host_os };
         }
 
@@ -83,7 +83,7 @@ fn makeCacheEntryFromFile(tmp: std.testing.TmpDir, sf: *const SourceFile) !Cache
         .cooked_path_hash = 0,
         .cooked_size = 0,
         .cooked_at = 0,
-        .asset_type = .mesh,
+        .asset_kind = .mesh,
     };
 }
 
@@ -151,7 +151,7 @@ test "check returns stale_host_os for OS-sensitive cached asset from different h
     try createTestFile(tmp, "a.zamat", "hello");
     const sf = SourceFile{ .path = "a.zamat", .extension = .zamat };
     var entry = try makeCacheEntryFromFile(tmp, &sf);
-    entry.asset_type = .material;
+    entry.asset_kind = .material;
 
     const result = Staleness.check(&entry, try sf.getFileInfo(tmp.dir, testing.io), null, "not-current-os");
     try testing.expectEqual(Staleness.stale_host_os, result.verdict);

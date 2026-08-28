@@ -8,35 +8,24 @@ const path = @import("../path.zig");
 pub const AssetManifestEntry = struct {
     id: AssetId,
     kind: AssetKind,
-    /// Relative to the project assets dir, e.g. "meshes/monkey.glb".
     source_path: []const u8,
-    /// Relative to the project cooked dir, e.g. "meshes/monkey.zmesh".
     cooked_path: []const u8,
-    /// fnv1a of source contents (same Hash the cook cache uses).
     content_hash: u64,
     source_size: u64,
     cooked_size: u64,
-    /// Source lives under generated/ (derived id, no sidecar).
     generated: bool = false,
 };
 
 /// The canonical in-memory manifest used by builder, codec, and tooling.
-/// Arena-owned: every slice lives in `arena`. The runtime has its own
-/// trimmed loader so builder code never links into the game.
 pub const AssetManifest = struct {
-    /// Owns every slice in the manifest.
     arena: std.heap.ArenaAllocator,
     project_id: ProjectId,
-    /// Sorted by source_path (builder invariant, validated on load).
     entries: []AssetManifestEntry,
 
     pub fn deinit(self: *AssetManifest) void {
         self.arena.deinit();
     }
 
-    /// Full semantic validation. Called by the codec after decode and by
-    /// the builder before encode, so no invalid manifest can be written OR
-    /// accepted.
     pub fn validate(self: *const AssetManifest) errors.ManifestError!void {
         var prev_source: ?[]const u8 = null;
         var seen_ids = std.AutoHashMap(AssetId, void).init(self.arena.child_allocator);
@@ -78,10 +67,8 @@ pub const AssetManifest = struct {
     }
 };
 
-// ── Test fixtures (shared by codec/builder tests) ────────────────────────
-
 pub const TestEntrySpec = struct {
-    id: []const u8, // canonical uuid string
+    id: []const u8,
     kind: AssetKind = .mesh,
     source_path: []const u8,
     cooked_path: []const u8 = "cooked.bin",
@@ -91,8 +78,6 @@ pub const TestEntrySpec = struct {
 
 pub const test_project_id = ProjectId.parseComptime("b0d5c1f2-88a1-4a5e-9f2d-77aa01c3e9b4");
 
-/// Build a fixture manifest for tests. Entries are used in the order given
-/// (deliberately NOT sorted here, so tests can construct invalid manifests).
 pub fn testManifest(gpa: std.mem.Allocator, entry_specs: []const TestEntrySpec) !AssetManifest {
     var m = AssetManifest{
         .arena = std.heap.ArenaAllocator.init(gpa),

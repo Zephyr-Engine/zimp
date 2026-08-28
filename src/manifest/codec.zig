@@ -6,11 +6,6 @@ const AssetId = @import("../id/id_types.zig").AssetId;
 const ProjectId = @import("../id/id_types.zig").ProjectId;
 const atomic_file = @import("../shared/atomic_file.zig");
 
-/// Manifest file format v1: canonical JSON. Deterministic (fixed field
-/// order, sorted entries, no timestamp), so identical inputs encode to
-/// identical bytes. The API is codec-shaped (encode/decode behind
-/// write/load helpers) so a later binary format can swap the body without
-/// touching callers.
 pub const manifest_format = "zephyr.asset_manifest";
 pub const manifest_version: u32 = 1;
 pub const max_manifest_bytes: usize = 64 * 1024 * 1024;

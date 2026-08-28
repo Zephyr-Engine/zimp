@@ -78,21 +78,18 @@ pub const AssetScanner = struct {
     }
 
     fn logResults(files: SourceFileList) void {
-        var counts = std.EnumArray(asset.AssetType, usize).initFill(0);
+        var counts = std.EnumArray(asset.AssetKind, usize).initFill(0);
         for (files.items) |file| {
-            counts.getPtr(file.assetType()).* += 1;
+            const kind = file.assetKind() orelse continue;
+            counts.getPtr(kind).* += 1;
         }
 
         log.debug("Found {d} assets", .{files.items.len});
 
-        for (std.enums.values(asset.AssetType)) |asset_type| {
-            if (asset_type == .unknown) {
-                continue;
-            }
-
-            const count = counts.get(asset_type);
+        for (std.enums.values(asset.AssetKind)) |kind| {
+            const count = counts.get(kind);
             if (count > 0) {
-                log.debug("  {s}: {d}", .{ @tagName(asset_type), count });
+                log.debug("  {s}: {d}", .{ @tagName(kind), count });
             }
         }
     }
@@ -164,7 +161,7 @@ test "AssetScanner.scan assigns correct asset type" {
 
     for (list.items) |file| {
         if (std.mem.eql(u8, file.path, "meshes/triangle.glb")) {
-            try testing.expectEqual(.mesh, file.assetType());
+            try testing.expectEqual(.mesh, file.assetKind());
             return;
         }
     }

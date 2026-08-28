@@ -10,6 +10,7 @@ const Extension = @import("../../assets/asset.zig").Extension;
 const GltfDocument = @import("document.zig").GltfDocument;
 const GltfJson = @import("gltf_json_parser.zig").GltfJson;
 const GltfPbr = @import("gltf_json_parser.zig").GltfPbr;
+const raw_material = @import("../../assets/raw/material.zig");
 const file_read = @import("../../shared/file_read.zig");
 const builtin = @import("../../builtin/registry.zig");
 const GLBFile = @import("glb_parser.zig").GLBFile;
@@ -395,21 +396,15 @@ fn isAlphaBlend(value: ?[]const u8) bool {
 }
 
 fn appendParamFloat(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: f32) !void {
-    try appendPrint(text, allocator,
-        \\{s} = {d:.6}
-    , .{ name, value });
+    try appendPrint(text, allocator, "{s} = {d:.6}\n", .{ name, value });
 }
 
 fn appendParamVec3(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: [3]f32) !void {
-    try appendPrint(text, allocator,
-        \\{s} = [{d}, {d}, {d}]
-    , .{ name, value[0], value[1], value[2] });
+    try appendPrint(text, allocator, "{s} = [{d}, {d}, {d}]\n", .{ name, value[0], value[1], value[2] });
 }
 
 fn appendParamVec4(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: [4]f32) !void {
-    try appendPrint(text, allocator,
-        \\{s} = [{d}, {d}, {d}, {d}]
-    , .{ name, value[0], value[1], value[2], value[3] });
+    try appendPrint(text, allocator, "{s} = [{d}, {d}, {d}, {d}]\n", .{ name, value[0], value[1], value[2], value[3] });
 }
 
 fn samplerForTexture(gltf: *const GltfJson, texture_index: u32) GltfSampler {
@@ -562,6 +557,10 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color =") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness =") != null);
+
+    var parsed = try raw_material.parseMaterialSource(bytes, testing.allocator);
+    defer parsed.deinit(testing.allocator);
+    try testing.expectEqual(@as(usize, 4), parsed.params.len);
 }
 
 test "generateFromGltf writes material with no textures" {

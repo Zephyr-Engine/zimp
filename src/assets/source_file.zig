@@ -29,8 +29,8 @@ pub const SourceFile = struct {
         };
     }
 
-    pub fn assetType(self: SourceFile) asset.AssetType {
-        return self.extension.assetType();
+    pub fn assetKind(self: SourceFile) ?asset.AssetKind {
+        return self.extension.assetKind();
     }
 
     pub const FileInfo = struct {

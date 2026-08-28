@@ -4,7 +4,7 @@ const texture_format = @import("formats/ztex.zig");
 const shader_format = @import("formats/zshdr.zig");
 const material_format = @import("formats/zamat.zig");
 const path_helpers = @import("path.zig");
-pub const AssetType = @import("assets/asset.zig").AssetType;
+pub const AssetKind = @import("assets/asset.zig").AssetKind;
 
 pub const Asset = union(enum) {
     mesh: mesh_format.ZMesh,
@@ -58,49 +58,48 @@ pub const CookedStore = struct {
     }
 };
 
-pub fn detectType(path: []const u8) ?AssetType {
-    return AssetType.fromCookedPath(path);
+pub fn detectKind(path: []const u8) ?AssetKind {
+    return AssetKind.fromCookedPath(path);
 }
 
 pub fn loadFromFile(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !Asset {
     const normalized_path = try path_helpers.normalizeVirtual(allocator, path);
     defer allocator.free(normalized_path);
 
-    const asset_type = detectType(normalized_path) orelse return error.UnsupportedAssetType;
+    const asset_kind = detectKind(normalized_path) orelse return error.UnsupportedAssetType;
 
     const file = try dir.openFile(io, normalized_path, .{});
     defer file.close(io);
 
     var buf: [8192]u8 = undefined;
     var file_reader = file.reader(io, &buf);
-    return loadFromReader(allocator, &file_reader.interface, asset_type);
+    return loadFromReader(allocator, &file_reader.interface, asset_kind);
 }
 
 pub fn loadFromReader(
     allocator: std.mem.Allocator,
     reader: *std.Io.Reader,
-    asset_type: AssetType,
+    asset_kind: AssetKind,
 ) !Asset {
-    switch (asset_type) {
+    switch (asset_kind) {
         .mesh => return .{ .mesh = try mesh_format.read(allocator, reader) },
         .texture => return .{ .texture = try texture_format.read(allocator, reader) },
-        .shader => return .{ .shader = try shader_format.read(allocator, reader) },
+        .shader_stage => return .{ .shader = try shader_format.read(allocator, reader) },
         .material => return .{ .material = try material_format.read(allocator, reader) },
-        .unknown => return error.UnsupportedAssetType,
     }
 }
 
 const testing = std.testing;
 
-test "detectType maps cooked asset extensions" {
-    try testing.expectEqual(AssetType.mesh, detectType("monkey.zmesh").?);
-    try testing.expectEqual(AssetType.material, detectType("monkey.zamat").?);
-    try testing.expectEqual(AssetType.texture, detectType("brick_albedo.ztex").?);
-    try testing.expectEqual(AssetType.shader, detectType("basic.vert.zshdr").?);
+test "detectKind maps cooked asset extensions" {
+    try testing.expectEqual(AssetKind.mesh, detectKind("monkey.zmesh").?);
+    try testing.expectEqual(AssetKind.material, detectKind("monkey.zamat").?);
+    try testing.expectEqual(AssetKind.texture, detectKind("brick_albedo.ztex").?);
+    try testing.expectEqual(AssetKind.shader_stage, detectKind("basic.vert.zshdr").?);
 }
 
-test "detectType requires lowercase cooked extensions" {
-    try testing.expect(detectType("MONKEY.ZMESH") == null);
+test "detectKind requires lowercase cooked extensions" {
+    try testing.expect(detectKind("MONKEY.ZMESH") == null);
 }
 
 test "loadFromFile loads zmesh" {

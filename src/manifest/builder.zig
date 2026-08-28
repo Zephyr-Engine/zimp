@@ -55,7 +55,7 @@ pub fn build(gpa: std.mem.Allocator, inputs: BuildInputs, stats: *BuildStats) !m
             stats.skipped_dependency_only += 1;
             continue;
         }
-        const kind = kind_mod.AssetKind.fromAssetType(cache_entry.asset_type) orelse {
+        const kind = cache_entry.asset_kind orelse {
             stats.skipped_unknown_kind += 1; // dependency-only files
             continue;
         };
@@ -175,7 +175,7 @@ const TestFixture = struct {
         self.tmp.cleanup();
     }
 
-    fn addCacheEntry(self: *TestFixture, source_path: []const u8, cooked_path: []const u8, asset_type: anytype, flags: u16) !void {
+    fn addCacheEntry(self: *TestFixture, source_path: []const u8, cooked_path: []const u8, asset_kind: ?kind_mod.AssetKind, flags: u16) !void {
         const fnv1a = @import("../assets/source_file.zig").fnv1a;
         try self.cache.pushCacheEntry(testing.allocator, .{
             .source_path = try testing.allocator.dupe(u8, source_path),
@@ -188,7 +188,7 @@ const TestFixture = struct {
             .cooked_size = 50,
             .cooked_at = 0,
             .flags = flags,
-            .asset_type = asset_type,
+            .asset_kind = asset_kind,
         });
     }
 
@@ -223,8 +223,8 @@ test "fresh assets get v4 ids and sidecars; non-assets are skipped" {
     try fx.tmp.dir.createDirPath(testing.io, "meshes");
     try fx.addCacheEntry("meshes/monkey.glb", "meshes/monkey.zmesh", .mesh, 0);
     try fx.addCacheEntry("tex/broken.png", "tex/broken.zatex", .texture, @import("../cache/entry.zig").FLAG_ERRORED);
-    try fx.addCacheEntry("includes/common.glsl", "", .shader, 0);
-    try fx.addCacheEntry("data/unknown.bin", "data/unknown.bin", .unknown, 0);
+    try fx.addCacheEntry("includes/common.glsl", "", null, 0);
+    try fx.addCacheEntry("data/unknown.bin", "data/unknown.bin", null, 0);
 
     var stats = BuildStats{};
     var m = try build(testing.allocator, fx.inputs(prng.random()), &stats);

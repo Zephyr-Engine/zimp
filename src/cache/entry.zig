@@ -1,6 +1,6 @@
 const std = @import("std");
 const source_file_mod = @import("../assets/source_file.zig");
-const AssetType = @import("../assets/asset.zig").AssetType;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
 const fnv1a = source_file_mod.fnv1a;
 const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
@@ -18,7 +18,7 @@ pub const CacheEntry = struct {
     cooked_size: u64,
     cooked_at: i96,
     flags: u16 = 0,
-    asset_type: AssetType,
+    asset_kind: ?AssetKind,
 
     pub fn isErrored(self: *const CacheEntry) bool {
         return self.flags & FLAG_ERRORED != 0;
@@ -55,7 +55,7 @@ pub const CacheEntry = struct {
             .cooked_path_hash = fnv1a(cooked_path),
             .cooked_size = cooked_size,
             .cooked_at = now.raw.nanoseconds,
-            .asset_type = source_file.assetType(),
+            .asset_kind = source_file.assetKind(),
         };
     }
 
@@ -80,7 +80,7 @@ pub const CacheEntry = struct {
             .cooked_size = 0,
             .cooked_at = 0,
             .flags = FLAG_ERRORED,
-            .asset_type = source_file.assetType(),
+            .asset_kind = source_file.assetKind(),
         };
     }
 };
@@ -124,7 +124,7 @@ test "create populates all fields from source file" {
     try testing.expectEqualStrings("model.zmesh", entry.cooked_path);
     try testing.expectEqual(fnv1a("model.zmesh"), entry.cooked_path_hash);
     try testing.expectEqual(@as(u64, 256), entry.cooked_size);
-    try testing.expectEqual(AssetType.mesh, entry.asset_type);
+    try testing.expectEqual(AssetKind.mesh, entry.asset_kind);
     try testing.expect(entry.content_hash != 0);
     try testing.expect(entry.source_mtime != 0);
     try testing.expect(entry.cooked_at != 0);
@@ -164,7 +164,7 @@ test "create owns copies of paths" {
     try testing.expectEqualStrings("test.glb", entry.source_path);
 }
 
-test "create with unknown asset type" {
+test "create with unsupported asset kind" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -190,5 +190,5 @@ test "create with unknown asset type" {
         testing.allocator.free(entry.cooked_path);
     }
 
-    try testing.expectEqual(AssetType.unknown, entry.asset_type);
+    try testing.expect(entry.asset_kind == null);
 }

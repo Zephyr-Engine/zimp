@@ -119,10 +119,10 @@ test "extractShaderDeps returns #include paths from a shader file" {
     try testing.expectEqual(@as(usize, 2), deps.len);
     try testing.expectEqualStrings("common.glsl", deps[0].path);
     try testing.expectEqual(.glsl, deps[0].extension);
-    try testing.expectEqual(.shader, deps[0].assetType());
+    try testing.expect(deps[0].assetKind() == null);
     try testing.expectEqualStrings("angle.glsl", deps[1].path);
     try testing.expectEqual(.glsl, deps[1].extension);
-    try testing.expectEqual(.shader, deps[1].assetType());
+    try testing.expect(deps[1].assetKind() == null);
 }
 
 test "extractShaderDeps resolves includes relative to shader directory" {

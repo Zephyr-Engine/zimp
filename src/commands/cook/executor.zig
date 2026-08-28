@@ -16,7 +16,7 @@ const CsrGraph = @import("planner.zig").CsrGraph;
 const SourceIndex = @import("planner.zig").SourceIndex;
 const SourceRecord = @import("planner.zig").SourceRecord;
 const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
-const AssetType = @import("../../assets/asset.zig").AssetType;
+const AssetKind = @import("../../assets/asset.zig").AssetKind;
 const zmesh = @import("../../formats/zmesh.zig");
 const ztex = @import("../../formats/ztex.zig");
 const zshdr = @import("../../formats/zshdr.zig");
@@ -307,7 +307,8 @@ const CookJobRunner = struct {
     }
 
     fn outputFileIsCurrent(self: *const CookJobRunner, cooked_path: []const u8) bool {
-        return cookedFileIsCurrent(self.ctx.io, self.ctx.output, cooked_path, self.record.source.assetType());
+        const kind = self.record.source.assetKind() orelse return false;
+        return cookedFileIsCurrent(self.ctx.io, self.ctx.output, cooked_path, kind);
     }
 
     fn attachSnapshot(self: *const CookJobRunner, result: *CookJobResult, analyzed: *HashedSource) !void {
@@ -327,17 +328,16 @@ const CookedHeader = struct {
     version: u32,
 };
 
-fn currentCookedHeader(asset_type: AssetType) ?CookedHeader {
-    return switch (asset_type) {
+fn currentCookedHeader(asset_kind: AssetKind) CookedHeader {
+    return switch (asset_kind) {
         .mesh => .{ .magic = zmesh.MAGIC, .version = zmesh.ZMESH_VERSION },
         .texture => .{ .magic = ztex.MAGIC, .version = ztex.ZATEX_VERSION },
-        .shader => .{ .magic = zshdr.MAGIC, .version = zshdr.ZSHDR_VERSION },
+        .shader_stage => .{ .magic = zshdr.MAGIC, .version = zshdr.ZSHDR_VERSION },
         .material => .{ .magic = zamat.MAGIC, .version = zamat.ZAMAT_VERSION },
-        .unknown => null,
     };
 }
 
-fn cookedFileIsCurrent(io: std.Io, output: std.Io.Dir, cooked_path: []const u8, asset_type: AssetType) bool {
+fn cookedFileIsCurrent(io: std.Io, output: std.Io.Dir, cooked_path: []const u8, asset_kind: AssetKind) bool {
     if (cooked_path.len == 0) {
         return false;
     }
@@ -350,7 +350,7 @@ fn cookedFileIsCurrent(io: std.Io, output: std.Io.Dir, cooked_path: []const u8, 
     var magic: [5]u8 = undefined;
     file_reader.interface.readSliceAll(&magic) catch return false;
     const version = file_reader.interface.takeInt(u32, .little) catch return false;
-    const expected = currentCookedHeader(asset_type) orelse return false;
+    const expected = currentCookedHeader(asset_kind);
     return std.mem.eql(u8, &magic, expected.magic) and version == expected.version;
 }
 

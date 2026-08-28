@@ -112,7 +112,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
             .info = info,
             .descriptor = descriptor,
             .output_path = output_path,
-            .cached_index = if (material_topology_changed and source.assetType() == .mesh)
+            .cached_index = if (material_topology_changed and source.assetKind() == .mesh)
                 null
             else
                 cache.getIdx(source),
@@ -191,7 +191,7 @@ fn materialTopologyChanged(allocator: std.mem.Allocator, sources: []const Source
     }
 
     for (cache.entries.items) |entry| {
-        if (entry.asset_type == .material and !current_paths.contains(entry.source_path)) {
+        if (entry.asset_kind == .material and !current_paths.contains(entry.source_path)) {
             return true;
         }
     }
