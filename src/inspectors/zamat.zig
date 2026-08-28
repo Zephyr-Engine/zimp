@@ -68,12 +68,10 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .slot_name_hash = try reader.takeInt(u64, .little),
             .texture_path_hash = try reader.takeInt(u64, .little),
             .slot_index = try reader.takeInt(u16, .little),
-            .shader_set = try reader.takeInt(u16, .little),
-            .shader_binding = try reader.takeInt(u16, .little),
             .uv_set = try reader.takeInt(u16, .little),
-            .resource_name = undefined,
-            .resource_name_offset = try reader.takeInt(u16, .little),
-            .resource_name_len = try reader.takeInt(u16, .little),
+            .sampler_name = undefined,
+            .sampler_name_offset = try reader.takeInt(u16, .little),
+            .sampler_name_len = try reader.takeInt(u16, .little),
             .cooked_path = undefined,
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
@@ -98,8 +96,8 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         texture_entries[i].uv_rotation = try readF32FromReader(reader);
         texture_entries[i].normal_scale = try readF32FromReader(reader);
         texture_entries[i].occlusion_strength = try readF32FromReader(reader);
-        const resource_name_end = @as(usize, texture_entries[i].resource_name_offset) + texture_entries[i].resource_name_len;
-        if (resource_name_end > runtime_paths_len) runtime_paths_len = resource_name_end;
+        const sampler_name_end = @as(usize, texture_entries[i].sampler_name_offset) + texture_entries[i].sampler_name_len;
+        if (sampler_name_end > runtime_paths_len) runtime_paths_len = sampler_name_end;
         const cooked_path_end = @as(usize, texture_entries[i].cooked_path_offset) + texture_entries[i].cooked_path_len;
         if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
     }
@@ -120,8 +118,6 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             .name_offset = try reader.takeInt(u16, .little),
             .name_len = try reader.takeInt(u16, .little),
             .param_type = try wire.readEnum(reader, zamat.ParamType, u16),
-            .shader_set = try reader.takeInt(u16, .little),
-            .shader_binding = try reader.takeInt(u16, .little),
             .data_offset = try reader.takeInt(u16, .little),
             .data_size = try reader.takeInt(u16, .little),
         };
@@ -179,19 +175,17 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
 
     log.info("", .{});
     log.info("Texture Slots:", .{});
-    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: >5}  {s: >7}  {s: <24}  {s}", .{ "index", "slot_hash", "texture_hash", "set", "binding", "resource", "cooked_path" });
-    log.info("  {s}", .{"-" ** 112});
+    log.info("  {s: >5}  {s: >18}  {s: >18}  {s: <24}  {s}", .{ "index", "slot_hash", "texture_hash", "name", "cooked_path" });
+    log.info("  {s}", .{"-" ** 88});
     for (0..header.texture_slot_count) |i| {
         var entry = texture_entries[i];
-        entry.resource_name = runtime_paths[entry.resource_name_offset..][0..entry.resource_name_len];
+        entry.sampler_name = runtime_paths[entry.sampler_name_offset..][0..entry.sampler_name_len];
         entry.cooked_path = runtime_paths[entry.cooked_path_offset..][0..entry.cooked_path_len];
-        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {d: >5}  {d: >7}  {s: <24}  {s}", .{
+        log.info("  {d: >5}  0x{x:0>16}  0x{x:0>16}  {s: <24}  {s}", .{
             i,
             entry.slot_name_hash,
             entry.texture_path_hash,
-            entry.shader_set,
-            entry.shader_binding,
-            entry.resource_name,
+            entry.sampler_name,
             entry.cooked_path,
         });
     }
@@ -274,11 +268,10 @@ test "inspectZamat runs on a valid material file" {
     var parsed = try raw_material.parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/test_albedo.png"
-        \\resource = "u_albedo"
-        \\[param.u_roughness]
-        \\value = 0.5
+        \\[params]
+        \\u_roughness = 0.5
         \\
     , testing.allocator);
     defer parsed.deinit(testing.allocator);

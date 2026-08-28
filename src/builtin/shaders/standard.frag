@@ -6,7 +6,7 @@ in vec3 v_normal;
 in vec4 v_tangent;
 in vec2 v_uv0;
 
-// --- Texture slots. Names must match textureResourceName() in material_generator.zig.
+// --- Texture slots. Material [texture.<name>] sections name these samplers.
 uniform sampler2D u_albedo;
 uniform sampler2D u_normal_map;
 uniform sampler2D u_roughness_metallic_map;

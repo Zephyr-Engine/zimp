@@ -57,9 +57,6 @@ pub const RenderState = struct {
 pub const TextureSlot = struct {
     slot_name: []const u8,
     texture_path: []const u8,
-    resource_name: []const u8,
-    shader_set: u16 = 0,
-    shader_binding: u16 = 0,
     uv_set: u16 = 0,
     uv_offset: [2]f32 = .{ 0, 0 },
     uv_scale: [2]f32 = .{ 1, 1 },
@@ -72,8 +69,6 @@ pub const TextureSlot = struct {
 pub const ParamValue = struct {
     name: []const u8,
     value: Value,
-    shader_set: u16 = 1,
-    shader_binding: u16 = 0,
 
     pub const Value = union(enum) {
         float: f32,
@@ -97,7 +92,6 @@ pub const MaterialSource = struct {
         for (self.textures) |slot| {
             allocator.free(slot.slot_name);
             allocator.free(slot.texture_path);
-            allocator.free(slot.resource_name);
         }
         allocator.free(self.textures);
         for (self.params) |param| {
@@ -113,7 +107,7 @@ const Section = enum {
     material,
     render_state,
     texture,
-    param,
+    params,
 };
 
 const ActiveSection = struct {
@@ -124,8 +118,6 @@ const ActiveSection = struct {
 const ParsedParam = struct {
     name: []const u8,
     value: ?ParamValue.Value = null,
-    shader_set: u16 = 1,
-    shader_binding: u16 = 0,
 };
 
 pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !MaterialSource {
@@ -139,7 +131,6 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
         for (textures.items) |slot| {
             allocator.free(slot.slot_name);
             allocator.free(slot.texture_path);
-            allocator.free(slot.resource_name);
         }
         textures.deinit(allocator);
     }
@@ -168,8 +159,8 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
                 .{ .kind = .render_state }
             else if (std.mem.startsWith(u8, name, "texture."))
                 .{ .kind = .texture, .name = name["texture.".len..] }
-            else if (std.mem.startsWith(u8, name, "param."))
-                .{ .kind = .param, .name = name["param.".len..] }
+            else if (std.mem.eql(u8, name, "params"))
+                .{ .kind = .params }
             else
                 return error.UnknownMaterialSection;
             continue;
@@ -195,16 +186,14 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
                 const name = active.name orelse return error.InvalidSectionHeader;
                 try parseTextureSubsection(allocator, &textures, name, key, value);
             },
-            .param => {
-                const name = active.name orelse return error.InvalidSectionHeader;
-                try parseParamSubsection(allocator, &params, name, key, value);
+            .params => {
+                try parseFlatParam(allocator, &params, key, value);
             },
         }
     }
 
     for (textures.items) |slot| {
         if (slot.texture_path.len == 0) return error.MissingTexturePath;
-        if (slot.resource_name.len == 0) return error.MissingTextureResource;
     }
     const owned_shader_path = shader_path orelse return error.MissingShaderPath;
 
@@ -213,7 +202,6 @@ pub fn parseMaterialSource(source: []const u8, allocator: std.mem.Allocator) !Ma
         for (owned_textures) |slot| {
             allocator.free(slot.slot_name);
             allocator.free(slot.texture_path);
-            allocator.free(slot.resource_name);
         }
         allocator.free(owned_textures);
     }
@@ -266,13 +254,6 @@ fn parseTextureSubsection(
     if (std.mem.eql(u8, key, "path")) {
         allocator.free(slot.texture_path);
         slot.texture_path = try allocator.dupe(u8, try parseQuoted(value));
-    } else if (std.mem.eql(u8, key, "resource")) {
-        allocator.free(slot.resource_name);
-        slot.resource_name = try allocator.dupe(u8, try parseQuoted(value));
-    } else if (std.mem.eql(u8, key, "set")) {
-        slot.shader_set = try parseU16(value);
-    } else if (std.mem.eql(u8, key, "binding")) {
-        slot.shader_binding = try parseU16(value);
     } else if (std.mem.eql(u8, key, "uv_set")) {
         slot.uv_set = try parseU16(value);
     } else if (std.mem.eql(u8, key, "uv_offset")) {
@@ -302,24 +283,15 @@ fn parseTextureSubsection(
     }
 }
 
-fn parseParamSubsection(
+fn parseFlatParam(
     allocator: std.mem.Allocator,
     params: *std.ArrayList(ParsedParam),
     param_name_raw: []const u8,
-    key: []const u8,
     value: []const u8,
 ) !void {
     const index = try findOrAppendParam(allocator, params, param_name_raw);
     var param = &params.items[index];
-    if (std.mem.eql(u8, key, "value")) {
-        param.value = try parseParamValue(value);
-    } else if (std.mem.eql(u8, key, "set")) {
-        param.shader_set = try parseU16(value);
-    } else if (std.mem.eql(u8, key, "binding")) {
-        param.shader_binding = try parseU16(value);
-    } else {
-        return error.UnknownParamKey;
-    }
+    param.value = try parseParamValue(value);
 }
 
 fn findOrAppendTexture(allocator: std.mem.Allocator, textures: *std.ArrayList(TextureSlot), slot_name_raw: []const u8) !usize {
@@ -330,13 +302,9 @@ fn findOrAppendTexture(allocator: std.mem.Allocator, textures: *std.ArrayList(Te
     errdefer allocator.free(slot_name);
     const texture_path = try allocator.dupe(u8, "");
     errdefer allocator.free(texture_path);
-    const resource_name = try allocator.dupe(u8, "");
-    errdefer allocator.free(resource_name);
     try textures.append(allocator, .{
         .slot_name = slot_name,
         .texture_path = texture_path,
-        .resource_name = resource_name,
-        .shader_binding = defaultTextureBinding(slot_name),
     });
     return textures.items.len - 1;
 }
@@ -347,10 +315,7 @@ fn findOrAppendParam(allocator: std.mem.Allocator, params: *std.ArrayList(Parsed
     }
     const name = try allocator.dupe(u8, param_name_raw);
     errdefer allocator.free(name);
-    try params.append(allocator, .{
-        .name = name,
-        .shader_binding = @intCast(params.items.len),
-    });
+    try params.append(allocator, .{ .name = name });
     return params.items.len - 1;
 }
 
@@ -362,8 +327,6 @@ fn completeParams(allocator: std.mem.Allocator, params: []const ParsedParam) ![]
         out.* = .{
             .name = param.name,
             .value = param.value orelse return error.MissingParamValue,
-            .shader_set = param.shader_set,
-            .shader_binding = param.shader_binding,
         };
     }
 
@@ -434,18 +397,6 @@ fn parseVec2(value: []const u8) ![2]f32 {
     };
 }
 
-fn defaultTextureBinding(slot_name: []const u8) u16 {
-    if (std.mem.eql(u8, slot_name, "albedo")) return 0;
-    if (std.mem.eql(u8, slot_name, "normal")) return 1;
-    if (std.mem.eql(u8, slot_name, "roughness")) return 2;
-    if (std.mem.eql(u8, slot_name, "metallic")) return 3;
-    if (std.mem.eql(u8, slot_name, "ao")) return 4;
-    if (std.mem.eql(u8, slot_name, "emissive")) return 5;
-    if (std.mem.eql(u8, slot_name, "roughness_metallic")) return 6;
-    if (std.mem.eql(u8, slot_name, "orm")) return 7;
-    return std.math.maxInt(u16);
-}
-
 fn parseParamValue(value: []const u8) !ParamValue.Value {
     if (std.mem.eql(u8, value, "true")) return .{ .bool = true };
     if (std.mem.eql(u8, value, "false")) return .{ .bool = false };
@@ -509,11 +460,8 @@ test "parseMaterialSource parses v2 render state texture and param subsections" 
         \\depth_write = false
         \\blend_mode = "alpha"
         \\
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/brick_albedo.png"
-        \\resource = "u_albedo"
-        \\set = 2
-        \\binding = 3
         \\uv_set = 1
         \\uv_offset = [0.25, 0.5]
         \\uv_scale = [2.0, 3.0]
@@ -525,10 +473,8 @@ test "parseMaterialSource parses v2 render state texture and param subsections" 
         \\wrap_t = "mirrored_repeat"
         \\max_anisotropy = 8
         \\
-        \\[param.u_roughness]
-        \\value = 0.65
-        \\set = 4
-        \\binding = 5
+        \\[params]
+        \\u_roughness = 0.65
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);
@@ -543,11 +489,8 @@ test "parseMaterialSource parses v2 render state texture and param subsections" 
 
     try testing.expectEqual(@as(usize, 1), source.textures.len);
     const tex = source.textures[0];
-    try testing.expectEqualStrings("albedo", tex.slot_name);
+    try testing.expectEqualStrings("u_albedo", tex.slot_name);
     try testing.expectEqualStrings("textures/brick_albedo.png", tex.texture_path);
-    try testing.expectEqualStrings("u_albedo", tex.resource_name);
-    try testing.expectEqual(@as(u16, 2), tex.shader_set);
-    try testing.expectEqual(@as(u16, 3), tex.shader_binding);
     try testing.expectEqual(@as(u16, 1), tex.uv_set);
     try testing.expectEqual([2]f32{ 0.25, 0.5 }, tex.uv_offset);
     try testing.expectEqual([2]f32{ 2.0, 3.0 }, tex.uv_scale);
@@ -558,16 +501,14 @@ test "parseMaterialSource parses v2 render state texture and param subsections" 
     try testing.expectEqual(@as(usize, 1), source.params.len);
     try testing.expectEqualStrings("u_roughness", source.params[0].name);
     try testing.expectEqual(@as(f32, 0.65), source.params[0].value.float);
-    try testing.expectEqual(@as(u16, 4), source.params[0].shader_set);
-    try testing.expectEqual(@as(u16, 5), source.params[0].shader_binding);
 }
 
 test "parseMaterialSource rejects texture subsection without path" {
     try testing.expectError(error.MissingTexturePath, parseMaterialSource(
         \\[material]
         \\shader = "shaders/pbr"
-        \\[texture.albedo]
-        \\binding = 0
+        \\[texture.u_albedo]
+        \\uv_set = 0
         \\
     , testing.allocator));
 }
@@ -587,28 +528,7 @@ test "parseMaterialSource preserves explicit cull mode independent of key order"
     try testing.expectEqual(CullMode.front, source.render_state.cull_mode);
 }
 
-test "parseMaterialSource rejects texture subsection without resource" {
-    try testing.expectError(error.MissingTextureResource, parseMaterialSource(
-        \\[material]
-        \\shader = "shaders/pbr"
-        \\[texture.albedo]
-        \\path = "textures/brick_albedo.png"
-        \\
-    , testing.allocator));
-}
-
-test "parseMaterialSource rejects param subsection without value" {
-    try testing.expectError(error.MissingParamValue, parseMaterialSource(
-        \\[material]
-        \\shader = "shaders/pbr"
-        \\[param.u_roughness]
-        \\set = 1
-        \\binding = 3
-        \\
-    , testing.allocator));
-}
-
-test "parseMaterialSource rejects pre-v2 material forms" {
+test "parseMaterialSource rejects obsolete material forms" {
     try testing.expectError(error.UnknownMaterialKey, parseMaterialSource(
         \\[material]
         \\shader = "shaders/pbr"
@@ -619,8 +539,8 @@ test "parseMaterialSource rejects pre-v2 material forms" {
     try testing.expectError(error.UnknownMaterialSection, parseMaterialSource(
         \\[material]
         \\shader = "shaders/pbr"
-        \\[textures]
-        \\albedo = "textures/brick_albedo.png"
+        \\[param.u_roughness]
+        \\value = 0.5
         \\
     , testing.allocator));
 
@@ -645,41 +565,32 @@ test "parseMaterialSource collects texture slots in order" {
     var source = try parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/brick_albedo.png"
-        \\resource = "u_albedo"
-        \\[texture.normal]
+        \\[texture.u_normal_map]
         \\path = "textures/sub/brick_normal.png"
-        \\resource = "u_normal_map"
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);
 
     try testing.expectEqual(@as(usize, 2), source.textures.len);
-    try testing.expectEqualStrings("albedo", source.textures[0].slot_name);
+    try testing.expectEqualStrings("u_albedo", source.textures[0].slot_name);
     try testing.expectEqualStrings("textures/brick_albedo.png", source.textures[0].texture_path);
-    try testing.expectEqualStrings("u_albedo", source.textures[0].resource_name);
-    try testing.expectEqualStrings("normal", source.textures[1].slot_name);
+    try testing.expectEqualStrings("u_normal_map", source.textures[1].slot_name);
     try testing.expectEqualStrings("textures/sub/brick_normal.png", source.textures[1].texture_path);
-    try testing.expectEqualStrings("u_normal_map", source.textures[1].resource_name);
 }
 
 test "parseMaterialSource parses params" {
     var source = try parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[param.u_roughness]
-        \\value = 0.5
-        \\[param.u_mode]
-        \\value = 2
-        \\[param.u_enabled]
-        \\value = true
-        \\[param.u_uv_scale]
-        \\value = [2.0, 2.0]
-        \\[param.u_light_dir]
-        \\value = [0.5, 1.0, 0.3]
-        \\[param.u_base_color]
-        \\value = [1.0, 1.0, 1.0, 1.0]
+        \\[params]
+        \\u_roughness = 0.5
+        \\u_mode = 2
+        \\u_enabled = true
+        \\u_uv_scale = [2.0, 2.0]
+        \\u_light_dir = [0.5, 1.0, 0.3]
+        \\u_base_color = [1.0, 1.0, 1.0, 1.0]
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);
@@ -697,8 +608,8 @@ test "parseMaterialSource rejects unsupported array lengths" {
     try testing.expectError(error.UnsupportedParamArrayLength, parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[param.u_bad]
-        \\value = [1.0]
+        \\[params]
+        \\u_bad = [1.0]
         \\
     , testing.allocator));
 }
@@ -708,22 +619,16 @@ test "parseMaterialSource parses full example" {
         \\[material]
         \\shader = "shaders/basic"
         \\
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/test_albedo.png"
-        \\resource = "u_albedo"
         \\
-        \\[texture.normal]
+        \\[texture.u_normal_map]
         \\path = "textures/test_normal.png"
-        \\resource = "u_normal_map"
         \\
-        \\[param.u_roughness]
-        \\value = 0.5
-        \\
-        \\[param.u_light_dir]
-        \\value = [0.5, 1.0, 0.3]
-        \\
-        \\[param.u_light_color]
-        \\value = [1.0, 0.95, 0.9]
+        \\[params]
+        \\u_roughness = 0.5
+        \\u_light_dir = [0.5, 1.0, 0.3]
+        \\u_light_color = [1.0, 0.95, 0.9]
         \\
     , testing.allocator);
     defer source.deinit(testing.allocator);

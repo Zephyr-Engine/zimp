@@ -68,7 +68,6 @@ fn validateReferences(
         try validateParam(file_path, param, &reflected);
     }
 
-    try validateBindings(file_path, source);
     source.required_variants = try selectRequiredVariants(allocator, source, reflected.variants);
 }
 
@@ -238,12 +237,12 @@ fn uniformKind(type_name: []const u8) UniformKind {
 }
 
 fn validateTextureSlot(file_path: []const u8, slot: raw_material.TextureSlot, reflected: *const ReflectedShaders) !void {
-    const uniform = reflected.findUniform(slot.resource_name) orelse {
-        log.err("{s}: texture slot '{s}' has no matching shader sampler uniform '{s}'", .{ file_path, slot.slot_name, slot.resource_name });
+    const uniform = reflected.findUniform(slot.slot_name) orelse {
+        log.err("{s}: texture '{s}' has no matching shader sampler uniform", .{ file_path, slot.slot_name });
         return error.MissingShaderUniform;
     };
     if (uniform.kind != .sampler) {
-        log.err("{s}: texture slot '{s}' resource '{s}' is not a sampler", .{ file_path, slot.slot_name, slot.resource_name });
+        log.err("{s}: texture '{s}' is not a sampler uniform", .{ file_path, slot.slot_name });
         return error.ShaderUniformTypeMismatch;
     }
 }
@@ -260,33 +259,6 @@ fn validateParam(file_path: []const u8, param: raw_material.ParamValue, reflecte
     }
 }
 
-fn validateBindings(file_path: []const u8, source: *const raw_material.MaterialSource) !void {
-    for (source.textures, 0..) |a, i| {
-        for (source.textures[i + 1 ..]) |b| {
-            if (a.shader_set == b.shader_set and a.shader_binding == b.shader_binding) {
-                log.err("{s}: duplicate texture binding set={d} binding={d}", .{ file_path, a.shader_set, a.shader_binding });
-                return error.DuplicateShaderBinding;
-            }
-        }
-    }
-    for (source.params, 0..) |a, i| {
-        for (source.params[i + 1 ..]) |b| {
-            if (a.shader_set == b.shader_set and a.shader_binding == b.shader_binding) {
-                log.err("{s}: duplicate param binding set={d} binding={d}", .{ file_path, a.shader_set, a.shader_binding });
-                return error.DuplicateShaderBinding;
-            }
-        }
-    }
-    for (source.textures) |texture| {
-        for (source.params) |param| {
-            if (texture.shader_set == param.shader_set and texture.shader_binding == param.shader_binding) {
-                log.err("{s}: duplicate texture/param binding set={d} binding={d}", .{ file_path, texture.shader_set, texture.shader_binding });
-                return error.DuplicateShaderBinding;
-            }
-        }
-    }
-}
-
 fn selectRequiredVariants(
     allocator: std.mem.Allocator,
     source: *const raw_material.MaterialSource,
@@ -299,11 +271,11 @@ fn selectRequiredVariants(
     }
 
     const candidates = [_]struct { name: []const u8, enabled: bool }{
-        .{ .name = "HAS_ALBEDO_MAP", .enabled = hasTexture(source, "albedo") },
-        .{ .name = "HAS_NORMAL_MAP", .enabled = hasTexture(source, "normal") },
-        .{ .name = "HAS_AO", .enabled = hasTexture(source, "ao") or hasTexture(source, "orm") },
-        .{ .name = "HAS_EMISSIVE", .enabled = hasTexture(source, "emissive") },
-        .{ .name = "HAS_METALLIC_ROUGHNESS_MAP", .enabled = hasTexture(source, "roughness_metallic") or hasTexture(source, "orm") },
+        .{ .name = "HAS_ALBEDO_MAP", .enabled = hasTexture(source, "u_albedo") },
+        .{ .name = "HAS_NORMAL_MAP", .enabled = hasTexture(source, "u_normal_map") },
+        .{ .name = "HAS_AO", .enabled = hasTexture(source, "u_ao_map") or hasTexture(source, "u_orm_map") },
+        .{ .name = "HAS_EMISSIVE", .enabled = hasTexture(source, "u_emissive_map") },
+        .{ .name = "HAS_METALLIC_ROUGHNESS_MAP", .enabled = hasTexture(source, "u_roughness_metallic_map") or hasTexture(source, "u_orm_map") },
         .{ .name = "ALPHA_TEST", .enabled = source.render_state.alpha_mode == .alpha_test },
         .{ .name = "ALPHA_BLEND", .enabled = source.render_state.alpha_mode == .alpha_blend },
         .{ .name = "DOUBLE_SIDED", .enabled = source.render_state.double_sided },
@@ -379,11 +351,10 @@ test "material cooker writes zamat" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/missing.png"
-        \\resource = "u_albedo"
-        \\[param.u_roughness]
-        \\value = 0.5
+        \\[params]
+        \\u_roughness = 0.5
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -416,11 +387,10 @@ test "material cooker validates builtin standard uniforms without freeing embedd
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "zephyr/standard"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/missing.png"
-        \\resource = "u_albedo"
-        \\[param.u_base_color]
-        \\value = [1.0, 1.0, 1.0, 1.0]
+        \\[params]
+        \\u_base_color = [1.0, 1.0, 1.0, 1.0]
         \\
     );
 
@@ -452,8 +422,8 @@ test "material cooker rejects params missing from shader reflection" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[param.u_missing]
-        \\value = 0.5
+        \\[params]
+        \\u_missing = 0.5
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -471,8 +441,8 @@ test "material cooker rejects param type mismatch" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[param.u_roughness]
-        \\value = [1.0, 2.0]
+        \\[params]
+        \\u_roughness = [1.0, 2.0]
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -487,49 +457,15 @@ test "material cooker rejects param type mismatch" {
     try testing.expectError(error.ShaderUniformTypeMismatch, cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
 }
 
-test "material cooker rejects texture and param binding collision" {
+test "material cooker accepts custom texture sampler names" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[texture.albedo]
+        \\[texture.u_custom_mask]
         \\path = "textures/missing.png"
-        \\resource = "u_albedo"
-        \\set = 0
-        \\binding = 0
-        \\[param.u_base_color]
-        \\value = [1.0, 1.0, 1.0, 1.0]
-        \\set = 0
-        \\binding = 0
-        \\
-    );
-    try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
-    try writeTestFile(tmp.dir, "shaders/basic.frag",
-        \\uniform sampler2D u_albedo;
-        \\uniform vec4 u_base_color;
-        \\void main() {}
-        \\
-    );
-
-    var out: [1024]u8 = undefined;
-    var writer = std.Io.Writer.fixed(&out);
-    try testing.expectError(error.DuplicateShaderBinding, cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer));
-}
-
-test "material cooker accepts custom texture slot with explicit resource" {
-    var tmp = testing.tmpDir(.{});
-    defer tmp.cleanup();
-
-    try writeTestFile(tmp.dir, "materials/test.zamat",
-        \\[material]
-        \\shader = "shaders/basic"
-        \\[texture.custom_mask]
-        \\path = "textures/missing.png"
-        \\resource = "u_custom_mask"
-        \\set = 0
-        \\binding = 3
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -551,11 +487,10 @@ test "material cooker reflects layout-qualified uniforms" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/missing.png"
-        \\resource = "u_albedo"
-        \\[param.u_roughness]
-        \\value = 0.5
+        \\[params]
+        \\u_roughness = 0.5
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
@@ -580,9 +515,8 @@ test "material cooker selects declared variants from material contents" {
         \\shader = "shaders/basic"
         \\[render_state]
         \\alpha_mode = "alpha_test"
-        \\[texture.normal]
+        \\[texture.u_normal_map]
         \\path = "textures/missing.png"
-        \\resource = "u_normal_map"
         \\
     );
     try writeTestFile(tmp.dir, "shaders/basic.vert", "void main() {}\n");
