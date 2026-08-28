@@ -307,7 +307,7 @@ const CookJobRunner = struct {
     }
 
     fn outputFileIsCurrent(self: *const CookJobRunner, cooked_path: []const u8) bool {
-        return cookedFileIsCurrent(self.ctx.io, self.ctx.output, cooked_path, self.descriptor.asset_type);
+        return cookedFileIsCurrent(self.ctx.io, self.ctx.output, cooked_path, self.record.source.assetType());
     }
 
     fn attachSnapshot(self: *const CookJobRunner, result: *CookJobResult, analyzed: *HashedSource) !void {

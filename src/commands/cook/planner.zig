@@ -104,7 +104,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         const descriptor = asset_registry.descriptorForSource(source);
         const info = try source.getFileInfo(ctx.source, ctx.io);
         const output_path = if (descriptor.cooker) |cooker|
-            try cooker.outputPath(allocator, source.path)
+            try cooker.outputPath(allocator, source)
         else
             null;
         records.appendAssumeCapacity(.{
@@ -112,7 +112,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
             .info = info,
             .descriptor = descriptor,
             .output_path = output_path,
-            .cached_index = if (material_topology_changed and descriptor.asset_type == .mesh)
+            .cached_index = if (material_topology_changed and source.assetType() == .mesh)
                 null
             else
                 cache.getIdx(source),

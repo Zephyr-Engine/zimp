@@ -13,7 +13,7 @@ const Cooker = @import("cooker.zig").Cooker;
 const log = @import("../logger.zig");
 
 pub fn cooker() Cooker {
-    return .{ .cook_fn = cookMaterial, .asset_type = .material };
+    return .{ .cook_fn = cookMaterial };
 }
 
 fn cookMaterial(input: *const CookInput) !void {

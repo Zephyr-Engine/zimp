@@ -5,7 +5,6 @@ const Cooker = @import("../cookers/cooker.zig").Cooker;
 const DependencyExtractor = @import("../extractors/extractor.zig").DependencyExtractor;
 const SourceFile = @import("source_file.zig").SourceFile;
 
-const AssetType = asset.AssetType;
 const Extension = asset.Extension;
 
 const glb_cooker = @import("../cookers/glb.zig").cooker();
@@ -20,8 +19,6 @@ const shader_extractor = @import("../extractors/shader.zig").extractor();
 const material_extractor = @import("../extractors/material.zig").extractor();
 
 pub const AssetDescriptor = struct {
-    extension: Extension,
-    asset_type: AssetType,
     cooker: ?Cooker = null,
     extractor: ?DependencyExtractor = null,
 
@@ -30,49 +27,26 @@ pub const AssetDescriptor = struct {
     }
 
     pub fn isDependencyOnly(self: AssetDescriptor) bool {
-        return self.asset_type != .unknown and self.cooker == null;
+        return self.extractor != null and self.cooker == null;
     }
 };
 
 pub const descriptors = std.EnumArray(Extension, AssetDescriptor).init(.{
-    .gltf = .{ .extension = .gltf, .asset_type = .mesh, .cooker = gltf_cooker, .extractor = mesh_extractor },
-    .glb = .{ .extension = .glb, .asset_type = .mesh, .cooker = glb_cooker, .extractor = mesh_extractor },
-    .obj = .{ .extension = .obj, .asset_type = .mesh, .cooker = obj_cooker, .extractor = mesh_extractor },
-    .bin = .{ .extension = .bin, .asset_type = .unknown },
-    .png = .{ .extension = .png, .asset_type = .texture, .cooker = tex_cooker },
-    .jpg = .{ .extension = .jpg, .asset_type = .texture, .cooker = tex_cooker },
-    .jpeg = .{ .extension = .jpeg, .asset_type = .texture, .cooker = tex_cooker },
-    .hdr = .{ .extension = .hdr, .asset_type = .texture, .cooker = tex_cooker },
-    .vert = .{ .extension = .vert, .asset_type = .shader, .cooker = shader_cooker, .extractor = shader_extractor },
-    .frag = .{ .extension = .frag, .asset_type = .shader, .cooker = shader_cooker, .extractor = shader_extractor },
-    .comp = .{ .extension = .comp, .asset_type = .shader, .cooker = shader_cooker, .extractor = shader_extractor },
-    .glsl = .{ .extension = .glsl, .asset_type = .shader, .extractor = shader_extractor },
-    .zamat = .{ .extension = .zamat, .asset_type = .material, .cooker = material_cooker, .extractor = material_extractor },
-    .other = .{ .extension = .other, .asset_type = .unknown },
+    .gltf = .{ .cooker = gltf_cooker, .extractor = mesh_extractor },
+    .glb = .{ .cooker = glb_cooker, .extractor = mesh_extractor },
+    .obj = .{ .cooker = obj_cooker, .extractor = mesh_extractor },
+    .bin = .{},
+    .png = .{ .cooker = tex_cooker },
+    .jpg = .{ .cooker = tex_cooker },
+    .jpeg = .{ .cooker = tex_cooker },
+    .hdr = .{ .cooker = tex_cooker },
+    .vert = .{ .cooker = shader_cooker, .extractor = shader_extractor },
+    .frag = .{ .cooker = shader_cooker, .extractor = shader_extractor },
+    .comp = .{ .cooker = shader_cooker, .extractor = shader_extractor },
+    .glsl = .{ .extractor = shader_extractor },
+    .zamat = .{ .cooker = material_cooker, .extractor = material_extractor },
+    .other = .{},
 });
-
-comptime {
-    for (std.meta.fields(Extension)) |field| {
-        const ext: Extension = @enumFromInt(field.value);
-        const descriptor = descriptors.get(ext);
-        if (descriptor.extension != ext) {
-            @compileError("AssetDescriptor extension field does not match key '" ++ field.name ++ "'");
-        }
-        if (descriptor.asset_type != ext.assetType()) {
-            @compileError("AssetDescriptor for extension '" ++ field.name ++ "' has asset_type that does not match asset.zig mapping");
-        }
-        if (descriptor.cooker) |cooker| {
-            if (cooker.asset_type != descriptor.asset_type) {
-                @compileError("Cooker for extension '" ++ field.name ++ "' has asset_type that does not match descriptor");
-            }
-        }
-        if (descriptor.extractor) |extractor| {
-            if (extractor.asset_type != descriptor.asset_type) {
-                @compileError("DependencyExtractor for extension '" ++ field.name ++ "' has asset_type that does not match descriptor");
-            }
-        }
-    }
-}
 
 pub fn descriptorForExtension(extension: Extension) AssetDescriptor {
     return descriptors.get(extension);
@@ -100,14 +74,6 @@ pub fn extractDependencies(
 
 const testing = std.testing;
 
-test "descriptors match extension asset type mapping" {
-    for (std.enums.values(Extension)) |ext| {
-        const descriptor = descriptorForExtension(ext);
-        try testing.expectEqual(ext, descriptor.extension);
-        try testing.expectEqual(ext.assetType(), descriptor.asset_type);
-    }
-}
-
 test "cookable and dependency-only descriptors are explicit" {
     try testing.expect(descriptorForExtension(.glb).isCookable());
     try testing.expect(descriptorForExtension(.png).isCookable());
@@ -118,7 +84,7 @@ test "cookable and dependency-only descriptors are explicit" {
 
 test "shader cooker output path preserves shader stage extension" {
     const c = cookerFor(.vert).?;
-    const path = try c.outputPath(testing.allocator, "shaders/basic.vert");
+    const path = try c.outputPath(testing.allocator, SourceFile.fromPath("shaders/basic.vert"));
     defer testing.allocator.free(path);
 
     try testing.expectEqualStrings("shaders/basic.vert.zshdr", path);
@@ -126,7 +92,7 @@ test "shader cooker output path preserves shader stage extension" {
 
 test "default cooker output path uses source stem" {
     const c = cookerFor(.glb).?;
-    const path = try c.outputPath(testing.allocator, "meshes/triangle.glb");
+    const path = try c.outputPath(testing.allocator, SourceFile.fromPath("meshes/triangle.glb"));
     defer testing.allocator.free(path);
 
     try testing.expectEqualStrings("meshes/triangle.zmesh", path);

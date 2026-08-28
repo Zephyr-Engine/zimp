@@ -1,7 +1,5 @@
 const std = @import("std");
 
-const asset = @import("../assets/asset.zig");
-const AssetType = asset.AssetType;
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
 
 pub const DependencyExtractor = struct {
@@ -11,8 +9,6 @@ pub const DependencyExtractor = struct {
         io: std.Io,
         allocator: std.mem.Allocator,
     ) anyerror![]const SourceFile,
-    asset_type: AssetType,
-
     pub fn extract(
         self: DependencyExtractor,
         source: *const SourceFile,
@@ -49,7 +45,7 @@ fn failingExtract(
 
 test "DependencyExtractor.extract calls the provided function pointer" {
     test_called = false;
-    const ex = DependencyExtractor{ .extract_fn = stubExtract, .asset_type = .mesh };
+    const ex = DependencyExtractor{ .extract_fn = stubExtract };
 
     const sf = SourceFile{ .path = "a.glb", .extension = .glb };
     const deps = try ex.extract(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator);
@@ -59,16 +55,11 @@ test "DependencyExtractor.extract calls the provided function pointer" {
 }
 
 test "DependencyExtractor.extract propagates errors from extract_fn" {
-    const ex = DependencyExtractor{ .extract_fn = failingExtract, .asset_type = .mesh };
+    const ex = DependencyExtractor{ .extract_fn = failingExtract };
 
     const sf = SourceFile{ .path = "a.glb", .extension = .glb };
     try testing.expectError(
         error.TestExtractFailed,
         ex.extract(&sf, std.Io.Dir.cwd(), testing.io, testing.allocator),
     );
-}
-
-test "DependencyExtractor struct contains extract_fn and asset_type" {
-    try testing.expect(@hasField(DependencyExtractor, "extract_fn"));
-    try testing.expect(@hasField(DependencyExtractor, "asset_type"));
 }

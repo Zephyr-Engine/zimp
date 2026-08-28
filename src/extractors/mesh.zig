@@ -7,7 +7,7 @@ const gltf_document = @import("../parsers/gltf/document.zig");
 const file_read = @import("../shared/file_read.zig");
 
 pub fn extractor() DependencyExtractor {
-    return .{ .extract_fn = extractMeshDeps, .asset_type = .mesh };
+    return .{ .extract_fn = extractMeshDeps };
 }
 
 fn extractMeshDeps(

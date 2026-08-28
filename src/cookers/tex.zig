@@ -8,7 +8,7 @@ const Cooker = @import("cooker.zig").Cooker;
 const CookInput = @import("cooker.zig").CookInput;
 
 pub fn cooker() Cooker {
-    return .{ .cook_fn = cookTexture, .asset_type = .texture };
+    return .{ .cook_fn = cookTexture };
 }
 
 fn cookTexture(input: *const CookInput) !void {
