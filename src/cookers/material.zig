@@ -41,16 +41,16 @@ fn validateReferences(
     defer allocator.free(frag_path);
 
     const vert = try lookupPath(allocator, io, source_dir, file_path, vert_path);
-    defer allocator.free(vert.bytes);
+    defer vert.deinit(allocator);
     const frag = try lookupPath(allocator, io, source_dir, file_path, frag_path);
-    defer allocator.free(frag.bytes);
+    defer frag.deinit(allocator);
 
     var reflected = try reflectMaterialShaders(
         allocator,
         io,
         source_dir,
-        &vert,
-        &frag,
+        &vert.source,
+        &frag.source,
     );
     defer reflected.deinit(allocator);
 
@@ -72,15 +72,26 @@ fn validateReferences(
     source.required_variants = try selectRequiredVariants(allocator, source, reflected.variants);
 }
 
+/// Shader source may either be embedded engine data or a heap allocation read
+/// from the project's asset directory. Only the latter belongs to the caller.
+const ResolvedShader = struct {
+    source: builtin.Source,
+    owned_bytes: ?[]u8 = null,
+
+    fn deinit(self: ResolvedShader, allocator: std.mem.Allocator) void {
+        if (self.owned_bytes) |bytes| allocator.free(bytes);
+    }
+};
+
 fn lookupPath(
     allocator: std.mem.Allocator,
     io: std.Io,
     source_dir: std.Io.Dir,
     file_path: []const u8,
     shader_path: []const u8,
-) !builtin.Source {
+) !ResolvedShader {
     if (builtin.find(shader_path)) |src| {
-        return src;
+        return .{ .source = src };
     }
 
     if (!file_read.fileExists(source_dir, io, shader_path)) {
@@ -89,7 +100,10 @@ fn lookupPath(
     }
 
     const result = try file_read.readFileAllocChunked(allocator, io, source_dir, shader_path, .{});
-    return .{ .path = shader_path, .bytes = result.bytes };
+    return .{
+        .source = .{ .path = shader_path, .bytes = result.bytes },
+        .owned_bytes = result.bytes,
+    };
 }
 
 const UniformKind = enum {
@@ -393,6 +407,27 @@ test "material cooker writes zamat" {
     try testing.expectEqualStrings("shaders/basic.vert.zshdr", loaded.vertex_shader_path);
     try testing.expectEqualStrings("shaders/basic.frag.zshdr", loaded.fragment_shader_path);
     try testing.expectEqualStrings("textures/missing.ztex", loaded.texture_slots[0].cooked_path);
+}
+
+test "material cooker validates builtin standard uniforms without freeing embedded source" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTestFile(tmp.dir, "materials/test.zamat",
+        \\[material]
+        \\shader = "zephyr/standard"
+        \\[texture.albedo]
+        \\path = "textures/missing.png"
+        \\resource = "u_albedo"
+        \\[param.u_base_color]
+        \\value = [1.0, 1.0, 1.0, 1.0]
+        \\
+    );
+
+    var out: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&out);
+    try cookMaterialFixture(testing.allocator, testing.io, tmp.dir, "materials/test.zamat", &writer);
+    try testing.expect(writer.end > 0);
 }
 
 test "material cooker errors on missing shader" {

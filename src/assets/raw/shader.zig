@@ -462,9 +462,13 @@ test "preprocessShader inserts include contents and line directives" {
     try tmp.dir.createDirPath(testing.io, "shaders");
     try writeTestFile(tmp.dir, "shaders/common.glsl", "vec3 common() { return vec3(1.0); }\n");
 
+    const source = builtin.Source{
+        .bytes = "#version 330 core\n#include \"common.glsl\"\nvoid main() {}\n",
+        .path = "shaders/basic.frag",
+    };
+
     const result = try preprocessShader(
-        "#version 330 core\n#include \"common.glsl\"\nvoid main() {}\n",
-        "shaders/basic.frag",
+        &source,
         tmp.dir,
         testing.io,
         testing.allocator,
@@ -486,7 +490,11 @@ test "preprocessShader handles recursive includes" {
     try writeTestFile(tmp.dir, "b.glsl", "#include \"c.glsl\"\nB\n");
     try writeTestFile(tmp.dir, "c.glsl", "C\n");
 
-    const result = try preprocessShader("#include \"b.glsl\"\nROOT\n", "a.frag", tmp.dir, testing.io, testing.allocator);
+    const src = builtin.Source{
+        .bytes = "#include \"b.glsl\"\nROOT\n",
+        .path = "a.frag",
+    };
+    const result = try preprocessShader(&src, tmp.dir, testing.io, testing.allocator);
     defer result.deinit(testing.allocator);
 
     const c_idx = std.mem.indexOf(u8, result.source, "C\n") orelse return error.MissingC;
@@ -503,9 +511,13 @@ test "preprocessShader detects circular includes" {
     try writeTestFile(tmp.dir, "a.glsl", "#include \"b.glsl\"\n");
     try writeTestFile(tmp.dir, "b.glsl", "#include \"a.glsl\"\n");
 
+    const src = builtin.Source{
+        .bytes = "#include \"a.glsl\"\n",
+        .path = "root.frag",
+    };
     try testing.expectError(
         error.CircularInclude,
-        preprocessShader("#include \"a.glsl\"\n", "root.frag", tmp.dir, testing.io, testing.allocator),
+        preprocessShader(&src, tmp.dir, testing.io, testing.allocator),
     );
 }
 
@@ -517,7 +529,11 @@ test "preprocessShader deduplicates duplicate includes" {
     try writeTestFile(tmp.dir, "c.glsl", "#include \"d.glsl\"\nC\n");
     try writeTestFile(tmp.dir, "d.glsl", "D\n");
 
-    const result = try preprocessShader("#include \"b.glsl\"\n#include \"c.glsl\"\n", "a.frag", tmp.dir, testing.io, testing.allocator);
+    const src = builtin.Source{
+        .bytes = "#include \"b.glsl\"\n#include \"c.glsl\"\n",
+        .path = "a.frag",
+    };
+    const result = try preprocessShader(&src, tmp.dir, testing.io, testing.allocator);
     defer result.deinit(testing.allocator);
 
     var count: usize = 0;
