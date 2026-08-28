@@ -7,7 +7,7 @@ const wire = @import("../shared/wire.zig");
 const file_read = @import("../shared/file_read.zig");
 
 pub const MAGIC = constants.FORMAT_MAGIC.ZAMAT;
-pub const ZAMAT_VERSION: u32 = 2;
+pub const ZAMAT_VERSION: u32 = 3;
 
 pub const AlphaMode = cooked_material.AlphaMode;
 pub const CullMode = cooked_material.CullMode;
@@ -25,11 +25,9 @@ pub const CookedMaterial = cooked_material.CookedMaterial;
 pub const TEXTURE_SLOT_ENTRY_SIZE: u32 = @sizeOf(u64) // slot_name_hash
     + @sizeOf(u64) // texture_path_hash
     + @sizeOf(u16) // slot_index
-    + @sizeOf(u16) // shader_set
-    + @sizeOf(u16) // shader_binding
     + @sizeOf(u16) // uv_set
-    + @sizeOf(u16) // resource_name_offset
-    + @sizeOf(u16) // resource_name_len
+    + @sizeOf(u16) // sampler_name_offset
+    + @sizeOf(u16) // sampler_name_len
     + @sizeOf(u16) // cooked_path_offset
     + @sizeOf(u16) // cooked_path_len
     + @sizeOf(u8) // min_filter
@@ -48,8 +46,6 @@ pub const TEXTURE_SLOT_ENTRY_SIZE: u32 = @sizeOf(u64) // slot_name_hash
 pub const PARAM_ENTRY_SIZE: u32 = @sizeOf(u16) // name_offset
     + @sizeOf(u16) // name_size
     + @sizeOf(u16) // param_type
-    + @sizeOf(u16) // shader_set
-    + @sizeOf(u16) // shader_binding
     + @sizeOf(u16) // data_offset
     + @sizeOf(u16) // data_size
     + @sizeOf(u16); // padding
@@ -268,8 +264,8 @@ pub const Zamat = struct {
             }
         }
         for (texture_slots) |entry| {
-            const resource_name_end = @as(usize, entry.resource_name_offset) + entry.resource_name_len;
-            if (resource_name_end > runtime_paths_len) runtime_paths_len = resource_name_end;
+            const sampler_name_end = @as(usize, entry.sampler_name_offset) + entry.sampler_name_len;
+            if (sampler_name_end > runtime_paths_len) runtime_paths_len = sampler_name_end;
             const cooked_path_end = @as(usize, entry.cooked_path_offset) + entry.cooked_path_len;
             if (cooked_path_end > runtime_paths_len) runtime_paths_len = cooked_path_end;
         }
@@ -295,8 +291,8 @@ pub const Zamat = struct {
             entry.name = owned_param_names[start..][0..entry.name_len];
         }
         for (texture_slots) |*entry| {
-            const resource_start: usize = entry.resource_name_offset;
-            entry.resource_name = owned_runtime_paths[resource_start..][0..entry.resource_name_len];
+            const sampler_name_start: usize = entry.sampler_name_offset;
+            entry.sampler_name = owned_runtime_paths[sampler_name_start..][0..entry.sampler_name_len];
             const start: usize = entry.cooked_path_offset;
             entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
         }
@@ -402,11 +398,9 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
         try writer.writeInt(u64, entry.slot_name_hash, .little);
         try writer.writeInt(u64, entry.texture_path_hash, .little);
         try writer.writeInt(u16, entry.slot_index, .little);
-        try writer.writeInt(u16, entry.shader_set, .little);
-        try writer.writeInt(u16, entry.shader_binding, .little);
         try writer.writeInt(u16, entry.uv_set, .little);
-        try writer.writeInt(u16, entry.resource_name_offset, .little);
-        try writer.writeInt(u16, entry.resource_name_len, .little);
+        try writer.writeInt(u16, entry.sampler_name_offset, .little);
+        try writer.writeInt(u16, entry.sampler_name_len, .little);
         try writer.writeInt(u16, entry.cooked_path_offset, .little);
         try writer.writeInt(u16, entry.cooked_path_len, .little);
         try writer.writeInt(u8, @intFromEnum(entry.sampler.min_filter), .little);
@@ -429,8 +423,6 @@ pub fn write(writer: *std.Io.Writer, material: CookedMaterial) !void {
         try writer.writeInt(u16, entry.name_offset, .little);
         try writer.writeInt(u16, entry.name_len, .little);
         try writer.writeInt(u16, @intFromEnum(entry.param_type), .little);
-        try writer.writeInt(u16, entry.shader_set, .little);
-        try writer.writeInt(u16, entry.shader_binding, .little);
         try writer.writeInt(u16, entry.data_offset, .little);
         try writer.writeInt(u16, entry.data_size, .little);
         try writer.writeInt(u16, 0, .little);
@@ -471,12 +463,10 @@ fn readTextureSlots(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .slot_name_hash = try reader.takeInt(u64, .little),
             .texture_path_hash = try reader.takeInt(u64, .little),
             .slot_index = try reader.takeInt(u16, .little),
-            .shader_set = try reader.takeInt(u16, .little),
-            .shader_binding = try reader.takeInt(u16, .little),
             .uv_set = try reader.takeInt(u16, .little),
-            .resource_name = undefined,
-            .resource_name_offset = try reader.takeInt(u16, .little),
-            .resource_name_len = try reader.takeInt(u16, .little),
+            .sampler_name = undefined,
+            .sampler_name_offset = try reader.takeInt(u16, .little),
+            .sampler_name_len = try reader.takeInt(u16, .little),
             .cooked_path = undefined,
             .cooked_path_offset = try reader.takeInt(u16, .little),
             .cooked_path_len = try reader.takeInt(u16, .little),
@@ -516,15 +506,11 @@ fn readParamEntries(allocator: std.mem.Allocator, reader: *std.Io.Reader, count:
             .name_offset = try reader.takeInt(u16, .little),
             .name_len = undefined,
             .param_type = undefined,
-            .shader_set = undefined,
-            .shader_binding = undefined,
             .data_offset = undefined,
             .data_size = undefined,
         };
         entry.name_len = try reader.takeInt(u16, .little);
         entry.param_type = try wire.readEnum(reader, ParamType, u16);
-        entry.shader_set = try reader.takeInt(u16, .little);
-        entry.shader_binding = try reader.takeInt(u16, .little);
         entry.data_offset = try reader.takeInt(u16, .little);
         entry.data_size = try reader.takeInt(u16, .little);
         _ = try reader.takeInt(u16, .little);
@@ -578,18 +564,14 @@ test "Zamat write lays out offsets and size" {
     var cooked = try cookedFromSource(
         \\[material]
         \\shader = "shaders/basic"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/test_albedo.png"
-        \\resource = "u_albedo"
-        \\[texture.normal]
+        \\[texture.u_normal_map]
         \\path = "textures/test_normal.png"
-        \\resource = "u_normal_map"
-        \\[param.u_roughness]
-        \\value = 0.5
-        \\[param.u_light_dir]
-        \\value = [0.5, 1.0, 0.3]
-        \\[param.u_light_color]
-        \\value = [1.0, 0.95, 0.9]
+        \\[params]
+        \\u_roughness = 0.5
+        \\u_light_dir = [0.5, 1.0, 0.3]
+        \\u_light_color = [1.0, 0.95, 0.9]
         \\
     );
     defer cooked.deinit(testing.allocator);
@@ -621,13 +603,11 @@ test "Zamat write and read round trips" {
         \\shader = "shaders/basic"
         \\[render_state]
         \\alpha_mode = "alpha_test"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/test_albedo.png"
-        \\resource = "u_albedo"
-        \\[param.u_enabled]
-        \\value = true
-        \\[param.u_mode]
-        \\value = 2
+        \\[params]
+        \\u_enabled = true
+        \\u_mode = 2
         \\
     );
     defer cooked.deinit(testing.allocator);
@@ -645,9 +625,9 @@ test "Zamat write and read round trips" {
     try testing.expectEqualStrings("shaders/basic.frag.zshdr", loaded.fragment_shader_path);
     try testing.expectEqual(AlphaMode.alpha_test, loaded.render_state.alpha_mode);
     try testing.expectEqual(@as(usize, 1), loaded.texture_slots.len);
-    try testing.expectEqual(fnv1a("albedo"), loaded.texture_slots[0].slot_name_hash);
+    try testing.expectEqual(fnv1a("u_albedo"), loaded.texture_slots[0].slot_name_hash);
     try testing.expectEqual(fnv1a("textures/test_albedo.png"), loaded.texture_slots[0].texture_path_hash);
-    try testing.expectEqualStrings("u_albedo", loaded.texture_slots[0].resource_name);
+    try testing.expectEqualStrings("u_albedo", loaded.texture_slots[0].sampler_name);
     try testing.expectEqualStrings("textures/test_albedo.ztex", loaded.texture_slots[0].cooked_path);
     try testing.expectEqual(@as(usize, 2), loaded.param_entries.len);
     try testing.expectEqualStrings("u_enabled", loaded.param_entries[0].name);
@@ -657,7 +637,7 @@ test "Zamat write and read round trips" {
     try testing.expectEqual(@as(i32, 2), std.mem.readInt(i32, loaded.param_data[4..8], .little));
 }
 
-test "Zamat v2 round trips render state bindings and sampler metadata" {
+test "Zamat v3 round trips render state and sampler metadata" {
     var cooked = try cookedFromSource(
         \\[material]
         \\shader = "shaders/pbr"
@@ -668,11 +648,8 @@ test "Zamat v2 round trips render state bindings and sampler metadata" {
         \\depth_test = false
         \\depth_write = false
         \\blend_mode = "alpha"
-        \\[texture.normal]
+        \\[texture.u_normal_map]
         \\path = "textures/test_normal.png"
-        \\resource = "u_normal_map"
-        \\set = 2
-        \\binding = 7
         \\uv_set = 1
         \\uv_offset = [0.1, 0.2]
         \\uv_scale = [3.0, 4.0]
@@ -684,10 +661,8 @@ test "Zamat v2 round trips render state bindings and sampler metadata" {
         \\wrap_t = "mirrored_repeat"
         \\max_anisotropy = 4
         \\normal_scale = 0.8
-        \\[param.u_roughness]
-        \\value = 0.5
-        \\set = 3
-        \\binding = 9
+        \\[params]
+        \\u_roughness = 0.5
         \\
     );
     defer cooked.deinit(testing.allocator);
@@ -708,9 +683,7 @@ test "Zamat v2 round trips render state bindings and sampler metadata" {
     try testing.expectEqual(BlendMode.alpha, loaded.render_state.blend_mode);
 
     const tex = loaded.texture_slots[0];
-    try testing.expectEqualStrings("u_normal_map", tex.resource_name);
-    try testing.expectEqual(@as(u16, 2), tex.shader_set);
-    try testing.expectEqual(@as(u16, 7), tex.shader_binding);
+    try testing.expectEqualStrings("u_normal_map", tex.sampler_name);
     try testing.expectEqual(@as(u16, 1), tex.uv_set);
     try testing.expectEqual([2]f32{ 0.1, 0.2 }, tex.uv_offset);
     try testing.expectEqual([2]f32{ 3.0, 4.0 }, tex.uv_scale);
@@ -718,12 +691,9 @@ test "Zamat v2 round trips render state bindings and sampler metadata" {
     try testing.expectEqual(WrapMode.clamp_to_edge, tex.sampler.wrap_s);
     try testing.expectEqual(WrapMode.mirrored_repeat, tex.sampler.wrap_t);
     try testing.expectEqual(@as(f32, 0.8), tex.normal_scale);
-
-    try testing.expectEqual(@as(u16, 3), loaded.param_entries[0].shader_set);
-    try testing.expectEqual(@as(u16, 9), loaded.param_entries[0].shader_binding);
 }
 
-test "Zamat v2 round trips required shader variants" {
+test "Zamat v3 round trips required shader variants" {
     var parsed = try raw_material.parseMaterialSource(
         \\[material]
         \\shader = "shaders/basic"

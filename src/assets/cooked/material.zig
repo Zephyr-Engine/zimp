@@ -26,14 +26,14 @@ pub const TextureSlotIndex = enum(u16) {
 };
 
 pub fn slotNameToIndex(name: []const u8) ?TextureSlotIndex {
-    if (std.mem.eql(u8, name, "albedo")) return .albedo;
-    if (std.mem.eql(u8, name, "normal")) return .normal;
-    if (std.mem.eql(u8, name, "roughness")) return .roughness;
-    if (std.mem.eql(u8, name, "metallic")) return .metallic;
-    if (std.mem.eql(u8, name, "ao")) return .ao;
-    if (std.mem.eql(u8, name, "emissive")) return .emissive;
-    if (std.mem.eql(u8, name, "roughness_metallic")) return .roughness_metallic;
-    if (std.mem.eql(u8, name, "orm")) return .orm;
+    if (std.mem.eql(u8, name, "u_albedo")) return .albedo;
+    if (std.mem.eql(u8, name, "u_normal_map")) return .normal;
+    if (std.mem.eql(u8, name, "u_roughness_map")) return .roughness;
+    if (std.mem.eql(u8, name, "u_metallic_map")) return .metallic;
+    if (std.mem.eql(u8, name, "u_ao_map")) return .ao;
+    if (std.mem.eql(u8, name, "u_emissive_map")) return .emissive;
+    if (std.mem.eql(u8, name, "u_roughness_metallic_map")) return .roughness_metallic;
+    if (std.mem.eql(u8, name, "u_orm_map")) return .orm;
     return null;
 }
 
@@ -50,8 +50,6 @@ pub const TextureSlotEntry = struct {
     slot_name_hash: Hash,
     texture_path_hash: Hash,
     slot_index: u16,
-    shader_set: u16,
-    shader_binding: u16,
     uv_set: u16,
     uv_offset: [2]f32,
     uv_scale: [2]f32,
@@ -59,9 +57,9 @@ pub const TextureSlotEntry = struct {
     sampler: SamplerDesc,
     normal_scale: f32,
     occlusion_strength: f32,
-    resource_name: []const u8,
-    resource_name_offset: u16,
-    resource_name_len: u16,
+    sampler_name: []const u8,
+    sampler_name_offset: u16,
+    sampler_name_len: u16,
     cooked_path: []const u8,
     cooked_path_offset: u16,
     cooked_path_len: u16,
@@ -72,8 +70,6 @@ pub const ParamEntry = struct {
     name_offset: u16,
     name_len: u16,
     param_type: ParamType,
-    shader_set: u16,
-    shader_binding: u16,
     data_offset: u16,
     data_size: u16,
 };
@@ -128,14 +124,12 @@ pub const CookedMaterial = struct {
         for (source.textures, texture_slots) |slot, *entry| {
             const cooked_texture_path = try path_helpers.cookedOutput(allocator, slot.texture_path, .texture);
             defer allocator.free(cooked_texture_path);
-            const resource_name_offset = try appendRuntimePath(&runtime_paths, allocator, slot.resource_name);
+            const sampler_name_offset = try appendRuntimePath(&runtime_paths, allocator, slot.slot_name);
             const cooked_path_offset = try appendRuntimePath(&runtime_paths, allocator, cooked_texture_path);
             entry.* = .{
                 .slot_name_hash = source_file.fnv1a(slot.slot_name),
                 .texture_path_hash = source_file.fnv1a(slot.texture_path),
                 .slot_index = if (slotNameToIndex(slot.slot_name)) |idx| @intFromEnum(idx) else std.math.maxInt(u16),
-                .shader_set = slot.shader_set,
-                .shader_binding = slot.shader_binding,
                 .uv_set = slot.uv_set,
                 .uv_offset = slot.uv_offset,
                 .uv_scale = slot.uv_scale,
@@ -143,9 +137,9 @@ pub const CookedMaterial = struct {
                 .sampler = slot.sampler,
                 .normal_scale = slot.normal_scale,
                 .occlusion_strength = slot.occlusion_strength,
-                .resource_name = runtime_paths.items[resource_name_offset..][0..slot.resource_name.len],
-                .resource_name_offset = resource_name_offset,
-                .resource_name_len = @intCast(slot.resource_name.len),
+                .sampler_name = runtime_paths.items[sampler_name_offset..][0..slot.slot_name.len],
+                .sampler_name_offset = sampler_name_offset,
+                .sampler_name_len = @intCast(slot.slot_name.len),
                 .cooked_path = runtime_paths.items[cooked_path_offset..][0..cooked_texture_path.len],
                 .cooked_path_offset = cooked_path_offset,
                 .cooked_path_len = @intCast(cooked_texture_path.len),
@@ -164,8 +158,8 @@ pub const CookedMaterial = struct {
         const vertex_start: usize = vertex_shader_path_offset;
         const fragment_start: usize = fragment_shader_path_offset;
         for (texture_slots) |*entry| {
-            const resource_start: usize = entry.resource_name_offset;
-            entry.resource_name = owned_runtime_paths[resource_start..][0..entry.resource_name_len];
+            const sampler_name_start: usize = entry.sampler_name_offset;
+            entry.sampler_name = owned_runtime_paths[sampler_name_start..][0..entry.sampler_name_len];
             const start: usize = entry.cooked_path_offset;
             entry.cooked_path = owned_runtime_paths[start..][0..entry.cooked_path_len];
         }
@@ -252,8 +246,6 @@ pub fn buildParamDataBlock(params: []const raw_material.ParamValue, allocator: s
             .name_offset = name_offset,
             .name_len = @intCast(param.name.len),
             .param_type = param_type,
-            .shader_set = param.shader_set,
-            .shader_binding = param.shader_binding,
             .data_offset = data_offset,
             .data_size = @intCast(size),
         });
@@ -319,8 +311,8 @@ fn appendF32(list: *std.ArrayList(u8), allocator: std.mem.Allocator, value: f32)
 const testing = std.testing;
 
 test "slotNameToIndex maps known slots" {
-    try testing.expectEqual(TextureSlotIndex.albedo, slotNameToIndex("albedo").?);
-    try testing.expectEqual(TextureSlotIndex.normal, slotNameToIndex("normal").?);
+    try testing.expectEqual(TextureSlotIndex.albedo, slotNameToIndex("u_albedo").?);
+    try testing.expectEqual(TextureSlotIndex.normal, slotNameToIndex("u_normal_map").?);
     try testing.expectEqual(@as(?TextureSlotIndex, null), slotNameToIndex("unknown_custom"));
 }
 

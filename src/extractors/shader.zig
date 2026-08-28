@@ -9,7 +9,7 @@ const path_helpers = @import("../path.zig");
 const parseIncludeFilename = shader_source.parseIncludeFilename;
 
 pub fn extractor() DependencyExtractor {
-    return .{ .extract_fn = extractShaderDeps, .asset_type = .shader };
+    return .{ .extract_fn = extractShaderDeps };
 }
 
 fn extractShaderDeps(

@@ -6,7 +6,7 @@ const raw_material = @import("../assets/raw/material.zig");
 const file_read = @import("../shared/file_read.zig");
 
 pub fn extractor() DependencyExtractor {
-    return .{ .extract_fn = extractMaterialDeps, .asset_type = .material };
+    return .{ .extract_fn = extractMaterialDeps };
 }
 
 fn extractMaterialDeps(
@@ -67,12 +67,10 @@ test "extractMaterialDeps returns shader stages and textures" {
     try writeTestFile(tmp.dir, "materials/test.zamat",
         \\[material]
         \\shader = "shaders/basic"
-        \\[texture.albedo]
+        \\[texture.u_albedo]
         \\path = "textures/test_albedo.png"
-        \\resource = "u_albedo"
-        \\[texture.normal]
+        \\[texture.u_normal_map]
         \\path = "textures/test_normal.png"
-        \\resource = "u_normal_map"
         \\
     );
 

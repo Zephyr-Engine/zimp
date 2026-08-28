@@ -104,7 +104,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         const descriptor = asset_registry.descriptorForSource(source);
         const info = try source.getFileInfo(ctx.source, ctx.io);
         const output_path = if (descriptor.cooker) |cooker|
-            try cooker.outputPath(allocator, source.path)
+            try cooker.outputPath(allocator, source)
         else
             null;
         records.appendAssumeCapacity(.{
@@ -112,7 +112,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
             .info = info,
             .descriptor = descriptor,
             .output_path = output_path,
-            .cached_index = if (material_topology_changed and descriptor.asset_type == .mesh)
+            .cached_index = if (material_topology_changed and source.assetType() == .mesh)
                 null
             else
                 cache.getIdx(source),
@@ -395,8 +395,8 @@ test "buildDependencyGraph reuses fresh cached dependency rows" {
 
     try buildDependencyGraph(testing.allocator, &ctx, &cache, &graph, &.{.{ .source = source, .info = info, .descriptor = asset_registry.descriptorForSource(source), .output_path = null, .cached_index = null }});
 
-    try testing.expectEqual(@as(usize, 1), graph.dependencyCount(&source));
-    const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
+    const deps = graph.getDependenciesByHash(source.hashPath()) orelse return error.MissingDependency;
+    try testing.expectEqual(@as(usize, 1), deps.items.len);
     try testing.expectEqual(dep.hashPath(), deps.items[0]);
 }
 
@@ -439,7 +439,7 @@ test "buildDependencyGraph refreshes stale cached dependency rows" {
     try testing.expectEqual(@as(usize, 1), row.dependencies.items.len);
     try testing.expectEqualStrings("new.glsl", row.dependencies.items[0].path);
 
-    const deps = graph.getDependencies(&source) orelse return error.MissingDependency;
+    const deps = graph.getDependenciesByHash(source.hashPath()) orelse return error.MissingDependency;
     try testing.expectEqual(SourceFile.fromPath("new.glsl").hashPath(), deps.items[0]);
 }
 

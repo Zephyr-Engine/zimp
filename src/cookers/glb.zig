@@ -9,7 +9,7 @@ const CookedModel = @import("../parsers/gltf/model.zig").CookedModel;
 const material_generator = @import("../parsers/gltf/material_generator.zig");
 
 pub fn cooker() Cooker {
-    return .{ .cook_fn = cookGlb, .asset_type = .mesh };
+    return .{ .cook_fn = cookGlb };
 }
 
 fn cookGlb(input: *const CookInput) !void {

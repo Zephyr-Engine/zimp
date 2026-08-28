@@ -270,18 +270,19 @@ fn writeMaterialText(
     });
 
     if (material.pbrMetallicRoughness) |pbr| {
-        if (pbr.baseColorTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "albedo", info, .{});
-        if (pbr.metallicRoughnessTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "roughness_metallic", info, .{});
+        if (pbr.baseColorTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_albedo", info, .{});
+        if (pbr.metallicRoughnessTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_roughness_metallic_map", info, .{});
     }
-    if (material.normalTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "normal", info, .{ .normal_scale = info.scale orelse 1.0 });
-    if (material.occlusionTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "ao", info, .{ .occlusion_strength = info.strength orelse 1.0 });
-    if (material.emissiveTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "emissive", info, .{});
+    if (material.normalTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_normal_map", info, .{ .normal_scale = info.scale orelse 1.0 });
+    if (material.occlusionTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_ao_map", info, .{ .occlusion_strength = info.strength orelse 1.0 });
+    if (material.emissiveTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_emissive_map", info, .{});
 
     const pbr = material.pbrMetallicRoughness orelse GltfPbr{};
-    try appendParamVec4(text, allocator, "u_base_color", pbr.baseColorFactor, 0);
-    try appendParamFloat(text, allocator, "u_metallic", pbr.metallicFactor, 1);
-    try appendParamFloat(text, allocator, "u_roughness", pbr.roughnessFactor, 2);
-    try appendParamVec3(text, allocator, "u_emissive", material.emissiveFactor orelse .{ 0, 0, 0 }, 3);
+    try text.appendSlice(allocator, "\n[params]\n");
+    try appendParamVec4(text, allocator, "u_base_color", pbr.baseColorFactor);
+    try appendParamFloat(text, allocator, "u_metallic", pbr.metallicFactor);
+    try appendParamFloat(text, allocator, "u_roughness", pbr.roughnessFactor);
+    try appendParamVec3(text, allocator, "u_emissive", material.emissiveFactor orelse .{ 0, 0, 0 });
 }
 
 const TextureOptions = struct {
@@ -308,9 +309,6 @@ fn appendTexture(
         \\
         \\[texture.{s}]
         \\path = "{s}"
-        \\resource = "{s}"
-        \\set = 0
-        \\binding = {d}
         \\uv_set = {d}
         \\uv_offset = [0, 0]
         \\uv_scale = [1, 1]
@@ -327,8 +325,6 @@ fn appendTexture(
     , .{
         slot_name,
         path,
-        textureResourceName(slot_name),
-        textureBinding(slot_name),
         info.texCoord,
         minFilterName(sampler.minFilter),
         magFilterName(sampler.magFilter),
@@ -398,37 +394,22 @@ fn isAlphaBlend(value: ?[]const u8) bool {
     return std.ascii.eqlIgnoreCase(mode, "BLEND");
 }
 
-fn appendParamFloat(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: f32, binding: u16) !void {
+fn appendParamFloat(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: f32) !void {
     try appendPrint(text, allocator,
-        \\
-        \\[param.{s}]
-        \\value = {d:.6}
-        \\set = 1
-        \\binding = {d}
-        \\
-    , .{ name, value, binding });
+        \\{s} = {d:.6}
+    , .{ name, value });
 }
 
-fn appendParamVec3(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: [3]f32, binding: u16) !void {
+fn appendParamVec3(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: [3]f32) !void {
     try appendPrint(text, allocator,
-        \\
-        \\[param.{s}]
-        \\value = [{d}, {d}, {d}]
-        \\set = 1
-        \\binding = {d}
-        \\
-    , .{ name, value[0], value[1], value[2], binding });
+        \\{s} = [{d}, {d}, {d}]
+    , .{ name, value[0], value[1], value[2] });
 }
 
-fn appendParamVec4(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: [4]f32, binding: u16) !void {
+fn appendParamVec4(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: [4]f32) !void {
     try appendPrint(text, allocator,
-        \\
-        \\[param.{s}]
-        \\value = [{d}, {d}, {d}, {d}]
-        \\set = 1
-        \\binding = {d}
-        \\
-    , .{ name, value[0], value[1], value[2], value[3], binding });
+        \\{s} = [{d}, {d}, {d}, {d}]
+    , .{ name, value[0], value[1], value[2], value[3] });
 }
 
 fn samplerForTexture(gltf: *const GltfJson, texture_index: u32) GltfSampler {
@@ -436,30 +417,6 @@ fn samplerForTexture(gltf: *const GltfJson, texture_index: u32) GltfSampler {
     const sampler_index = gltf.textures[texture_index].sampler orelse return .{};
     if (sampler_index >= gltf.samplers.len) return .{};
     return gltf.samplers[sampler_index];
-}
-
-fn textureBinding(slot_name: []const u8) u16 {
-    if (std.mem.eql(u8, slot_name, "albedo")) return 0;
-    if (std.mem.eql(u8, slot_name, "normal")) return 1;
-    if (std.mem.eql(u8, slot_name, "roughness")) return 2;
-    if (std.mem.eql(u8, slot_name, "metallic")) return 3;
-    if (std.mem.eql(u8, slot_name, "ao")) return 4;
-    if (std.mem.eql(u8, slot_name, "emissive")) return 5;
-    if (std.mem.eql(u8, slot_name, "roughness_metallic")) return 6;
-    if (std.mem.eql(u8, slot_name, "orm")) return 7;
-    return std.math.maxInt(u16);
-}
-
-fn textureResourceName(slot_name: []const u8) []const u8 {
-    if (std.mem.eql(u8, slot_name, "albedo")) return "u_albedo";
-    if (std.mem.eql(u8, slot_name, "normal")) return "u_normal_map";
-    if (std.mem.eql(u8, slot_name, "roughness")) return "u_roughness_map";
-    if (std.mem.eql(u8, slot_name, "metallic")) return "u_metallic_map";
-    if (std.mem.eql(u8, slot_name, "ao")) return "u_ao_map";
-    if (std.mem.eql(u8, slot_name, "emissive")) return "u_emissive_map";
-    if (std.mem.eql(u8, slot_name, "roughness_metallic")) return "u_roughness_metallic_map";
-    if (std.mem.eql(u8, slot_name, "orm")) return "u_orm_map";
-    return slot_name;
 }
 
 fn minFilterName(value: ?u32) []const u8 {
@@ -594,7 +551,7 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expect(std.mem.indexOf(u8, bytes, "alpha_cutoff = 0.33") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "double_sided = true") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "cull_mode = \"none\"") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[texture.albedo]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[texture.u_albedo]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "path = \"meshes/cube_albedo.png\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "uv_set = 1") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "min_filter = \"nearest\"") != null);
@@ -602,8 +559,9 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expect(std.mem.indexOf(u8, bytes, "mip_filter = \"nearest\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "wrap_s = \"clamp_to_edge\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "wrap_t = \"mirrored_repeat\"") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_roughness]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color =") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness =") != null);
 }
 
 test "generateFromGltf writes material with no textures" {
@@ -622,8 +580,8 @@ test "generateFromGltf writes material with no textures" {
     defer testing.allocator.free(bytes);
     try testing.expect(std.mem.indexOf(u8, bytes, "[render_state]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.") == null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "value = [1, 0, 0, 1]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color = [1, 0, 0, 1]") != null);
 }
 
 test "generateFromGltf creates a default slot material when gltf has no materials" {
@@ -637,7 +595,7 @@ test "generateFromGltf creates a default slot material when gltf has no material
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/plain_DefaultMaterial.zamat");
     defer testing.allocator.free(bytes);
     try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"zephyr/standard\"") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
 }
 
 test "resolveMaterialPaths preserves gltf order and selects handwritten overrides" {
@@ -703,7 +661,7 @@ test "generateFromGltf preserves occlusion texture strength" {
 
     const mat = try readTestFile(testing.allocator, tmp.dir, "generated/materials/cube_Mat.zamat");
     defer testing.allocator.free(mat);
-    try testing.expect(std.mem.indexOf(u8, mat, "[texture.ao]") != null);
+    try testing.expect(std.mem.indexOf(u8, mat, "[texture.u_ao_map]") != null);
     try testing.expect(std.mem.indexOf(u8, mat, "occlusion_strength = 0.25") != null);
 }
 
@@ -747,6 +705,6 @@ test "generateFromGltf extracts embedded image bytes" {
 
     const mat = try readTestFile(testing.allocator, tmp.dir, "generated/materials/cube_Mat.zamat");
     defer testing.allocator.free(mat);
-    try testing.expect(std.mem.indexOf(u8, mat, "[texture.albedo]") != null);
+    try testing.expect(std.mem.indexOf(u8, mat, "[texture.u_albedo]") != null);
     try testing.expect(std.mem.indexOf(u8, mat, "path = \"generated/textures/cube_albedo.png\"") != null);
 }

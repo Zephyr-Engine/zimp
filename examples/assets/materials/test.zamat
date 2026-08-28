@@ -1,24 +1,13 @@
 [material]
 shader = "shaders/basic"
 
-[texture.albedo]
+[texture.u_albedo]
 path = "textures/test_albedo.png"
-resource = "u_albedo"
-binding = 0
 
-[texture.normal]
+[texture.u_normal_map]
 path = "textures/test_normal.png"
-resource = "u_normal_map"
-binding = 1
 
-[param.u_roughness]
-value = 0.5
-binding = 0
-
-[param.u_light_dir]
-value = [0.5, 1.0, 0.3]
-binding = 1
-
-[param.u_light_color]
-value = [1.0, 0.95, 0.9]
-binding = 2
+[params]
+u_roughness = 0.5
+u_light_dir = [0.5, 1.0, 0.3]
+u_light_color = [1.0, 0.95, 0.9]

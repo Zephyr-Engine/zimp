@@ -5,12 +5,10 @@ const RawShader = @import("../assets/raw/shader.zig").RawShader;
 const builtin = @import("../builtin/registry.zig");
 const CookInput = @import("cooker.zig").CookInput;
 const zshdr = @import("../formats/zshdr.zig");
-const asset = @import("../assets/asset.zig");
-const path_helpers = @import("../path.zig");
 const Cooker = @import("cooker.zig").Cooker;
 
 pub fn cooker() Cooker {
-    return .{ .cook_fn = cookShader, .asset_type = .shader };
+    return .{ .cook_fn = cookShader };
 }
 
 fn cookShader(input: *const CookInput) !void {

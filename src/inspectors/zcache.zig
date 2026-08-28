@@ -14,6 +14,10 @@ fn padRight(buf: []u8, s: []const u8, width: usize) []const u8 {
 }
 
 fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
+    var magic: [cache.MAGIC.len]u8 = undefined;
+    try reader.readSliceAll(&magic);
+    if (!std.mem.eql(u8, &magic, cache.MAGIC)) return error.InvalidMagic;
+
     var c = try cache.Cache.read(allocator, reader);
     defer c.deinit(allocator);
 
@@ -148,7 +152,7 @@ test "inspector can be called through FormatInspector trait" {
     var writer = std.Io.Writer.fixed(&buf);
     try writeTestZcache(&writer, .{});
 
-    var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
     try insp.inspect(testing.allocator, &reader);
 }
 
@@ -248,7 +252,7 @@ test "inspectZCache runs without error on valid zcache" {
     var writer = std.Io.Writer.fixed(&buf);
     try writeTestZcache(&writer, .{});
 
-    var reader = std.Io.Reader.fixed(buf[cache.MAGIC.len..writer.end]);
+    var reader = std.Io.Reader.fixed(buf[0..writer.end]);
     try inspectZCache(testing.allocator, &reader);
 }
 
