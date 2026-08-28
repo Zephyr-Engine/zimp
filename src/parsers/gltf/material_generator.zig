@@ -1,21 +1,22 @@
 const std = @import("std");
 
+const resolveRelativeUri = @import("document.zig").resolveRelativeUri;
+const GltfTextureInfo = @import("gltf_json_parser.zig").GltfTextureInfo;
+const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
 const SourceFile = @import("../../assets/source_file.zig").SourceFile;
+const GltfMaterial = @import("gltf_json_parser.zig").GltfMaterial;
+const GltfSampler = @import("gltf_json_parser.zig").GltfSampler;
+const Extension = @import("../../assets/asset.zig").Extension;
+const GltfDocument = @import("document.zig").GltfDocument;
+const GltfJson = @import("gltf_json_parser.zig").GltfJson;
+const GltfPbr = @import("gltf_json_parser.zig").GltfPbr;
 const file_read = @import("../../shared/file_read.zig");
+const builtin = @import("../../builtin/registry.zig");
 const GLBFile = @import("glb_parser.zig").GLBFile;
 const Gltf = @import("gltf_json_parser.zig").Gltf;
-const GltfJson = @import("gltf_json_parser.zig").GltfJson;
-const GltfMaterial = @import("gltf_json_parser.zig").GltfMaterial;
-const GltfPbr = @import("gltf_json_parser.zig").GltfPbr;
-const GltfTextureInfo = @import("gltf_json_parser.zig").GltfTextureInfo;
-const GltfSampler = @import("gltf_json_parser.zig").GltfSampler;
-const GltfDocument = @import("document.zig").GltfDocument;
-const Extension = @import("../../assets/asset.zig").Extension;
-const resolveRelativeUri = @import("document.zig").resolveRelativeUri;
 const log = @import("../../logger.zig");
-const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
 
-const DEFAULT_SHADER = "shaders/basic";
+const DEFAULT_SHADER = builtin.PREFIX ++ "standard";
 const GENERATED_MATERIAL_DIR = "generated/materials";
 const GENERATED_TEXTURE_DIR = "generated/textures";
 
@@ -635,7 +636,7 @@ test "generateFromGltf creates a default slot material when gltf has no material
 
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/plain_DefaultMaterial.zamat");
     defer testing.allocator.free(bytes);
-    try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"shaders/basic\"") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"zephyr/standard\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[param.u_base_color]") != null);
 }
 

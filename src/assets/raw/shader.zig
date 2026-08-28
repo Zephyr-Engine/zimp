@@ -1,9 +1,10 @@
 const std = @import("std");
 
-const asset = @import("../asset.zig");
 const file_read = @import("../../shared/file_read.zig");
-const log = @import("../../logger.zig");
+const builtin = @import("../../builtin/registry.zig");
 const path_helpers = @import("../../path.zig");
+const log = @import("../../logger.zig");
+const asset = @import("../asset.zig");
 
 pub const VariantKey = struct {
     bits: u32,
@@ -51,19 +52,18 @@ pub const RawShader = struct {
         allocator: std.mem.Allocator,
         io: std.Io,
         source_dir: std.Io.Dir,
-        path: []const u8,
-        source_bytes: []const u8,
+        source: *const builtin.Source,
     ) !RawShader {
-        const ext = asset.Extension.fromName(std.fs.path.basename(path));
+        const ext = asset.Extension.fromName(std.fs.path.basename(source.path));
         const stage = stageFromExtension(ext) orelse return error.NotCookableShader;
 
-        const owned_path = try allocator.dupe(u8, path);
+        const owned_path = try allocator.dupe(u8, source.path);
         errdefer allocator.free(owned_path);
 
-        const variants = try parseVariantNames(source_bytes, allocator);
+        const variants = try parseVariantNames(source.bytes, allocator);
         errdefer freeVariantNames(allocator, variants);
 
-        const preprocessed = try preprocessShader(source_bytes, path, source_dir, io, allocator);
+        const preprocessed = try preprocessShader(source, source_dir, io, allocator);
         errdefer preprocessed.deinit(allocator);
 
         return .{
@@ -142,8 +142,7 @@ pub fn includeUsesAngleBrackets(line: []const u8) bool {
 }
 
 pub fn preprocessShader(
-    source: []const u8,
-    source_path: []const u8,
+    source: *const builtin.Source,
     dir: std.Io.Dir,
     io: std.Io,
     allocator: std.mem.Allocator,
@@ -163,7 +162,7 @@ pub fn preprocessShader(
         for (ctx.includes.items) |path| allocator.free(path);
     }
 
-    try ctx.preprocessInto(source, source_path);
+    try ctx.preprocessInto(source.bytes, source.path);
 
     const out_source = try ctx.output.toOwnedSlice(allocator);
     errdefer allocator.free(out_source);
@@ -463,9 +462,13 @@ test "preprocessShader inserts include contents and line directives" {
     try tmp.dir.createDirPath(testing.io, "shaders");
     try writeTestFile(tmp.dir, "shaders/common.glsl", "vec3 common() { return vec3(1.0); }\n");
 
+    const source = builtin.Source{
+        .bytes = "#version 330 core\n#include \"common.glsl\"\nvoid main() {}\n",
+        .path = "shaders/basic.frag",
+    };
+
     const result = try preprocessShader(
-        "#version 330 core\n#include \"common.glsl\"\nvoid main() {}\n",
-        "shaders/basic.frag",
+        &source,
         tmp.dir,
         testing.io,
         testing.allocator,
@@ -487,7 +490,11 @@ test "preprocessShader handles recursive includes" {
     try writeTestFile(tmp.dir, "b.glsl", "#include \"c.glsl\"\nB\n");
     try writeTestFile(tmp.dir, "c.glsl", "C\n");
 
-    const result = try preprocessShader("#include \"b.glsl\"\nROOT\n", "a.frag", tmp.dir, testing.io, testing.allocator);
+    const src = builtin.Source{
+        .bytes = "#include \"b.glsl\"\nROOT\n",
+        .path = "a.frag",
+    };
+    const result = try preprocessShader(&src, tmp.dir, testing.io, testing.allocator);
     defer result.deinit(testing.allocator);
 
     const c_idx = std.mem.indexOf(u8, result.source, "C\n") orelse return error.MissingC;
@@ -504,9 +511,13 @@ test "preprocessShader detects circular includes" {
     try writeTestFile(tmp.dir, "a.glsl", "#include \"b.glsl\"\n");
     try writeTestFile(tmp.dir, "b.glsl", "#include \"a.glsl\"\n");
 
+    const src = builtin.Source{
+        .bytes = "#include \"a.glsl\"\n",
+        .path = "root.frag",
+    };
     try testing.expectError(
         error.CircularInclude,
-        preprocessShader("#include \"a.glsl\"\n", "root.frag", tmp.dir, testing.io, testing.allocator),
+        preprocessShader(&src, tmp.dir, testing.io, testing.allocator),
     );
 }
 
@@ -518,7 +529,11 @@ test "preprocessShader deduplicates duplicate includes" {
     try writeTestFile(tmp.dir, "c.glsl", "#include \"d.glsl\"\nC\n");
     try writeTestFile(tmp.dir, "d.glsl", "D\n");
 
-    const result = try preprocessShader("#include \"b.glsl\"\n#include \"c.glsl\"\n", "a.frag", tmp.dir, testing.io, testing.allocator);
+    const src = builtin.Source{
+        .bytes = "#include \"b.glsl\"\n#include \"c.glsl\"\n",
+        .path = "a.frag",
+    };
+    const result = try preprocessShader(&src, tmp.dir, testing.io, testing.allocator);
     defer result.deinit(testing.allocator);
 
     var count: usize = 0;

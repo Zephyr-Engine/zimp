@@ -3,7 +3,8 @@ const mesh = @import("../assets/cooked/mesh.zig");
 const wire = @import("../shared/wire.zig");
 
 pub const MAGIC = @import("../shared/constants.zig").FORMAT_MAGIC.ZMESH;
-pub const ZMESH_VERSION: u32 = 3;
+pub const ZMESH_VERSION: u32 = 4;
+
 pub const Transform = [16]f32;
 pub const identity_transform: Transform = .{
     1, 0, 0, 0,
@@ -23,7 +24,8 @@ pub const HEADER_SIZE: u32 = MAGIC.len // magic
 + @sizeOf(u16) // submesh_count
 + @sizeOf(u32) // submesh_table_offset
 + @sizeOf(u16) // lod_count
-+ @sizeOf(u32); // lod_table_offset
++ @sizeOf(u32) // lod_table_offset
++ @sizeOf([2]f32) * 2; // uv0_min + uv0_scale
 
 pub const ZMeshHeader = struct {
     magic: [5]u8 = MAGIC.*,
@@ -37,6 +39,7 @@ pub const ZMeshHeader = struct {
     submesh_table_offset: u32,
     lod_count: u16,
     lod_table_offset: u32,
+    uv0_bounds: mesh.UV0Bounds,
 
     pub fn init(cooked_mesh: mesh.CookedMesh) ZMeshHeader {
         const vertex_count: u32 = @intCast(cooked_mesh.vertices.len);
@@ -81,6 +84,7 @@ pub const ZMeshHeader = struct {
             .submesh_table_offset = HEADER_SIZE + vertex_data_size + index_data_size + index_padding,
             .lod_count = 0,
             .lod_table_offset = 0,
+            .uv0_bounds = cooked_mesh.uv0_bounds,
         };
     }
 
@@ -106,6 +110,15 @@ pub const ZMeshHeader = struct {
         }
         for (0..3) |i| {
             aabb_max[i] = @bitCast(try reader.takeInt(u32, .little));
+        }
+
+        var uv0_min: [2]f32 = undefined;
+        var uv0_scale: [2]f32 = undefined;
+        for (0..2) |i| {
+            uv0_min[i] = @bitCast(try reader.takeInt(u32, .little));
+        }
+        for (0..2) |i| {
+            uv0_scale[i] = @bitCast(try reader.takeInt(u32, .little));
         }
 
         const submesh_count = try reader.takeInt(u16, .little);
@@ -136,6 +149,7 @@ pub const ZMeshHeader = struct {
             .index_format = index_format,
             .format_flags = format_flags,
             .aabb = .{ .min = aabb_min, .max = aabb_max },
+            .uv0_bounds = .{ .min = uv0_min, .scale = uv0_scale },
             .submesh_count = submesh_count,
             .submesh_table_offset = submesh_table_offset,
             .lod_count = lod_count,
@@ -156,6 +170,12 @@ pub const ZMeshHeader = struct {
         for (self.aabb.max) |v| {
             try writer.writeInt(u32, @bitCast(v), .little);
         }
+        for (self.uv0_bounds.min) |v| {
+            try writer.writeInt(u32, @bitCast(v), .little);
+        }
+        for (self.uv0_bounds.scale) |v| {
+            try writer.writeInt(u32, @bitCast(v), .little);
+        }
         try writer.writeInt(u16, self.submesh_count, .little);
         try writer.writeInt(u32, self.submesh_table_offset, .little);
         try writer.writeInt(u16, self.lod_count, .little);
@@ -166,8 +186,13 @@ pub const ZMeshHeader = struct {
 pub const MeshPart = struct {
     vertex_count: u32,
     index_count: u32,
+
     aabb_min: [3]f32,
     aabb_max: [3]f32,
+
+    uv0_min: [2]f32,
+    uv0_scale: [2]f32,
+
     submeshes: []const Submesh,
 
     positions: [][3]f32,
@@ -335,6 +360,8 @@ pub const MeshPart = struct {
             .index_count = index_count,
             .aabb_min = header.aabb.min,
             .aabb_max = header.aabb.max,
+            .uv0_min = header.uv0_bounds.min,
+            .uv0_scale = header.uv0_bounds.scale,
             .submeshes = submeshes,
             .positions = positions,
             .normals = normals,
@@ -603,8 +630,8 @@ fn readF32(buf: []const u8, offset: usize) f32 {
     return @bitCast(readU32(buf, offset));
 }
 
-test "HEADER_SIZE equals 55" {
-    try testing.expectEqual(@as(u32, 55), HEADER_SIZE);
+test "HEADER_SIZE equals 71" {
+    try testing.expectEqual(@as(u32, 71), HEADER_SIZE);
 }
 
 test "ZMeshHeader.init sets magic and version" {
@@ -998,6 +1025,9 @@ pub fn writeTestZmeshFile(writer: *std.Io.Writer) !void {
     try writer.writeInt(u8, @bitCast(flags), .little);
     for (0..6) |_| {
         try writer.writeInt(u32, 0, .little); // aabb
+    }
+    for (0..4) |_| {
+        try writer.writeInt(u32, 0, .little); // uv0 bounds
     }
     try writer.writeInt(u16, 1, .little); // submesh_count
     try writer.writeInt(u32, submesh_table_offset, .little);
