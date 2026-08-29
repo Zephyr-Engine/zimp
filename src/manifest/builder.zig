@@ -13,16 +13,16 @@ pub const generated_prefix = "generated/";
 
 pub const BuildInputs = struct {
     project_id: ProjectId,
-    /// Post-cook cache (in memory). The manifest never reads `.zcache` from
-    /// disk.
     cache: *const Cache,
     metas: *meta_store_mod.MetaStore,
     io: std.Io,
     random: std.Random,
+    builtin_entries: []const model.AssetManifestEntry = &.{},
 };
 
 pub const BuildStats = struct {
     entries: usize = 0,
+    builtin_entries: usize = 0,
     ids_from_sidecar: usize = 0,
     ids_derived: usize = 0,
     ids_new: usize = 0,
@@ -31,10 +31,6 @@ pub const BuildStats = struct {
     skipped_unknown_kind: usize = 0,
 };
 
-/// Build a validated manifest from the post-cook cache, resolving each
-/// asset's durable identity via the three rules (generated-derived >
-/// sidecar > fresh v4). Sidecars are recorded in `inputs.metas` but NOT
-/// flushed here — the caller flushes only after the manifest was written.
 pub fn build(gpa: std.mem.Allocator, inputs: BuildInputs, stats: *BuildStats) !model.AssetManifest {
     var m = model.AssetManifest{
         .arena = std.heap.ArenaAllocator.init(gpa),
@@ -62,6 +58,11 @@ pub fn build(gpa: std.mem.Allocator, inputs: BuildInputs, stats: *BuildStats) !m
         try entries.append(a, try buildEntry(a, inputs, stats, cache_entry, kind));
     }
 
+    for (inputs.builtin_entries) |entry| {
+        try entries.append(a, try entry.clone(a));
+        stats.builtin_entries += 1;
+    }
+
     // Determinism: sort by source_path.
     std.mem.sort(model.AssetManifestEntry, entries.items, {}, entryLessThan);
     m.entries = try entries.toOwnedSlice(a);
@@ -76,9 +77,6 @@ fn entryLessThan(_: void, lhs: model.AssetManifestEntry, rhs: model.AssetManifes
     return std.mem.order(u8, lhs.source_path, rhs.source_path) == .lt;
 }
 
-/// The three-rule durable-id assignment. Order matters and is frozen:
-/// generated paths are derived (never sidecar'd), then an existing sidecar
-/// wins, then a fresh v4 is minted and persisted as a sidecar.
 fn resolveId(
     inputs: BuildInputs,
     stats: *BuildStats,
@@ -126,9 +124,6 @@ fn buildEntry(
     };
 }
 
-/// Duplicate ids (e.g. a file copied together with its sidecar) are a hard
-/// error; unlike `validate()` this names both offending paths so the fix is
-/// obvious.
 fn reportDuplicateIds(gpa: std.mem.Allocator, m: *const model.AssetManifest) !void {
     var seen = std.AutoHashMap(AssetId, []const u8).init(gpa);
     defer seen.deinit();
@@ -147,8 +142,6 @@ fn reportDuplicateIds(gpa: std.mem.Allocator, m: *const model.AssetManifest) !vo
         gop.value_ptr.* = entry.source_path;
     }
 }
-
-// ── Tests ────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
 const codec = @import("codec.zig");

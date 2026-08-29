@@ -1,9 +1,10 @@
 const std = @import("std");
+
 const source_file_mod = @import("../assets/source_file.zig");
 const AssetKind = @import("../assets/asset.zig").AssetKind;
 const fnv1a = source_file_mod.fnv1a;
-const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
+const Hash = source_file_mod.Hash;
 
 pub const FLAG_ERRORED: u16 = 1 << 0;
 

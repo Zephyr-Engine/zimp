@@ -14,6 +14,19 @@ pub const AssetManifestEntry = struct {
     source_size: u64,
     cooked_size: u64,
     generated: bool = false,
+
+    pub fn clone(self: AssetManifestEntry, allocator: std.mem.Allocator) !AssetManifestEntry {
+        return AssetManifestEntry{
+            .id = self.id,
+            .kind = self.kind,
+            .source_path = try allocator.dupe(u8, self.source_path),
+            .cooked_path = try allocator.dupe(u8, self.cooked_path),
+            .content_hash = self.content_hash,
+            .source_size = self.source_size,
+            .cooked_size = self.cooked_size,
+            .generated = self.generated,
+        };
+    }
 };
 
 /// The canonical in-memory manifest used by builder, codec, and tooling.

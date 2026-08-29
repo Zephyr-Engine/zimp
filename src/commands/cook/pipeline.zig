@@ -11,6 +11,7 @@ const cache_session_mod = @import("cache_session.zig");
 const CookContext = @import("context.zig").CookContext;
 const Cache = @import("../../cache/cache.zig").Cache;
 const cook_metrics = @import("../cook_metrics.zig");
+const model = @import("../../manifest/model.zig");
 const Executor = @import("executor.zig").Executor;
 const planner = @import("planner.zig");
 const log = @import("../../logger.zig");
@@ -56,11 +57,21 @@ pub fn run(
             metrics.cache_write_ns = @intCast(cache_write_start.durationTo(cache_write_end).raw.nanoseconds);
 
             if (ctx.project) |proj| {
-                try buildAndWriteManifest(allocator, ctx, proj, &cache_session.cache, plan.orphan_sidecars.items);
-            }
+                var publisher = try Publisher.publish(allocator, ctx);
+                defer publisher.deinit(allocator);
 
-            var publisher = try Publisher.publish(allocator, ctx);
-            defer publisher.deinit(allocator);
+                const builtin_entries = try publisher.manifestEntries(allocator);
+                defer allocator.free(builtin_entries);
+
+                try buildAndWriteManifest(
+                    allocator,
+                    ctx,
+                    proj,
+                    &cache_session.cache,
+                    plan.orphan_sidecars.items,
+                    builtin_entries,
+                );
+            }
         }
 
         metrics.pipeline_live_bytes = counting.currentRequestedBytes();
@@ -84,6 +95,7 @@ fn buildAndWriteManifest(
     proj: ProjectCookInfo,
     cache: *const Cache,
     orphan_sidecars: []const []const u8,
+    builtin_entries: []const model.AssetManifestEntry,
 ) !void {
     var metas = meta_store_mod.MetaStore.init(allocator, ctx.io, ctx.source);
     defer metas.deinit();
@@ -96,6 +108,7 @@ fn buildAndWriteManifest(
         .metas = &metas,
         .io = ctx.io,
         .random = random_source.interface(),
+        .builtin_entries = builtin_entries,
     }, &stats);
     defer manifest.deinit();
 
@@ -104,8 +117,9 @@ fn buildAndWriteManifest(
 
     warnOrphanedSidecars(orphan_sidecars);
 
-    log.info("Asset manifest: {d} entries ({d} sidecar, {d} derived, {d} new); {d} sidecar(s) written", .{
+    log.info("Asset manifest: {d} entries ({d} builtin, {d} sidecar, {d} derived, {d} new); {d} sidecar(s) written", .{
         stats.entries,
+        stats.builtin_entries,
         stats.ids_from_sidecar,
         stats.ids_derived,
         stats.ids_new,
