@@ -208,6 +208,40 @@ test "build over an empty cache yields an empty valid manifest" {
     try testing.expectEqual(@as(usize, 0), stats.entries);
 }
 
+test "builtin entries are cloned, sorted, and do not mint sidecars" {
+    var fx = try TestFixture.init();
+    defer fx.deinit();
+    var prng = std.Random.DefaultPrng.init(7);
+
+    try fx.tmp.dir.createDirPath(testing.io, "meshes");
+    try fx.addCacheEntry("meshes/monkey.glb", "meshes/monkey.zmesh", .mesh, 0);
+
+    const builtin_id = AssetId.parseComptime("3f2a77f1-9c44-4b7e-9b1a-2f6c1d8e5a01");
+    const builtin_entries = [_]model.AssetManifestEntry{.{
+        .id = builtin_id,
+        .kind = .shader_stage,
+        .source_path = "zephyr/standard.vert",
+        .cooked_path = "zephyr/standard.vert.zshdr",
+        .content_hash = 123,
+        .source_size = 456,
+        .cooked_size = 789,
+    }};
+
+    var inputs = fx.inputs(prng.random());
+    inputs.builtin_entries = &builtin_entries;
+    var stats = BuildStats{};
+    var m = try build(testing.allocator, inputs, &stats);
+    defer m.deinit();
+
+    try testing.expectEqual(@as(usize, 2), m.entries.len);
+    try testing.expectEqual(@as(usize, 1), stats.builtin_entries);
+    try testing.expectEqual(@as(usize, 1), stats.ids_new);
+    try testing.expectEqual(@as(usize, 1), try fx.metas.flush(testing.allocator));
+    const entry = m.findBySourcePath("zephyr/standard.vert").?;
+    try testing.expect(entry.id.eql(builtin_id));
+    try testing.expectEqual(@as(u64, 123), entry.content_hash);
+}
+
 test "fresh assets get v4 ids and sidecars; non-assets are skipped" {
     var fx = try TestFixture.init();
     defer fx.deinit();
