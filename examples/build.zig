@@ -7,7 +7,7 @@ pub fn build(b: *std.Build) void {
 
     const zimp_dep = b.dependency("zimp", .{
         .target = target,
-        .optimize = .ReleaseFast,
+        .optimize = optimize,
     });
     const cook = zimp.addProjectCookStep(b, zimp_dep, b.path("."));
     const cook_step = b.step("cook", "Cook assets with zimp");

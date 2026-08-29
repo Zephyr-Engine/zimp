@@ -1,7 +1,5 @@
 const std = @import("std");
 
-/// The supported, cooked asset categories. Values are persisted in manifests
-/// and scene schemas; append new kinds without changing existing tags.
 pub const AssetKind = enum(u8) {
     mesh = 0,
     texture = 1,

@@ -7,6 +7,12 @@ pub const PREFIX = "zephyr/";
 pub const Source = struct {
     path: []const u8,
     bytes: []const u8,
+
+    pub fn hashBytes(self: Source) u64 {
+        var hasher = std.hash.XxHash64.init(0);
+        hasher.update(self.bytes);
+        return hasher.final();
+    }
 };
 
 pub const assets = [_]Source{

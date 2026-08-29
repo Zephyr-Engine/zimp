@@ -1,17 +1,18 @@
 const std = @import("std");
 
-const cache_session_mod = @import("cache_session.zig");
-const planner = @import("planner.zig");
-const Executor = @import("executor.zig").Executor;
-const CookContext = @import("context.zig").CookContext;
+const CountingAllocator = @import("../../shared/counting_allocator.zig").CountingAllocator;
+const meta_store_mod = @import("../../manifest/meta_store.zig");
 const ProjectCookInfo = @import("context.zig").ProjectCookInfo;
 const CookMetrics = @import("../cook_metrics.zig").CookMetrics;
-const cook_metrics = @import("../cook_metrics.zig");
-const CountingAllocator = @import("../../shared/counting_allocator.zig").CountingAllocator;
-const Cache = @import("../../cache/cache.zig").Cache;
 const manifest_builder = @import("../../manifest/builder.zig");
 const manifest_codec = @import("../../manifest/codec.zig");
-const meta_store_mod = @import("../../manifest/meta_store.zig");
+const Publisher = @import("../../builtin/publisher.zig");
+const cache_session_mod = @import("cache_session.zig");
+const CookContext = @import("context.zig").CookContext;
+const Cache = @import("../../cache/cache.zig").Cache;
+const cook_metrics = @import("../cook_metrics.zig");
+const Executor = @import("executor.zig").Executor;
+const planner = @import("planner.zig");
 const log = @import("../../logger.zig");
 
 pub fn run(
@@ -23,9 +24,6 @@ pub fn run(
     var metrics: CookMetrics = .{};
     const total_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 
-    // Keep cleanup in explicit lexical scopes. `ending_allocated_bytes` is a
-    // retained-allocation measurement, not a snapshot of intentionally-live
-    // plan/cache data.
     {
         var cache_session = try cache_session_mod.CacheSession.open(allocator, ctx);
         defer cache_session.deinit(allocator);
@@ -60,6 +58,9 @@ pub fn run(
             if (ctx.project) |proj| {
                 try buildAndWriteManifest(allocator, ctx, proj, &cache_session.cache, plan.orphan_sidecars.items);
             }
+
+            var publisher = try Publisher.publish(allocator, ctx);
+            defer publisher.deinit(allocator);
         }
 
         metrics.pipeline_live_bytes = counting.currentRequestedBytes();
