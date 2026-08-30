@@ -7,18 +7,11 @@ pub const meta_version: u32 = 1;
 pub const meta_extension = ".zmeta";
 pub const max_meta_bytes: usize = 16 * 1024;
 
-/// A `.zmeta` sidecar: the durable identity of one authored source asset.
-/// Sidecars sit next to their source file, are committed to version
-/// control, and are the identity source of truth — deleting one assigns a
-/// NEW id on the next cook and breaks every reference to the asset.
 pub const AssetMeta = struct {
     format: []const u8 = meta_format,
     version: u32 = meta_version,
     id: AssetId,
-    /// Cooker that owns this source, e.g. "glb", "tex", "shader", "material".
-    /// Empty until cooker identity is wired into the manifest builder.
     importer: []const u8 = "",
-    /// Bumped by a cooker when its output format/logic changes.
     importer_version: u32 = 0,
 
     pub fn validate(self: *const AssetMeta) errors.MetaError!void {
@@ -28,8 +21,6 @@ pub const AssetMeta = struct {
     }
 };
 
-/// Parses sidecar bytes. All strings are allocated from `allocator`
-/// (arena recommended; MetaStore owns one).
 pub fn parse(allocator: std.mem.Allocator, bytes: []const u8) !AssetMeta {
     const meta = std.json.parseFromSliceLeaky(AssetMeta, allocator, bytes, .{
         .allocate = .alloc_always,
@@ -39,8 +30,6 @@ pub fn parse(allocator: std.mem.Allocator, bytes: []const u8) !AssetMeta {
     return meta;
 }
 
-/// Canonical serialization: 2-space indent, struct field order, trailing
-/// newline. Byte-stable for identical inputs so recooks never dirty VCS.
 pub fn serialize(allocator: std.mem.Allocator, meta: *const AssetMeta) ![]u8 {
     const body = try std.json.Stringify.valueAlloc(allocator, meta, .{
         .whitespace = .indent_2,
@@ -49,7 +38,6 @@ pub fn serialize(allocator: std.mem.Allocator, meta: *const AssetMeta) ![]u8 {
     return std.mem.concat(allocator, u8, &.{ body, "\n" });
 }
 
-/// "meshes/monkey.glb" -> "meshes/monkey.glb.zmeta"
 pub fn metaPathFor(allocator: std.mem.Allocator, source_path: []const u8) ![]u8 {
     return std.mem.concat(allocator, u8, &.{ source_path, meta_extension });
 }

@@ -1,15 +1,16 @@
 const std = @import("std");
 
-const asset_registry = @import("../../assets/asset_registry.zig");
-const AssetScanner = @import("../../assets/asset_scanner.zig").AssetScanner;
-const SourceFile = @import("../../assets/source_file.zig").SourceFile;
-const Hash = @import("../../assets/source_file.zig").Hash;
-const DepGraph = @import("../../assets/dependency_graph.zig").DepGraph;
-const Cache = @import("../../cache/cache.zig").Cache;
-const CookMetrics = @import("../cook_metrics.zig").CookMetrics;
-const log = @import("../../logger.zig");
-const CookContext = @import("context.zig").CookContext;
 const material_generator = @import("../../parsers/gltf/material_generator.zig");
+const AssetScanner = @import("../../assets/asset_scanner.zig").AssetScanner;
+const DepGraph = @import("../../assets/dependency_graph.zig").DepGraph;
+const SourceFile = @import("../../assets/source_file.zig").SourceFile;
+const asset_registry = @import("../../assets/asset_registry.zig");
+const builtin_registry = @import("../../builtin/registry.zig");
+const CookMetrics = @import("../cook_metrics.zig").CookMetrics;
+const Hash = @import("../../assets/source_file.zig").Hash;
+const CookContext = @import("context.zig").CookContext;
+const Cache = @import("../../cache/cache.zig").Cache;
+const log = @import("../../logger.zig");
 
 pub const SourceIndex = u32;
 
@@ -70,6 +71,14 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
     var generation_sources: std.ArrayList(SourceFile) = .empty;
     defer generation_sources.deinit(allocator);
     for (scanned.files.items) |source| {
+        if (builtin_registry.isBuiltin(source.path)) {
+            log.err("Project asset: '{s}' is using reserved builtin namespace: '{s}'", .{
+                source.path,
+                builtin_registry.PREFIX,
+            });
+            return error.ReservedAssetPath;
+        }
+
         if (try needsMaterialGeneration(source, ctx, cache)) {
             try generation_sources.append(allocator, source);
         }
@@ -112,7 +121,7 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
             .info = info,
             .descriptor = descriptor,
             .output_path = output_path,
-            .cached_index = if (material_topology_changed and source.assetType() == .mesh)
+            .cached_index = if (material_topology_changed and source.assetKind() == .mesh)
                 null
             else
                 cache.getIdx(source),
@@ -191,7 +200,7 @@ fn materialTopologyChanged(allocator: std.mem.Allocator, sources: []const Source
     }
 
     for (cache.entries.items) |entry| {
-        if (entry.asset_type == .material and !current_paths.contains(entry.source_path)) {
+        if (entry.asset_kind == .material and !current_paths.contains(entry.source_path)) {
             return true;
         }
     }

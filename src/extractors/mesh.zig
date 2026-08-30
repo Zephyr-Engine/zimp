@@ -81,10 +81,10 @@ test "extractMeshDeps returns external gltf buffer and image dependencies" {
     try testing.expectEqual(@as(usize, 2), deps.len);
     try testing.expectEqualStrings("meshes/quad/textured_quad.bin", deps[0].path);
     try testing.expectEqual(.bin, deps[0].extension);
-    try testing.expectEqual(.unknown, deps[0].assetType());
+    try testing.expect(deps[0].assetKind() == null);
     try testing.expectEqualStrings("meshes/quad/textured_quad_albedo.png", deps[1].path);
     try testing.expectEqual(.png, deps[1].extension);
-    try testing.expectEqual(.texture, deps[1].assetType());
+    try testing.expectEqual(.texture, deps[1].assetKind());
 }
 
 test "extractMeshDeps returns empty dependencies for embedded glb" {

@@ -3,7 +3,7 @@ const log = @import("../logger.zig");
 const fmt = @import("utils.zig");
 const FormatInspector = @import("inspect.zig").FormatInspector;
 const cache = @import("../cache/cache.zig");
-const AssetType = @import("../assets/asset.zig").AssetType;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
 const FLAG_ERRORED = @import("../cache/entry.zig").FLAG_ERRORED;
 
 fn padRight(buf: []u8, s: []const u8, width: usize) []const u8 {
@@ -86,7 +86,7 @@ fn inspectZCache(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
             fmt.formatHash(&hash3, entry.cooked_path_hash),
             fmt.formatBytes(&size2, entry.cooked_size),
             fmt.formatTimestamp(&ts2, entry.cooked_at),
-            @tagName(entry.asset_type),
+            if (entry.asset_kind) |kind| @tagName(kind) else "(none)",
             status,
         });
 
@@ -223,7 +223,7 @@ test "Cache.read parses entry fields correctly" {
     try writer.writeInt(u64, 512, .little);
     try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little);
     try writer.writeInt(u16, 0, .little);
-    try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little);
+    try writer.writeInt(u16, @intFromEnum(AssetKind.mesh), .little);
     const source_path = "meshes/triangle.glb";
     try writer.writeInt(u16, source_path.len, .little);
     try writer.writeAll(source_path);
@@ -242,7 +242,7 @@ test "Cache.read parses entry fields correctly" {
     try testing.expectEqual(@as(u64, 1024), entry.source_size);
     try testing.expectEqual(@as(u64, 0x55667788), entry.cooked_path_hash);
     try testing.expectEqual(@as(u64, 512), entry.cooked_size);
-    try testing.expectEqual(AssetType.mesh, entry.asset_type);
+    try testing.expectEqual(AssetKind.mesh, entry.asset_kind);
     try testing.expectEqualStrings("meshes/triangle.glb", entry.source_path);
     try testing.expectEqualStrings("triangle.zmesh", entry.cooked_path);
 }
@@ -278,7 +278,7 @@ fn writeTestZcache(writer: *std.Io.Writer, opts: TestZcacheOpts) !void {
         try writer.writeInt(u64, 2048 * (i + 1), .little); // cooked_size
         try writer.writeInt(i96, 1775606400 * std.time.ns_per_s, .little); // cooked_at
         try writer.writeInt(u16, 0, .little); // flags
-        try writer.writeInt(u16, @intFromEnum(AssetType.mesh), .little); // asset_type
+        try writer.writeInt(u16, @intFromEnum(AssetKind.mesh), .little); // asset_kind
         const source_path = "meshes/test.glb";
         try writer.writeInt(u16, source_path.len, .little);
         try writer.writeAll(source_path);

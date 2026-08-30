@@ -1,4 +1,4 @@
-# zimp (Zephyr Import - IN DEVELOPMENT)
+# zimp (Zephyr Asset Compiler- IN DEVELOPMENT)
 
 A build-time asset compiler for Zig 0.16 that converts source assets into GPU-optimized binary formats, maintains durable asset identity, and generates the asset manifest the engine resolves assets through at runtime.
 
@@ -20,7 +20,7 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
 - **Dual interface** — plugs into `build.zig` as a build step (`addProjectCookStep`) or runs as a standalone CLI.
 - **Zero runtime dependencies** — cooked formats are self-contained binary blobs. No third-party parsers at runtime.
 
-## Pipeline Overview
+## Compiler Overview
 
 ```
   ┌─────────────────────────────────────────────────────────────────────┐

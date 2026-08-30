@@ -1,38 +1,54 @@
 const std = @import("std");
 
-pub const AssetType = enum {
-    mesh,
-    texture,
-    shader,
-    material,
-    unknown,
+pub const AssetKind = enum(u8) {
+    mesh = 0,
+    texture = 1,
+    shader_stage = 2,
+    material = 3,
 
-    pub fn cookedExtension(self: AssetType) []const u8 {
+    pub fn cookedExtension(self: AssetKind) []const u8 {
         return switch (self) {
             .mesh => "zmesh",
             .texture => "ztex",
-            .shader => "zshdr",
+            .shader_stage => "zshdr",
             .material => "zamat",
-            .unknown => "",
         };
     }
 
-    pub fn rebuildsOnHostOsChange(self: AssetType) bool {
+    pub fn rebuildsOnHostOsChange(self: AssetKind) bool {
         return switch (self) {
             .material => true,
-            .mesh, .texture, .shader, .unknown => false,
+            .mesh, .texture, .shader_stage => false,
         };
     }
 
-    pub fn fromCookedPath(path: []const u8) ?AssetType {
-        for (std.enums.values(AssetType)) |asset_type| {
-            if (asset_type == .unknown) continue;
-            const extension = asset_type.cookedExtension();
+    pub fn fromCookedPath(path: []const u8) ?AssetKind {
+        for (std.enums.values(AssetKind)) |kind| {
+            const extension = kind.cookedExtension();
             if (std.mem.endsWith(u8, path, extension) and
                 path.len > extension.len and path[path.len - extension.len - 1] == '.')
-                return asset_type;
+                return kind;
         }
         return null;
+    }
+
+    pub fn fromInt(raw: u8) ?AssetKind {
+        return switch (raw) {
+            0 => .mesh,
+            1 => .texture,
+            2 => .shader_stage,
+            3 => .material,
+            else => null,
+        };
+    }
+
+    pub fn displayName(self: AssetKind) []const u8 {
+        return switch (self) {
+            .mesh => "mesh",
+            .texture => "texture",
+            .shader_stage => "shader stage",
+            .material => "material",
+        };
     }
 };
 
@@ -56,13 +72,15 @@ pub const Extension = enum {
         return @tagName(self);
     }
 
-    pub fn assetType(self: Extension) AssetType {
+    /// Returns null for files which are not independently cookable assets,
+    /// including dependency-only files such as shader includes.
+    pub fn assetKind(self: Extension) ?AssetKind {
         return switch (self) {
             .gltf, .glb, .obj => .mesh,
             .png, .jpg, .jpeg, .hdr => .texture,
-            .vert, .frag, .comp, .glsl => .shader,
+            .vert, .frag, .comp => .shader_stage,
             .zamat => .material,
-            .bin, .other => .unknown,
+            .bin, .glsl, .other => null,
         };
     }
 
@@ -89,24 +107,24 @@ test "Extension.string returns correct string for other" {
     try testing.expectEqualStrings("other", Extension.other.string());
 }
 
-test "Extension.assetType maps gltf to mesh" {
-    try testing.expectEqual(.mesh, Extension.gltf.assetType());
+test "Extension.assetKind maps gltf to mesh" {
+    try testing.expectEqual(.mesh, Extension.gltf.assetKind());
 }
 
-test "Extension.assetType maps glsl to shader" {
-    try testing.expectEqual(.shader, Extension.glsl.assetType());
+test "Extension.assetKind maps shader stage to shader_stage" {
+    try testing.expectEqual(.shader_stage, Extension.vert.assetKind());
 }
 
-test "Extension.assetType maps other to unknown" {
-    try testing.expectEqual(.unknown, Extension.other.assetType());
+test "Extension.assetKind excludes dependency-only and unknown files" {
+    try testing.expect(Extension.glsl.assetKind() == null);
+    try testing.expect(Extension.other.assetKind() == null);
 }
 
-test "AssetType.rebuildsOnHostOsChange marks only OS-sensitive assets" {
-    try testing.expect(AssetType.material.rebuildsOnHostOsChange());
-    try testing.expect(!AssetType.mesh.rebuildsOnHostOsChange());
-    try testing.expect(!AssetType.texture.rebuildsOnHostOsChange());
-    try testing.expect(!AssetType.shader.rebuildsOnHostOsChange());
-    try testing.expect(!AssetType.unknown.rebuildsOnHostOsChange());
+test "AssetKind.rebuildsOnHostOsChange marks only OS-sensitive assets" {
+    try testing.expect(AssetKind.material.rebuildsOnHostOsChange());
+    try testing.expect(!AssetKind.mesh.rebuildsOnHostOsChange());
+    try testing.expect(!AssetKind.texture.rebuildsOnHostOsChange());
+    try testing.expect(!AssetKind.shader_stage.rebuildsOnHostOsChange());
 }
 
 test "Extension.processEntry returns gltf for .gltf file" {

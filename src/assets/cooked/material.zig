@@ -113,9 +113,9 @@ pub const CookedMaterial = struct {
         const fragment_source_path = try std.fmt.allocPrint(allocator, "{s}.frag", .{source.shader_path});
         defer allocator.free(fragment_source_path);
 
-        const vertex_shader_path = try path_helpers.cookedOutput(allocator, vertex_source_path, .shader);
+        const vertex_shader_path = try path_helpers.cookedOutput(allocator, vertex_source_path, .shader_stage);
         defer allocator.free(vertex_shader_path);
-        const fragment_shader_path = try path_helpers.cookedOutput(allocator, fragment_source_path, .shader);
+        const fragment_shader_path = try path_helpers.cookedOutput(allocator, fragment_source_path, .shader_stage);
         defer allocator.free(fragment_shader_path);
 
         const vertex_shader_path_offset = try appendRuntimePath(&runtime_paths, allocator, vertex_shader_path);

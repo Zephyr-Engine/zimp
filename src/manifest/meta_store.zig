@@ -5,22 +5,14 @@ const AssetId = @import("../id/id_types.zig").AssetId;
 const atomic_file = @import("../shared/atomic_file.zig");
 const log = @import("../logger.zig");
 
-/// The single component that touches sidecar files. The manifest builder
-/// asks it for identities; it tracks which sidecars are new or changed and
-/// flushes them only after the manifest build succeeded, so identity is
-/// never persisted for a failed cook and unchanged sidecar bytes are never
-/// rewritten (no spurious VCS dirt).
 pub const MetaStore = struct {
     arena: std.heap.ArenaAllocator,
     io: std.Io,
-    /// Open handle on the authored assets dir. Not owned.
     source_dir: std.Io.Dir,
-    /// source_path -> loaded/created meta.
     by_source_path: std.StringHashMap(Entry),
 
     pub const Entry = struct {
         meta: AssetMeta,
-        /// Needs writing at flush time (new file or changed contents).
         dirty: bool,
     };
 
@@ -38,9 +30,6 @@ pub const MetaStore = struct {
         self.arena.deinit();
     }
 
-    /// Load `<source_path>.zmeta` if present. Returns null when absent.
-    /// Corrupt sidecars are a hard error: silently regenerating one would
-    /// silently re-identify the asset and break every reference to it.
     pub fn load(self: *MetaStore, source_path: []const u8) !?*const AssetMeta {
         if (self.by_source_path.getPtr(source_path)) |existing| return &existing.meta;
 
@@ -67,7 +56,6 @@ pub const MetaStore = struct {
         return &self.by_source_path.getPtr(source_path).?.meta;
     }
 
-    /// Record a newly assigned identity; written at flush().
     pub fn create(self: *MetaStore, source_path: []const u8, meta: AssetMeta) !void {
         const a = self.arena.allocator();
         try self.by_source_path.put(try a.dupe(u8, source_path), .{
@@ -80,7 +68,6 @@ pub const MetaStore = struct {
         });
     }
 
-    /// Update importer info on an existing entry (marks dirty only on change).
     pub fn touchImporter(self: *MetaStore, source_path: []const u8, importer: []const u8, importer_version: u32) !void {
         const entry = self.by_source_path.getPtr(source_path) orelse return;
         if (entry.meta.importer_version != importer_version or
@@ -92,8 +79,6 @@ pub const MetaStore = struct {
         }
     }
 
-    /// Write every dirty sidecar atomically. Call ONLY after the manifest
-    /// build succeeded. Returns the number of sidecars written.
     pub fn flush(self: *MetaStore, gpa: std.mem.Allocator) !usize {
         var written: usize = 0;
         var it = self.by_source_path.iterator();

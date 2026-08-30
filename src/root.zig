@@ -168,7 +168,6 @@ pub const mesh = assets.cooked.mesh;
 pub const material = assets.cooked.material;
 
 const asset = @import("assets/asset.zig");
-pub const AssetType = asset.AssetType;
 pub const Extension = asset.Extension;
 
 test "public API exposes format and asset construction types" {
@@ -303,4 +302,5 @@ test {
     _ = @import("scene/validate.zig");
     _ = @import("scene/json_codec.zig");
     _ = @import("scene/binary_codec.zig");
+    _ = @import("builtin/registry.zig");
 }

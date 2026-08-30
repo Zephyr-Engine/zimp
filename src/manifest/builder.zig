@@ -13,16 +13,16 @@ pub const generated_prefix = "generated/";
 
 pub const BuildInputs = struct {
     project_id: ProjectId,
-    /// Post-cook cache (in memory). The manifest never reads `.zcache` from
-    /// disk.
     cache: *const Cache,
     metas: *meta_store_mod.MetaStore,
     io: std.Io,
     random: std.Random,
+    builtin_entries: []const model.AssetManifestEntry = &.{},
 };
 
 pub const BuildStats = struct {
     entries: usize = 0,
+    builtin_entries: usize = 0,
     ids_from_sidecar: usize = 0,
     ids_derived: usize = 0,
     ids_new: usize = 0,
@@ -31,10 +31,6 @@ pub const BuildStats = struct {
     skipped_unknown_kind: usize = 0,
 };
 
-/// Build a validated manifest from the post-cook cache, resolving each
-/// asset's durable identity via the three rules (generated-derived >
-/// sidecar > fresh v4). Sidecars are recorded in `inputs.metas` but NOT
-/// flushed here — the caller flushes only after the manifest was written.
 pub fn build(gpa: std.mem.Allocator, inputs: BuildInputs, stats: *BuildStats) !model.AssetManifest {
     var m = model.AssetManifest{
         .arena = std.heap.ArenaAllocator.init(gpa),
@@ -55,11 +51,16 @@ pub fn build(gpa: std.mem.Allocator, inputs: BuildInputs, stats: *BuildStats) !m
             stats.skipped_dependency_only += 1;
             continue;
         }
-        const kind = kind_mod.AssetKind.fromAssetType(cache_entry.asset_type) orelse {
+        const kind = cache_entry.asset_kind orelse {
             stats.skipped_unknown_kind += 1; // dependency-only files
             continue;
         };
         try entries.append(a, try buildEntry(a, inputs, stats, cache_entry, kind));
+    }
+
+    for (inputs.builtin_entries) |entry| {
+        try entries.append(a, try entry.clone(a));
+        stats.builtin_entries += 1;
     }
 
     // Determinism: sort by source_path.
@@ -76,9 +77,6 @@ fn entryLessThan(_: void, lhs: model.AssetManifestEntry, rhs: model.AssetManifes
     return std.mem.order(u8, lhs.source_path, rhs.source_path) == .lt;
 }
 
-/// The three-rule durable-id assignment. Order matters and is frozen:
-/// generated paths are derived (never sidecar'd), then an existing sidecar
-/// wins, then a fresh v4 is minted and persisted as a sidecar.
 fn resolveId(
     inputs: BuildInputs,
     stats: *BuildStats,
@@ -126,9 +124,6 @@ fn buildEntry(
     };
 }
 
-/// Duplicate ids (e.g. a file copied together with its sidecar) are a hard
-/// error; unlike `validate()` this names both offending paths so the fix is
-/// obvious.
 fn reportDuplicateIds(gpa: std.mem.Allocator, m: *const model.AssetManifest) !void {
     var seen = std.AutoHashMap(AssetId, []const u8).init(gpa);
     defer seen.deinit();
@@ -147,8 +142,6 @@ fn reportDuplicateIds(gpa: std.mem.Allocator, m: *const model.AssetManifest) !vo
         gop.value_ptr.* = entry.source_path;
     }
 }
-
-// ── Tests ────────────────────────────────────────────────────────────────
 
 const testing = std.testing;
 const codec = @import("codec.zig");
@@ -175,7 +168,7 @@ const TestFixture = struct {
         self.tmp.cleanup();
     }
 
-    fn addCacheEntry(self: *TestFixture, source_path: []const u8, cooked_path: []const u8, asset_type: anytype, flags: u16) !void {
+    fn addCacheEntry(self: *TestFixture, source_path: []const u8, cooked_path: []const u8, asset_kind: ?kind_mod.AssetKind, flags: u16) !void {
         const fnv1a = @import("../assets/source_file.zig").fnv1a;
         try self.cache.pushCacheEntry(testing.allocator, .{
             .source_path = try testing.allocator.dupe(u8, source_path),
@@ -188,7 +181,7 @@ const TestFixture = struct {
             .cooked_size = 50,
             .cooked_at = 0,
             .flags = flags,
-            .asset_type = asset_type,
+            .asset_kind = asset_kind,
         });
     }
 
@@ -215,6 +208,40 @@ test "build over an empty cache yields an empty valid manifest" {
     try testing.expectEqual(@as(usize, 0), stats.entries);
 }
 
+test "builtin entries are cloned, sorted, and do not mint sidecars" {
+    var fx = try TestFixture.init();
+    defer fx.deinit();
+    var prng = std.Random.DefaultPrng.init(7);
+
+    try fx.tmp.dir.createDirPath(testing.io, "meshes");
+    try fx.addCacheEntry("meshes/monkey.glb", "meshes/monkey.zmesh", .mesh, 0);
+
+    const builtin_id = AssetId.parseComptime("3f2a77f1-9c44-4b7e-9b1a-2f6c1d8e5a01");
+    const builtin_entries = [_]model.AssetManifestEntry{.{
+        .id = builtin_id,
+        .kind = .shader_stage,
+        .source_path = "zephyr/standard.vert",
+        .cooked_path = "zephyr/standard.vert.zshdr",
+        .content_hash = 123,
+        .source_size = 456,
+        .cooked_size = 789,
+    }};
+
+    var inputs = fx.inputs(prng.random());
+    inputs.builtin_entries = &builtin_entries;
+    var stats = BuildStats{};
+    var m = try build(testing.allocator, inputs, &stats);
+    defer m.deinit();
+
+    try testing.expectEqual(@as(usize, 2), m.entries.len);
+    try testing.expectEqual(@as(usize, 1), stats.builtin_entries);
+    try testing.expectEqual(@as(usize, 1), stats.ids_new);
+    try testing.expectEqual(@as(usize, 1), try fx.metas.flush(testing.allocator));
+    const entry = m.findBySourcePath("zephyr/standard.vert").?;
+    try testing.expect(entry.id.eql(builtin_id));
+    try testing.expectEqual(@as(u64, 123), entry.content_hash);
+}
+
 test "fresh assets get v4 ids and sidecars; non-assets are skipped" {
     var fx = try TestFixture.init();
     defer fx.deinit();
@@ -223,8 +250,8 @@ test "fresh assets get v4 ids and sidecars; non-assets are skipped" {
     try fx.tmp.dir.createDirPath(testing.io, "meshes");
     try fx.addCacheEntry("meshes/monkey.glb", "meshes/monkey.zmesh", .mesh, 0);
     try fx.addCacheEntry("tex/broken.png", "tex/broken.zatex", .texture, @import("../cache/entry.zig").FLAG_ERRORED);
-    try fx.addCacheEntry("includes/common.glsl", "", .shader, 0);
-    try fx.addCacheEntry("data/unknown.bin", "data/unknown.bin", .unknown, 0);
+    try fx.addCacheEntry("includes/common.glsl", "", null, 0);
+    try fx.addCacheEntry("data/unknown.bin", "data/unknown.bin", null, 0);
 
     var stats = BuildStats{};
     var m = try build(testing.allocator, fx.inputs(prng.random()), &stats);

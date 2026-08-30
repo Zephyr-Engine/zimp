@@ -111,7 +111,7 @@ fn appendNode(
     const transform = multiply(nodeTransform(node), parent_transform);
 
     if (node.mesh) |mesh_index| {
-        try appendMesh(allocator, gltf, buffers, mesh_index, transform, scratch, parts);
+        try appendMesh(allocator, gltf, buffers, @intCast(mesh_index), transform, scratch, parts);
     }
     for (node.children) |child| {
         try appendNode(allocator, gltf, buffers, child, transform, active, scratch, parts);
@@ -122,12 +122,11 @@ fn appendMesh(
     allocator: std.mem.Allocator,
     gltf: *const GltfJson,
     buffers: []const []const u8,
-    mesh_index_value: anytype,
+    mesh_index: usize,
     transform: Transform,
     scratch: *raw_mesh.MeshScratch,
     parts: *std.ArrayList(CookedModel.Part),
 ) !void {
-    const mesh_index: usize = @intCast(mesh_index_value);
     if (mesh_index >= gltf.meshes.len) return error.MeshIndexOutOfBounds;
 
     var parsed = try GltfMesh.buildMesh(allocator, gltf, mesh_index, buffers);

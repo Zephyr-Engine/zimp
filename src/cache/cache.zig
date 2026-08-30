@@ -2,7 +2,7 @@ const std = @import("std");
 const builtin = @import("builtin");
 
 const source_file_mod = @import("../assets/source_file.zig");
-const AssetType = @import("../assets/asset.zig").AssetType;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
 const CacheEntry = @import("entry.zig").CacheEntry;
 const dep_graph_mod = @import("cache_dep_graph.zig");
 const CacheDepGraph = dep_graph_mod.CacheDepGraph;
@@ -15,7 +15,7 @@ const log = @import("../logger.zig");
 const AtomicFile = @import("../shared/atomic_file.zig").AtomicFile;
 const wire = @import("../shared/wire.zig");
 
-pub const VERSION = 5;
+pub const VERSION = 6;
 pub const MAGIC = "ZACHE";
 
 pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16); // magic + version + entry_count + output_dir_len + host_os_len
@@ -242,7 +242,7 @@ pub const Cache = struct {
             try io_writer.writeInt(u64, entry.cooked_size, .little);
             try io_writer.writeInt(i96, entry.cooked_at, .little);
             try io_writer.writeInt(u16, entry.flags, .little);
-            try io_writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
+            try io_writer.writeInt(u16, if (entry.asset_kind) |kind| @intFromEnum(kind) else std.math.maxInt(u16), .little);
             try io_writer.writeInt(u16, @intCast(entry.source_path.len), .little);
             try io_writer.writeAll(entry.source_path);
             try io_writer.writeInt(u16, @intCast(entry.cooked_path.len), .little);
@@ -358,7 +358,11 @@ pub const Cache = struct {
             const cooked_size = try reader.takeInt(u64, .little);
             const cooked_at = try reader.takeInt(i96, .little);
             const flags = try reader.takeInt(u16, .little);
-            const asset_type = try wire.readEnum(reader, AssetType, u16);
+            const asset_kind_raw = try reader.takeInt(u16, .little);
+            const asset_kind: ?AssetKind = if (asset_kind_raw == std.math.maxInt(u16))
+                null
+            else
+                AssetKind.fromInt(std.math.cast(u8, asset_kind_raw) orelse return error.InvalidAssetKind) orelse return error.InvalidAssetKind;
 
             const source_path_len = try reader.takeInt(u16, .little);
             const source_path = try allocator.alloc(u8, source_path_len);
@@ -381,7 +385,7 @@ pub const Cache = struct {
                 .cooked_size = cooked_size,
                 .cooked_at = cooked_at,
                 .flags = flags,
-                .asset_type = asset_type,
+                .asset_kind = asset_kind,
             });
         }
 
@@ -498,7 +502,7 @@ test "upsertEntry replaces existing entry without growing cache" {
         .cooked_path_hash = fnv1a("old.zshdr"),
         .cooked_size = 1,
         .cooked_at = 1,
-        .asset_type = .shader,
+        .asset_kind = .shader_stage,
     };
     try cache.upsertEntry(testing.allocator, source, first);
 
@@ -512,7 +516,7 @@ test "upsertEntry replaces existing entry without growing cache" {
         .cooked_path_hash = 0,
         .cooked_size = 0,
         .cooked_at = 2,
-        .asset_type = .shader,
+        .asset_kind = .shader_stage,
     };
     try cache.upsertEntry(testing.allocator, source, second);
 
@@ -553,7 +557,7 @@ fn makeTestEntry(allocator: std.mem.Allocator, source_path: []const u8, cooked_p
         .cooked_path_hash = fnv1a(cooked_path),
         .cooked_size = 512,
         .cooked_at = 1775606400 * std.time.ns_per_s,
-        .asset_type = .mesh,
+        .asset_kind = .mesh,
     };
 }
 
@@ -588,7 +592,7 @@ fn writeTestCacheWithOutputDirAndDependencies(
         try writer.writeInt(u64, entry.cooked_size, .little);
         try writer.writeInt(i96, entry.cooked_at, .little);
         try writer.writeInt(u16, entry.flags, .little);
-        try writer.writeInt(u16, @intFromEnum(entry.asset_type), .little);
+        try writer.writeInt(u16, if (entry.asset_kind) |kind| @intFromEnum(kind) else std.math.maxInt(u16), .little);
         try writer.writeInt(u16, @intCast(entry.source_path.len), .little);
         try writer.writeAll(entry.source_path);
         try writer.writeInt(u16, @intCast(entry.cooked_path.len), .little);
@@ -812,7 +816,7 @@ test "read parses single entry with all fields" {
         .cooked_path_hash = 0xCCCC,
         .cooked_size = 1024,
         .cooked_at = 1775606400 * std.time.ns_per_s,
-        .asset_type = .mesh,
+        .asset_kind = .mesh,
     };
     try writeTestCache(&writer, &.{entry});
 
@@ -828,7 +832,7 @@ test "read parses single entry with all fields" {
     try testing.expectEqual(@as(i96, 999_000_000_000), e.source_mtime);
     try testing.expectEqual(@as(u64, 0xCCCC), e.cooked_path_hash);
     try testing.expectEqual(@as(u64, 1024), e.cooked_size);
-    try testing.expectEqual(AssetType.mesh, e.asset_type);
+    try testing.expectEqual(AssetKind.mesh, e.asset_kind);
     try testing.expectEqualStrings(source, e.source_path);
     try testing.expectEqualStrings(cooked, e.cooked_path);
 }
@@ -848,7 +852,7 @@ test "read parses multiple entries" {
             .cooked_path_hash = 3,
             .cooked_size = 50,
             .cooked_at = 0,
-            .asset_type = .mesh,
+            .asset_kind = .mesh,
         },
         .{
             .source_path = "b.gltf",
@@ -860,7 +864,7 @@ test "read parses multiple entries" {
             .cooked_path_hash = 6,
             .cooked_size = 75,
             .cooked_at = 0,
-            .asset_type = .unknown,
+            .asset_kind = null,
         },
     };
     try writeTestCache(&writer, &entries);
@@ -872,8 +876,8 @@ test "read parses multiple entries" {
     try testing.expectEqual(@as(u32, 2), c.header.entry_count);
     try testing.expectEqualStrings("a.glb", c.entries.items[0].source_path);
     try testing.expectEqualStrings("b.gltf", c.entries.items[1].source_path);
-    try testing.expectEqual(AssetType.mesh, c.entries.items[0].asset_type);
-    try testing.expectEqual(AssetType.unknown, c.entries.items[1].asset_type);
+    try testing.expectEqual(AssetKind.mesh, c.entries.items[0].asset_kind);
+    try testing.expect(c.entries.items[1].asset_kind == null);
 }
 
 test "read parses dependency graph rows" {
@@ -985,7 +989,7 @@ test "read handles entry with empty paths" {
         .cooked_path_hash = 0,
         .cooked_size = 0,
         .cooked_at = 0,
-        .asset_type = .unknown,
+        .asset_kind = null,
     };
     try writeTestCache(&writer, &.{entry});
 
@@ -1038,7 +1042,7 @@ test "write then read round-trip preserves all fields" {
     entry2.content_hash = 0x12345678;
     entry2.source_size = 8192;
     entry2.cooked_size = 4096;
-    entry2.asset_type = .unknown;
+    entry2.asset_kind = null;
     try c.pushCacheEntry(testing.allocator, entry2);
 
     var buf: [4096]u8 = undefined;
@@ -1061,7 +1065,7 @@ test "write then read round-trip preserves all fields" {
         try testing.expectEqual(original.cooked_path_hash, parsed.cooked_path_hash);
         try testing.expectEqual(original.cooked_size, parsed.cooked_size);
         try testing.expectEqual(original.cooked_at, parsed.cooked_at);
-        try testing.expectEqual(original.asset_type, parsed.asset_type);
+        try testing.expectEqual(original.asset_kind, parsed.asset_kind);
     }
 }
 

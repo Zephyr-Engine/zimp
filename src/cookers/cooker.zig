@@ -31,7 +31,7 @@ pub const Cooker = struct {
         if (self.output_path_fn) |path_fn| {
             return path_fn(allocator, source);
         }
-        return path_helpers.cookedOutput(allocator, source.path, source.assetType());
+        return path_helpers.cookedOutput(allocator, source.path, source.assetKind() orelse return error.UnsupportedAssetKind);
     }
 };
 
