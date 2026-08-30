@@ -144,14 +144,26 @@ fn selectFormat(class: TextureClass) TexelFormat {
 
 /// Extracts the channels the target format expects from a source mip.
 /// LDR formats (rgba8/rg8/r8) read from `src.pixels.ldr`; rgb16f reads from `src.pixels.hdr`.
-/// Block compression of the resulting bytes is still a TODO.
 fn cookMip(allocator: std.mem.Allocator, src: *const RawTexture, format: TexelFormat) !CookedMip {
     const pixel_count = @as(usize, src.width) * @as(usize, src.height);
     const data = try allocator.alloc(u8, format.imageSize(src.width, src.height));
     errdefer allocator.free(data);
 
     switch (format) {
-        .rgba8 => @memcpy(data, src.pixels.ldr),
+        .rgba8 => {
+            const ldr = src.pixels.ldr;
+            if (src.channels == 4) {
+                @memcpy(data, ldr);
+            } else {
+                for (0..pixel_count) |i| {
+                    const source_offset = i * src.channels;
+                    data[i * 4 + 0] = ldr[source_offset + 0];
+                    data[i * 4 + 1] = if (src.channels > 1) ldr[source_offset + 1] else ldr[source_offset + 0];
+                    data[i * 4 + 2] = if (src.channels > 2) ldr[source_offset + 2] else ldr[source_offset + 0];
+                    data[i * 4 + 3] = 255;
+                }
+            }
+        },
         .rg8 => {
             const ldr = src.pixels.ldr;
             for (0..pixel_count) |i| {
@@ -306,6 +318,22 @@ test "cookMip: rgba8 preserves all channels" {
     try testing.expectEqualSlices(u8, &pixels, mip.data);
 }
 
+test "cookMip: rgba8 expands compact LDR channels" {
+    const alloc = testing.allocator;
+
+    var single_pixels = [_]u8{ 10, 40 };
+    const single = RawTexture{ .width = 2, .height = 1, .channels = 1, .pixels = .{ .ldr = &single_pixels }, .class = .single_linear };
+    const single_mip = try cookMip(alloc, &single, .rgba8);
+    defer alloc.free(single_mip.data);
+    try testing.expectEqualSlices(u8, &.{ 10, 10, 10, 255, 40, 40, 40, 255 }, single_mip.data);
+
+    var normal_pixels = [_]u8{ 128, 129, 255 };
+    const normal = RawTexture{ .width = 1, .height = 1, .channels = 3, .pixels = .{ .ldr = &normal_pixels }, .class = .normal_linear };
+    const normal_mip = try cookMip(alloc, &normal, .rgba8);
+    defer alloc.free(normal_mip.data);
+    try testing.expectEqualSlices(u8, &.{ 128, 129, 255, 255 }, normal_mip.data);
+}
+
 test "cookMip: rg8 extracts R and G" {
     const alloc = testing.allocator;
     var pixels = [_]u8{ 100, 200, 255, 255, 50, 150, 255, 255 };
@@ -379,14 +407,13 @@ test "CookedTexture.cook: normal_linear produces platform-compatible mips" {
     const alloc = testing.allocator;
     // Pixel (128, 128, 255) → signed normal (0, 0, 1)
     const pixel_count: usize = 4 * 4;
-    const pixels = try alloc.alloc(u8, pixel_count * 4);
+    const pixels = try alloc.alloc(u8, pixel_count * 3);
     for (0..pixel_count) |i| {
-        pixels[i * 4 + 0] = 128;
-        pixels[i * 4 + 1] = 128;
-        pixels[i * 4 + 2] = 255;
-        pixels[i * 4 + 3] = 255;
+        pixels[i * 3 + 0] = 128;
+        pixels[i * 3 + 1] = 128;
+        pixels[i * 3 + 2] = 255;
     }
-    var raw = RawTexture{ .width = 4, .height = 4, .channels = 4, .pixels = .{ .ldr = pixels }, .class = .normal_linear, .owner = .allocator };
+    var raw = RawTexture{ .width = 4, .height = 4, .channels = 3, .pixels = .{ .ldr = pixels }, .class = .normal_linear, .owner = .allocator };
     defer raw.deinit(alloc);
 
     var cooked = try CookedTexture.cook(alloc, &raw);
@@ -426,5 +453,24 @@ test "CookedTexture.cook: single_linear produces platform-compatible mips" {
         try testing.expectEqual(@as(u8, 77), mip.data[0]);
         try testing.expectEqual(@as(u8, 77), mip.data[1]);
         for (mip.data[2..8]) |b| try testing.expectEqual(@as(u8, 0), b);
+    }
+}
+
+test "CookedTexture.cook: compact single-channel source produces BC4 mips" {
+    if (builtin.os.tag == .macos) return;
+
+    const alloc = testing.allocator;
+    const pixels = try alloc.alloc(u8, 4 * 4);
+    @memset(pixels, 91);
+    var raw = RawTexture{ .width = 4, .height = 4, .channels = 1, .pixels = .{ .ldr = pixels }, .class = .single_linear, .owner = .allocator };
+    defer raw.deinit(alloc);
+
+    var cooked = try CookedTexture.cook(alloc, &raw);
+    defer cooked.deinit(alloc);
+
+    try testing.expectEqual(TexelFormat.bc4, cooked.format);
+    for (cooked.mips) |mip| {
+        try testing.expectEqual(@as(u8, 91), mip.data[0]);
+        try testing.expectEqual(@as(u8, 91), mip.data[1]);
     }
 }

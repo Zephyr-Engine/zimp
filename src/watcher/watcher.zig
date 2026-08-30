@@ -4,6 +4,7 @@ const builtin = @import("builtin");
 const CountingAllocator = @import("../shared/counting_allocator.zig").CountingAllocator;
 const CookContext = @import("../commands/cook/context.zig").CookContext;
 const CookMetrics = @import("../commands/cook_metrics.zig").CookMetrics;
+const cook_metrics = @import("../commands/cook_metrics.zig");
 const cook_pipeline = @import("../commands/cook/pipeline.zig");
 const Snapshot = @import("snapshot.zig");
 const wake_mod = @import("wake.zig");
@@ -134,8 +135,12 @@ fn cook(self: *Watcher) CookResult {
 
     const ok = metrics.assets_errored == 0;
     if (ok) {
-        log.info("watch: cooked {d} assets ({d} cooked, {d} cached)", .{
-            metrics.assets_total, metrics.assets_cooked, metrics.assets_cached,
+        var total_duration_buf: [32]u8 = undefined;
+        log.info("watch: cooked {d} assets in {s} ({d} cooked, {d} cached)", .{
+            metrics.assets_total,
+            cook_metrics.fmtDuration(metrics.total_ns, &total_duration_buf),
+            metrics.assets_cooked,
+            metrics.assets_cached,
         });
     } else {
         log.warn("watch: cooked finished with {d} error(s); will retry on next change", .{metrics.assets_errored});

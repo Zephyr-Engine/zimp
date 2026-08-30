@@ -212,11 +212,23 @@ pub const GltfPbr = struct {
     metallicRoughnessTexture: ?GltfTextureInfo = null,
 };
 
+pub const GlftTextureTransform = struct {
+    offset: [2]f32 = .{ 0, 0 },
+    rotation: f32 = 0,
+    scale: [2]f32 = .{ 1, 1 },
+    texCoord: ?u32 = null,
+};
+
+pub const GlftTextureExtensions = struct {
+    KHR_texture_transform: ?GlftTextureTransform = null,
+};
+
 pub const GltfTextureInfo = struct {
     index: u32,
     texCoord: u32 = 0,
     scale: ?f32 = null,
     strength: ?f32 = null,
+    extensions: ?GlftTextureExtensions = null,
 };
 
 pub const GltfTexture = struct {

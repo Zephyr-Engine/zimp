@@ -75,6 +75,32 @@ pub const TextureClass = enum {
         break :blk lut;
     };
 
+    /// Linear-space boundaries at which gamma encoding advances to the next
+    /// u8 value. They generate the direct u16-domain encoding table below at
+    /// compile time, replacing each runtime `pow` with one indexed load.
+    const linear_to_srgb_thresholds: [255]f32 = blk: {
+        var thresholds: [255]f32 = undefined;
+        for (0..255) |i| {
+            const encoded = (@as(f32, @floatFromInt(i)) + 0.5) / 255.0;
+            thresholds[i] = @exp(@log(encoded) * 2.2);
+        }
+        break :blk thresholds;
+    };
+
+    const linear_to_srgb_lut: [std.math.maxInt(u16) + 1]u8 = blk: {
+        @setEvalBranchQuota(1_000_000);
+        var lut: [std.math.maxInt(u16) + 1]u8 = undefined;
+        var encoded: usize = 0;
+        for (0..lut.len) |i| {
+            const linear = @as(f32, @floatFromInt(i)) / std.math.maxInt(u16);
+            while (encoded < linear_to_srgb_thresholds.len and linear >= linear_to_srgb_thresholds[encoded]) {
+                encoded += 1;
+            }
+            lut[i] = @intCast(encoded);
+        }
+        break :blk lut;
+    };
+
     pub fn decode(self: TextureClass, v: u8) f32 {
         return switch (self) {
             .color_srgb => srgb_to_linear_lut[v],
@@ -85,10 +111,16 @@ pub const TextureClass = enum {
 
     pub fn encode(self: TextureClass, v: f32) u8 {
         return switch (self) {
-            .color_srgb => @intFromFloat(std.math.pow(f32, std.math.clamp(v, 0.0, 1.0), 1.0 / 2.2) * 255.0 + 0.5),
+            .color_srgb => encodeSrgb(v),
             .normal_linear => @intFromFloat(std.math.clamp((v + 1.0) * 0.5 * 255.0 + 0.5, 0.0, 255.0)),
             else => @intFromFloat(std.math.clamp(v, 0.0, 1.0) * 255.0 + 0.5),
         };
+    }
+
+    fn encodeSrgb(v: f32) u8 {
+        const linear = std.math.clamp(v, 0.0, 1.0);
+        const index: u16 = @intFromFloat(linear * std.math.maxInt(u16) + 0.5);
+        return linear_to_srgb_lut[index];
     }
 
     pub fn postAverage(self: TextureClass, r: f32, g: f32, b: f32) [3]f32 {
@@ -142,21 +174,41 @@ pub const RawTexture = struct {
         var width: c_int = 0;
         var height: c_int = 0;
         var channels: c_int = 0;
+        const desired_channels: c_int = switch (class) {
+            .normal_linear => 3,
+            .single_linear => 0,
+            .color_srgb, .packed_linear => 4,
+            .hdr_linear => unreachable,
+        };
         const stb_pixels = stb.stbi_load_from_memory(
             file_bytes.ptr,
             @intCast(file_bytes.len),
             &width,
             &height,
             &channels,
-            4,
+            desired_channels,
         );
         if (stb_pixels == null) return error.StbLoadFailed;
 
-        const len = @as(usize, @intCast(width)) * @as(usize, @intCast(height)) * 4;
+        const pixel_count = @as(usize, @intCast(width)) * @as(usize, @intCast(height));
+        const decoded_channels: u32 = if (desired_channels == 0) @intCast(channels) else @intCast(desired_channels);
+        var output_channels = decoded_channels;
+
+        // stb's one-channel conversion computes luminance. Single-channel
+        // material maps have always used source channel R, so decode the native
+        // layout and compact R in place to preserve that behavior.
+        if (class == .single_linear and decoded_channels > 1) {
+            for (0..pixel_count) |pixel| {
+                stb_pixels[pixel] = stb_pixels[pixel * decoded_channels];
+            }
+            output_channels = 1;
+        }
+
+        const len = pixel_count * output_channels;
         return RawTexture{
             .width = @as(u32, @intCast(width)),
             .height = @as(u32, @intCast(height)),
-            .channels = 4,
+            .channels = output_channels,
             .pixels = .{ .ldr = stb_pixels[0..len] },
             .class = class,
             .owner = .stb,
@@ -232,7 +284,7 @@ pub const RawTexture = struct {
     }
 
     pub fn mipScratchLen(self: *const RawTexture) usize {
-        return @as(usize, @max(1, self.width / 2)) * @as(usize, self.height) * self.channels;
+        return @as(usize, @max(1, self.width / 2)) * scratchRowCount(self.height) * self.channels;
     }
 
     pub fn downsample(self: *const RawTexture, allocator: std.mem.Allocator, scratch: []f32) !RawTexture {
@@ -273,63 +325,85 @@ pub const RawTexture = struct {
     /// Filters in linear space (class.decode → accumulate → class.encode),
     /// applies clamp-to-edge at borders.
     fn kaiserFilter(original_image: *const RawTexture, new_image: *RawTexture, scratch: []f32) !void {
-        const class = original_image.class;
-        const ch = original_image.channels;
-        const scratch_len = @as(usize, new_image.width) * @as(usize, original_image.height) * ch;
+        return switch (original_image.class) {
+            inline else => |class| switch (original_image.channels) {
+                1 => kaiserFilterLdr(class, 1, original_image, new_image, scratch),
+                2 => kaiserFilterLdr(class, 2, original_image, new_image, scratch),
+                3 => kaiserFilterLdr(class, 3, original_image, new_image, scratch),
+                4 => kaiserFilterLdr(class, 4, original_image, new_image, scratch),
+                else => error.UnsupportedChannelCount,
+            },
+        };
+    }
+
+    fn kaiserFilterLdr(
+        comptime class: TextureClass,
+        comptime channel_count: usize,
+        original_image: *const RawTexture,
+        new_image: *RawTexture,
+        scratch: []f32,
+    ) !void {
+        const ch = channel_count;
+        const scratch_rows = scratchRowCount(original_image.height);
+        const row_samples = @as(usize, new_image.width) * ch;
+        const scratch_len = row_samples * scratch_rows;
         std.debug.assert(scratch.len >= scratch_len);
+        var cached_rows: [kaiser_taps]?u32 = @splat(null);
 
-        // Horizontal pass: source -> scratch (new_width × original_height, linear f32)
-        for (0..original_image.height) |y| {
-            for (0..new_image.width) |x| {
-                var c: [4]f32 = .{ 0, 0, 0, 0 };
-                for (0..kaiser_taps) |i| {
-                    const src_x_signed: i32 = @as(i32, @intCast(x)) * 2 + kaiser_start_offset + @as(i32, @intCast(i));
-                    const src_x: u32 = @intCast(std.math.clamp(
-                        src_x_signed,
-                        0,
-                        @as(i32, @intCast(original_image.width)) - 1,
-                    ));
-                    const color = original_image.getPixel(src_x, @intCast(y)).?;
-                    const w = kaiser_weights[i];
-                    c[0] += class.decode(color[0]) * w;
-                    c[1] += class.decode(color[1]) * w;
-                    c[2] += class.decode(color[2]) * w;
-                    c[3] += @as(f32, @floatFromInt(color[3])) / 255.0 * w;
-                }
-                const idx = (y * new_image.width + x) * ch;
-                scratch[idx + 0] = c[0];
-                scratch[idx + 1] = c[1];
-                scratch[idx + 2] = c[2];
-                scratch[idx + 3] = c[3];
-            }
-        }
-
-        // Vertical pass: scratch -> new_image (encode back to u8)
+        // Keep only the horizontal rows needed by the current vertical kernel.
         for (0..new_image.height) |y| {
-            for (0..new_image.width) |x| {
-                var c: [4]f32 = .{ 0, 0, 0, 0 };
-                for (0..kaiser_taps) |i| {
-                    const src_y_signed: i32 = @as(i32, @intCast(y)) * 2 + kaiser_start_offset + @as(i32, @intCast(i));
-                    const src_y: u32 = @intCast(std.math.clamp(
-                        src_y_signed,
-                        0,
-                        @as(i32, @intCast(original_image.height)) - 1,
-                    ));
-                    const idx = (@as(usize, src_y) * new_image.width + x) * ch;
-                    const w = kaiser_weights[i];
-                    c[0] += scratch[idx + 0] * w;
-                    c[1] += scratch[idx + 1] * w;
-                    c[2] += scratch[idx + 2] * w;
-                    c[3] += scratch[idx + 3] * w;
+            var source_rows: [kaiser_taps]u32 = undefined;
+            for (0..kaiser_taps) |i| {
+                const src_y_signed: i32 = @as(i32, @intCast(y)) * 2 + kaiser_start_offset + @as(i32, @intCast(i));
+                const src_y: u32 = @intCast(std.math.clamp(
+                    src_y_signed,
+                    0,
+                    @as(i32, @intCast(original_image.height)) - 1,
+                ));
+                source_rows[i] = src_y;
+                const slot = @as(usize, src_y) % scratch_rows;
+                if (cached_rows[slot] == src_y) continue;
+
+                const horizontal = scratch[slot * row_samples ..][0..row_samples];
+                for (0..new_image.width) |x| {
+                    var values: [4]f32 = @splat(0);
+                    for (0..kaiser_taps) |tap| {
+                        const src_x_signed: i32 = @as(i32, @intCast(x)) * 2 + kaiser_start_offset + @as(i32, @intCast(tap));
+                        const src_x: u32 = @intCast(std.math.clamp(
+                            src_x_signed,
+                            0,
+                            @as(i32, @intCast(original_image.width)) - 1,
+                        ));
+                        const color = original_image.getPixel(src_x, src_y).?;
+                        const weight = kaiser_weights[tap];
+                        inline for (0..ch) |channel| {
+                            values[channel] += decodeChannel(class, channel, color[channel]) * weight;
+                        }
+                    }
+                    const offset = x * ch;
+                    inline for (0..ch) |channel| horizontal[offset + channel] = values[channel];
                 }
-                const rgb = class.postAverage(c[0], c[1], c[2]);
-                const out_color = [4]u8{
-                    class.encode(rgb[0]),
-                    class.encode(rgb[1]),
-                    class.encode(rgb[2]),
-                    @intFromFloat(std.math.clamp(c[3], 0.0, 1.0) * 255.0 + 0.5),
-                };
-                try new_image.setPixel(@intCast(x), @intCast(y), &out_color);
+                cached_rows[slot] = src_y;
+            }
+
+            for (0..new_image.width) |x| {
+                var values: [4]f32 = @splat(0);
+                for (0..kaiser_taps) |i| {
+                    const slot = @as(usize, source_rows[i]) % scratch_rows;
+                    const offset = slot * row_samples + x * ch;
+                    const weight = kaiser_weights[i];
+                    inline for (0..ch) |channel| values[channel] += scratch[offset + channel] * weight;
+                }
+
+                if (class == .normal_linear) {
+                    const normal = class.postAverage(values[0], values[1], values[2]);
+                    values[0] = normal[0];
+                    values[1] = normal[1];
+                    values[2] = normal[2];
+                }
+                var output: [4]u8 = undefined;
+                inline for (0..ch) |channel| output[channel] = encodeChannel(class, channel, values[channel]);
+                try new_image.setPixel(@intCast(x), @intCast(y), output[0..ch]);
             }
         }
     }
@@ -341,50 +415,73 @@ pub const RawTexture = struct {
         const src = original_image.pixels.hdr;
         const dst = new_image.pixels.hdr;
 
-        const scratch_len = @as(usize, new_image.width) * @as(usize, original_image.height) * ch;
+        const scratch_rows = scratchRowCount(original_image.height);
+        const row_samples = @as(usize, new_image.width) * ch;
+        const scratch_len = row_samples * scratch_rows;
         std.debug.assert(scratch.len >= scratch_len);
+        var cached_rows: [kaiser_taps]?u32 = @splat(null);
 
-        // Horizontal pass
-        for (0..original_image.height) |y| {
-            for (0..new_image.width) |x| {
-                var c: [4]f32 = .{ 0, 0, 0, 0 };
-                for (0..kaiser_taps) |i| {
-                    const src_x_signed: i32 = @as(i32, @intCast(x)) * 2 + kaiser_start_offset + @as(i32, @intCast(i));
-                    const src_x: u32 = @intCast(std.math.clamp(
-                        src_x_signed,
-                        0,
-                        @as(i32, @intCast(original_image.width)) - 1,
-                    ));
-                    const src_idx = (@as(usize, y) * original_image.width + src_x) * ch;
-                    const w = kaiser_weights[i];
-                    for (0..ch) |c_idx| c[c_idx] += src[src_idx + c_idx] * w;
-                }
-                const scratch_idx = (y * new_image.width + x) * ch;
-                for (0..ch) |c_idx| scratch[scratch_idx + c_idx] = c[c_idx];
-            }
-        }
-
-        // Vertical pass
         for (0..new_image.height) |y| {
+            var source_rows: [kaiser_taps]u32 = undefined;
+            for (0..kaiser_taps) |i| {
+                const src_y_signed: i32 = @as(i32, @intCast(y)) * 2 + kaiser_start_offset + @as(i32, @intCast(i));
+                const src_y: u32 = @intCast(std.math.clamp(
+                    src_y_signed,
+                    0,
+                    @as(i32, @intCast(original_image.height)) - 1,
+                ));
+                source_rows[i] = src_y;
+                const slot = @as(usize, src_y) % scratch_rows;
+                if (cached_rows[slot] == src_y) continue;
+
+                const horizontal = scratch[slot * row_samples ..][0..row_samples];
+                for (0..new_image.width) |x| {
+                    var values: [4]f32 = @splat(0);
+                    for (0..kaiser_taps) |tap| {
+                        const src_x_signed: i32 = @as(i32, @intCast(x)) * 2 + kaiser_start_offset + @as(i32, @intCast(tap));
+                        const src_x: u32 = @intCast(std.math.clamp(
+                            src_x_signed,
+                            0,
+                            @as(i32, @intCast(original_image.width)) - 1,
+                        ));
+                        const src_idx = (@as(usize, src_y) * original_image.width + src_x) * ch;
+                        const weight = kaiser_weights[tap];
+                        for (0..ch) |channel| values[channel] += src[src_idx + channel] * weight;
+                    }
+                    const offset = x * ch;
+                    for (0..ch) |channel| horizontal[offset + channel] = values[channel];
+                }
+                cached_rows[slot] = src_y;
+            }
+
             for (0..new_image.width) |x| {
-                var c: [4]f32 = .{ 0, 0, 0, 0 };
+                var values: [4]f32 = @splat(0);
                 for (0..kaiser_taps) |i| {
-                    const src_y_signed: i32 = @as(i32, @intCast(y)) * 2 + kaiser_start_offset + @as(i32, @intCast(i));
-                    const src_y: u32 = @intCast(std.math.clamp(
-                        src_y_signed,
-                        0,
-                        @as(i32, @intCast(original_image.height)) - 1,
-                    ));
-                    const scratch_idx = (@as(usize, src_y) * new_image.width + x) * ch;
-                    const w = kaiser_weights[i];
-                    for (0..ch) |c_idx| c[c_idx] += scratch[scratch_idx + c_idx] * w;
+                    const slot = @as(usize, source_rows[i]) % scratch_rows;
+                    const offset = slot * row_samples + x * ch;
+                    const weight = kaiser_weights[i];
+                    for (0..ch) |channel| values[channel] += scratch[offset + channel] * weight;
                 }
                 const dst_idx = (y * new_image.width + x) * ch;
-                for (0..ch) |c_idx| dst[dst_idx + c_idx] = c[c_idx];
+                for (0..ch) |channel| dst[dst_idx + channel] = values[channel];
             }
         }
     }
 };
+
+fn scratchRowCount(height: u32) usize {
+    return @min(@as(usize, height), kaiser_taps);
+}
+
+fn decodeChannel(comptime class: TextureClass, comptime channel: usize, value: u8) f32 {
+    if (channel == 3) return @as(f32, @floatFromInt(value)) / 255.0;
+    return class.decode(value);
+}
+
+fn encodeChannel(comptime class: TextureClass, comptime channel: usize, value: f32) u8 {
+    if (channel == 3) return @intFromFloat(std.math.clamp(value, 0.0, 1.0) * 255.0 + 0.5);
+    return class.encode(value);
+}
 
 fn allocateMip(
     allocator: std.mem.Allocator,
@@ -658,6 +755,24 @@ test "srgb LUT: midpoint is less than 0.5 due to gamma" {
     try testing.expect(TextureClass.srgb_to_linear_lut[128] < 0.25);
 }
 
+test "sRGB LUT encoder matches pow reference over u16 domain" {
+    for (0..std.math.maxInt(u16) + 1) |i| {
+        const linear = @as(f32, @floatFromInt(i)) / std.math.maxInt(u16);
+        const expected: u8 = @intFromFloat(std.math.pow(f32, linear, 1.0 / 2.2) * 255.0 + 0.5);
+        try testing.expectEqual(expected, TextureClass.color_srgb.encode(linear));
+    }
+}
+
+test "sRGB LUT encoder stays within one code over dense linear samples" {
+    for (0..100_001) |i| {
+        const linear = @as(f32, @floatFromInt(i)) / 100_000.0;
+        const expected: u8 = @intFromFloat(std.math.pow(f32, linear, 1.0 / 2.2) * 255.0 + 0.5);
+        const actual = TextureClass.color_srgb.encode(linear);
+        const difference = @abs(@as(i16, expected) - @as(i16, actual));
+        try testing.expect(difference <= 1);
+    }
+}
+
 test "init retains stb-owned decoded pixels" {
     var ppm = [_]u8{
         'P', '6', '\n', '1', ' ', '1', '\n', '2', '5', '5', '\n',
@@ -668,6 +783,41 @@ test "init retains stb-owned decoded pixels" {
 
     try testing.expectEqual(PixelOwner.stb, image.owner);
     try testing.expectEqualSlices(u8, &.{ 10, 20, 30, 255 }, image.pixels.ldr);
+}
+
+test "init compacts single-channel maps to source R" {
+    var ppm = [_]u8{
+        'P', '6', '\n', '2', ' ', '1', '\n', '2', '5', '5', '\n',
+        10,  20,  30,   40,  50,  60,
+    };
+    const image = try RawTexture.init("surface_roughness.png", &ppm);
+    defer image.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 1), image.channels);
+    try testing.expectEqualSlices(u8, &.{ 10, 40 }, image.pixels.ldr);
+}
+
+test "init decodes normal maps without unused alpha" {
+    var ppm = [_]u8{
+        'P', '6', '\n', '1', ' ', '1', '\n', '2', '5', '5', '\n',
+        128, 128, 255,
+    };
+    const image = try RawTexture.init("surface_normal.png", &ppm);
+    defer image.deinit(testing.allocator);
+
+    try testing.expectEqual(@as(u32, 3), image.channels);
+    try testing.expectEqualSlices(u8, &.{ 128, 128, 255 }, image.pixels.ldr);
+}
+
+test "mip scratch is bounded to the active Kaiser row window" {
+    const image = RawTexture{
+        .width = 2048,
+        .height = 2048,
+        .channels = 4,
+        .pixels = .{ .ldr = &.{} },
+        .class = .color_srgb,
+    };
+    try testing.expectEqual(@as(usize, 1024 * kaiser_taps * 4), image.mipScratchLen());
 }
 
 test "deinit leaves borrowed pixels alone" {
@@ -769,4 +919,22 @@ test "downsample handles non-power-of-two and single-axis dimensions" {
     try testing.expectEqual(@as(u32, 2), vertical_next.height);
     try testing.expectEqual(@as(u32, 1), vertical_last.width);
     try testing.expectEqual(@as(u32, 1), vertical_last.height);
+}
+
+test "HDR downsample uses the bounded row scratch" {
+    const alloc = testing.allocator;
+    var pixels = [_]f32{ 0.25, 0.5, 1.0 } ** (5 * 3);
+    const image = RawTexture{ .width = 5, .height = 3, .channels = 3, .pixels = .{ .hdr = &pixels }, .class = .hdr_linear };
+    const scratch = try alloc.alloc(f32, image.mipScratchLen());
+    defer alloc.free(scratch);
+
+    var next = try image.downsample(alloc, scratch);
+    defer next.deinit(alloc);
+    try testing.expectEqual(@as(u32, 2), next.width);
+    try testing.expectEqual(@as(u32, 1), next.height);
+    const expected_pixel = [_]f32{ 0.25, 0.5, 1.0 };
+    for (next.pixels.hdr, 0..) |value, index| {
+        const expected = expected_pixel[index % 3];
+        try testing.expectApproxEqAbs(expected, value, 0.0001);
+    }
 }

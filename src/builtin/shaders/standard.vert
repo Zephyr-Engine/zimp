@@ -1,21 +1,16 @@
 #version 330 core
 // VARIANTS: ALPHA_TEST, ALPHA_BLEND, DOUBLE_SIDED, HAS_ALBEDO_MAP, HAS_NORMAL_MAP, HAS_AO, HAS_EMISSIVE, HAS_METALLIC_ROUGHNESS_MAP
 
-// Semantic attribute slots — see AttributeLocation in zephyr-runtime/src/graphics/mesh.zig.
-// A slot with no bound buffer reads the GL default (0,0,0,1); the tangent path relies on it.
 layout(location = 0) in vec3 a_position;
 layout(location = 1) in vec2 a_normal_oct;
 layout(location = 2) in vec2 a_uv0;
-// location 3 is reserved for uv1 — declared in AttributeLocation but not here, because
-// nothing samples it yet. Reserving it keeps tangent pinned at 4.
+layout(location = 3) in vec2 a_uv1;
 layout(location = 4) in vec4 a_tangent;
 
 uniform mat4 u_model;
 uniform mat4 u_view;
 uniform mat4 u_projection;
 uniform mat3 u_normal_matrix;
-
-// Dequantization rect for the u16-normalized UV stream
 uniform vec2 u_uv0_min;
 uniform vec2 u_uv0_scale;
 
@@ -23,6 +18,7 @@ out vec3 v_world_pos;
 out vec3 v_normal;
 out vec4 v_tangent;
 out vec2 v_uv0;
+out vec2 v_uv1;
 
 // Meshopt-style octahedral decode. Normals arrive as two normalized shorts.
 vec3 decodeOctNormal(vec2 e) {
@@ -41,6 +37,7 @@ void main() {
   v_tangent = vec4(u_normal_matrix * a_tangent.xyz, a_tangent.w);
 
   v_uv0 = u_uv0_min + a_uv0 * u_uv0_scale;
+  v_uv1 = a_uv1;
 
   gl_Position = u_projection * u_view * world;
 }

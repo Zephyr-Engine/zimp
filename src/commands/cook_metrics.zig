@@ -62,7 +62,7 @@ pub fn logSummary(metrics: *const CookMetrics) void {
     });
 }
 
-fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
+pub fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
     if (nanoseconds >= std.time.ns_per_s) {
         const ms = @as(f64, @floatFromInt(nanoseconds)) / @as(f64, @floatFromInt(std.time.ns_per_ms));
         return std.fmt.bufPrint(buf, "{d:.2}ms", .{ms}) catch unreachable;

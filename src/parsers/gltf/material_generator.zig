@@ -291,6 +291,33 @@ const TextureOptions = struct {
     occlusion_strength: f32 = 1.0,
 };
 
+const EffectiveTextureTransform = struct {
+    uv_set: u32,
+    offset: [2]f32,
+    rotation: f32,
+    scale: [2]f32,
+};
+
+fn effectiveTransform(info: GltfTextureInfo) EffectiveTextureTransform {
+    const transform = if (info.extensions) |ext| ext.KHR_texture_transform else null;
+
+    if (transform) |t| {
+        return .{
+            .uv_set = t.texCoord orelse info.texCoord,
+            .offset = t.offset,
+            .rotation = t.rotation,
+            .scale = t.scale,
+        };
+    }
+
+    return .{
+        .uv_set = info.texCoord,
+        .offset = .{ 0, 0 },
+        .scale = .{ 1, 1 },
+        .rotation = 0,
+    };
+}
+
 fn appendTexture(
     text: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -306,14 +333,15 @@ fn appendTexture(
     const path = try texturePath(allocator, io, source_dir, source_path, gltf, buffers, info.index);
     defer allocator.free(path);
     const sampler = samplerForTexture(gltf, info.index);
+    const effective = effectiveTransform(info);
     try appendPrint(text, allocator,
         \\
         \\[texture.{s}]
         \\path = "{s}"
         \\uv_set = {d}
-        \\uv_offset = [0, 0]
-        \\uv_scale = [1, 1]
-        \\uv_rotation = 0
+        \\uv_offset = [{d}, {d}]
+        \\uv_scale = [{d}, {d}]
+        \\uv_rotation = {d}
         \\min_filter = "{s}"
         \\mag_filter = "{s}"
         \\mip_filter = "{s}"
@@ -326,7 +354,12 @@ fn appendTexture(
     , .{
         slot_name,
         path,
-        info.texCoord,
+        effective.uv_set,
+        effective.offset[0],
+        effective.offset[1],
+        effective.scale[0],
+        effective.scale[1],
+        effective.rotation,
         minFilterName(sampler.minFilter),
         magFilterName(sampler.magFilter),
         mipFilterName(sampler.minFilter),

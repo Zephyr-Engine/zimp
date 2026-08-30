@@ -5,6 +5,7 @@ in vec3 v_world_pos;
 in vec3 v_normal;
 in vec4 v_tangent;
 in vec2 v_uv0;
+in vec2 v_uv1;
 
 // --- Texture slots. Material [texture.<name>] sections name these samplers.
 uniform sampler2D u_albedo;
@@ -13,20 +14,32 @@ uniform sampler2D u_roughness_metallic_map;
 uniform sampler2D u_ao_map;
 uniform sampler2D u_emissive_map;
 
-// --- Per-slot UV transforms (KHR_texture_transform). Identity until Phase 2.
-//     xy = scale, zw = offset. Rotation is folded in by the CPU side.
-uniform vec4 u_albedo_uv_transform;
-uniform vec4 u_normal_uv_transform;
-uniform vec4 u_orm_uv_transform;
-uniform vec4 u_ao_uv_transform;
-uniform vec4 u_emissive_uv_transform;
+// --- Per-slot UV transforms (KHR_texture_transform).
+uniform int u_albedo_uv_set;
+uniform mat3 u_albedo_uv_transform;
+
+uniform int u_normal_map_uv_set;
+uniform mat3 u_normal_map_uv_transform;
+
+uniform int u_roughness_metallic_map_uv_set;
+uniform mat3 u_roughness_metallic_map_uv_transform;
+
+uniform int u_ao_map_uv_set;
+uniform mat3 u_ao_map_uv_transform;
+
+uniform int u_emissive_map_uv_set;
+uniform mat3 u_emissive_map_uv_transform;
+
+vec2 slotUv(int uv_set, mat3 transform) {
+  vec2 source = uv_set == 1 ? v_uv1 : v_uv0;
+  return (transform * vec3(source, 1.0)).xy;
+}
 
 // --- Material params.
 uniform vec4 u_base_color;
 uniform float u_metallic;
 uniform float u_roughness;
 uniform vec3 u_emissive;
-uniform vec2 u_uv_scale;
 uniform float u_normal_scale;
 uniform float u_occlusion_strength;
 uniform float u_alpha_cutoff;
@@ -93,7 +106,8 @@ mat3 cotangentFrame(vec3 N, vec3 p, vec2 uv) {
   vec3 T = dp2perp * du1.x + dp1perp * du2.x;
   vec3 B = dp2perp * du1.y + dp1perp * du2.y;
 
-  float invmax = inversesqrt(max(dot(T, T), dot(B, B)));
+  float frame_size = max(dot(T, T), dot(B, B));
+  float invmax = inversesqrt(max(frame_size, 1e-8));
   return mat3(T * invmax, B * invmax, N);
 }
 
@@ -103,11 +117,12 @@ vec3 tonemapACES(vec3 x) {
 }
 
 void main() {
-  vec2 uv = v_uv0 * u_uv_scale;
-
   vec4 base = u_base_color;
   #ifdef HAS_ALBEDO_MAP
-  base *= texture(u_albedo, applyTransform(uv, u_albedo_uv_transform));
+  base *= texture(
+      u_albedo,
+      slotUv(u_albedo_uv_set, u_albedo_uv_transform)
+    );
   #endif
 
   #ifdef ALPHA_TEST
@@ -119,18 +134,23 @@ void main() {
   float ao = 1.0;
 
   #ifdef HAS_METALLIC_ROUGHNESS_MAP
-  // glTF packing: R = occlusion (ORM only), G = roughness, B = metallic.
-  vec3 orm = texture(u_roughness_metallic_map, applyTransform(uv, u_orm_uv_transform)).rgb;
-  roughness *= orm.g;
-  metallic *= orm.b;
+  vec3 mr = texture(
+      u_roughness_metallic_map,
+      slotUv(
+        u_roughness_metallic_map_uv_set,
+        u_roughness_metallic_map_uv_transform
+      )
+    ).rgb;
+  roughness *= mr.g;
+  metallic *= mr.b;
   #endif
 
   #ifdef HAS_AO
-  #ifdef HAS_METALLIC_ROUGHNESS_MAP
-  ao = mix(1.0, orm.r, u_occlusion_strength);
-  #else
-  ao = mix(1.0, texture(u_ao_map, applyTransform(uv, u_ao_uv_transform)).r, u_occlusion_strength);
-  #endif
+  float sampled_ao = texture(
+      u_ao_map,
+      slotUv(u_ao_map_uv_set, u_ao_map_uv_transform)
+    ).r;
+  ao = mix(1.0, sampled_ao, u_occlusion_strength);
   #endif
 
   // Clamp away the mirror singularity that makes GGX produce fireflies.
@@ -142,19 +162,24 @@ void main() {
   #endif
 
   #ifdef HAS_NORMAL_MAP
-  vec2 nuv = applyTransform(uv, u_normal_uv_transform);
-  vec3 tn = texture(u_normal_map, nuv).xyz * 2.0 - 1.0;
-  tn.xy *= u_normal_scale;
+  vec2 normal_uv = slotUv(
+      u_normal_map_uv_set,
+      u_normal_map_uv_transform
+    );
+
+  vec2 normal_xy = texture(u_normal_map, normal_uv).rg * 2.0 - 1.0;
+  normal_xy *= u_normal_scale;
+  float normal_z = sqrt(max(1.0 - dot(normal_xy, normal_xy), 0.0));
+  vec3 tangent_normal = normalize(vec3(normal_xy, normal_z));
 
   mat3 TBN;
-  if (abs(v_tangent.w) > 0.5) {
-    // Gram-Schmidt against the interpolated normal; w carries handedness.
+  if (dot(v_tangent.xyz, v_tangent.xyz) > 1e-8) {
     vec3 T = normalize(v_tangent.xyz - N * dot(N, v_tangent.xyz));
     TBN = mat3(T, cross(N, T) * v_tangent.w, N);
   } else {
-    TBN = cotangentFrame(N, v_world_pos, nuv);
+    TBN = cotangentFrame(N, v_world_pos, normal_uv);
   }
-  N = normalize(TBN * tn);
+  N = normalize(TBN * tangent_normal);
   #endif
 
   vec3 V = normalize(u_camera_pos - v_world_pos);
@@ -181,7 +206,10 @@ void main() {
 
   vec3 emissive = u_emissive;
   #ifdef HAS_EMISSIVE
-  emissive *= texture(u_emissive_map, applyTransform(uv, u_emissive_uv_transform)).rgb;
+  emissive *= texture(
+      u_emissive_map,
+      slotUv(u_emissive_map_uv_set, u_emissive_map_uv_transform)
+    ).rgb;
   #endif
 
   vec3 color = Lo * ao + AMBIENT * diffuse_color * ao + emissive;

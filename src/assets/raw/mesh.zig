@@ -82,7 +82,6 @@ pub const RawVertex = struct {
             if (uv[i] < 0.0 or uv[i] > 1.0) {
                 log.warn("uv1 value {d} is outside [0,1]", .{uv[i]});
             }
-            break;
         }
 
         const bounds = UV0Bounds{

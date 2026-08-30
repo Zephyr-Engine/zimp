@@ -12,11 +12,12 @@ pub fn cooker() Cooker {
 }
 
 fn cookTexture(input: *const CookInput) !void {
+    const temporary_allocator = input.temporary_allocator orelse input.allocator;
     const raw = try RawTexture.init(input.source.path, @constCast(input.bytes));
-    defer raw.deinit(input.allocator);
+    defer raw.deinit(temporary_allocator);
 
-    var cooked = try CookedTexture.cook(input.allocator, &raw);
-    defer cooked.deinit(input.allocator);
+    var cooked = try CookedTexture.cook(temporary_allocator, &raw);
+    defer cooked.deinit(temporary_allocator);
 
     try Zatex.write(input.writer, cooked);
 }
