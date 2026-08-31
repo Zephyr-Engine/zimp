@@ -261,6 +261,56 @@ fn fileMatches(dir: std.Io.Dir, io: std.Io, allocator: std.mem.Allocator, path: 
     return std.mem.eql(u8, result.bytes, bytes);
 }
 
+fn renderStateText(allocator: std.mem.Allocator, state: raw_material.RenderState) ![]const u8 {
+    const defaults = raw_material.RenderState{};
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(allocator);
+
+    if (state.alpha_mode != defaults.alpha_mode) {
+        try appendPrint(&text, allocator, "alpha_mode = \"{s}\"\n", .{
+            @tagName(state.alpha_mode),
+        });
+    }
+
+    if (state.alpha_mode == .alpha_test and state.alpha_cutoff != defaults.alpha_cutoff) {
+        try appendPrint(&text, allocator, "alpha_cutoff = {d}\n", .{
+            state.alpha_cutoff,
+        });
+    }
+
+    if (state.double_sided != defaults.double_sided) {
+        try appendPrint(&text, allocator, "double_sided = {s}\n", .{
+            if (state.double_sided) "true" else "false",
+        });
+    }
+
+    if (state.cull_mode != defaults.cull_mode) {
+        try appendPrint(&text, allocator, "cull_mode = \"{s}\"\n", .{
+            @tagName(state.cull_mode),
+        });
+    }
+
+    if (state.depth_test != defaults.depth_test) {
+        try appendPrint(&text, allocator, "depth_test = {s}\n", .{
+            if (state.depth_test) "true" else "false",
+        });
+    }
+
+    if (state.depth_write != defaults.depth_write) {
+        try appendPrint(&text, allocator, "depth_write = {s}\n", .{
+            if (state.depth_write) "true" else "false",
+        });
+    }
+
+    if (state.blend_mode != defaults.blend_mode) {
+        try appendPrint(&text, allocator, "blend_mode = \"{s}\"\n", .{
+            @tagName(state.blend_mode),
+        });
+    }
+
+    return text.toOwnedSlice(allocator);
+}
+
 fn writeMaterialText(
     text: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -276,27 +326,24 @@ fn writeMaterialText(
         \\# Auto-generated from {s} - {s}
         \\[material]
         \\shader = "{s}"
-        \\
-        \\[render_state]
-        \\alpha_mode = "{s}"
-        \\alpha_cutoff = {d}
-        \\double_sided = {s}
-        \\cull_mode = "{s}"
-        \\depth_test = true
-        \\depth_write = {s}
-        \\blend_mode = "{s}"
-        \\
     , .{
         source_path,
         material_name,
         DEFAULT_SHADER,
-        mapAlphaMode(material.alphaMode),
-        material.alphaCutoff,
-        if (material.doubleSided) "true" else "false",
-        if (material.doubleSided) "none" else "back",
-        if (isAlphaBlend(material.alphaMode)) "false" else "true",
-        mapBlendMode(material.alphaMode),
     });
+
+    const render_state = material.renderState();
+    const render_state_text = try renderStateText(allocator, render_state);
+    defer allocator.free(render_state_text);
+
+    if (render_state_text.len > 0) {
+        try appendPrint(text, allocator,
+            \\
+            \\[render_state]
+            \\{s}
+            \\
+        , .{render_state_text});
+    }
 
     if (material.pbrMetallicRoughness) |pbr| {
         if (pbr.baseColorTexture) |info| {
@@ -372,11 +419,37 @@ fn writeMaterialText(
     }
 
     const pbr = material.pbrMetallicRoughness orelse GltfPbr{};
-    try text.appendSlice(allocator, "\n[params]\n");
-    try appendParamVec4(text, allocator, "u_base_color", pbr.baseColorFactor);
-    try appendParamFloat(text, allocator, "u_metallic", pbr.metallicFactor);
-    try appendParamFloat(text, allocator, "u_roughness", pbr.roughnessFactor);
-    try appendParamVec3(text, allocator, "u_emissive", material.emissiveFactor orelse .{ 0, 0, 0 });
+    const default_pbr = GltfPbr{};
+    const emissive = material.emissiveFactor orelse .{ 0, 0, 0 };
+
+    const has_base_color =
+        pbr.baseColorTexture != null or
+        !std.mem.eql(f32, &pbr.baseColorFactor, &default_pbr.baseColorFactor);
+    const has_metallic = pbr.metallicFactor != default_pbr.metallicFactor;
+    const has_roughness = pbr.roughnessFactor != default_pbr.roughnessFactor;
+    const has_emissive = !std.mem.eql(f32, &emissive, &[_]f32{ 0, 0, 0 });
+
+    const has_params =
+        has_base_color or
+        has_metallic or
+        has_roughness or
+        has_emissive;
+
+    if (has_params) {
+        try text.appendSlice(allocator, "\n[params]\n");
+        if (has_base_color) {
+            try appendParamVec4(text, allocator, "u_base_color", pbr.baseColorFactor);
+        }
+        if (has_metallic) {
+            try appendParamFloat(text, allocator, "u_metallic", pbr.metallicFactor);
+        }
+        if (has_roughness) {
+            try appendParamFloat(text, allocator, "u_roughness", pbr.roughnessFactor);
+        }
+        if (has_emissive) {
+            try appendParamVec3(text, allocator, "u_emissive", emissive);
+        }
+    }
 }
 
 const TextureOptions = struct {
@@ -411,6 +484,119 @@ fn effectiveTransform(info: GltfTextureInfo) EffectiveTextureTransform {
     };
 }
 
+fn textureSlotProperties(allocator: std.mem.Allocator, slot: *const raw_material.TextureSlot) ![]const u8 {
+    const defaults = raw_material.TextureSlot{
+        .slot_name = "",
+        .texture_path = "",
+    };
+    const sampler_defaults: raw_material.SamplerDesc = .{};
+
+    var text: std.ArrayList(u8) = .empty;
+    defer text.deinit(allocator);
+
+    if (slot.uv_set != defaults.uv_set) {
+        try appendPrint(&text, allocator, "uv_set = {d}\n", .{
+            slot.uv_set,
+        });
+    }
+
+    if (!std.mem.eql(f32, &slot.uv_offset, &defaults.uv_offset)) {
+        try appendPrint(&text, allocator, "uv_offset = [{d}, {d}]\n", .{
+            slot.uv_offset[0],
+            slot.uv_offset[1],
+        });
+    }
+
+    if (!std.mem.eql(f32, &slot.uv_scale, &defaults.uv_scale)) {
+        try appendPrint(&text, allocator, "uv_scale = [{d}, {d}]\n", .{
+            slot.uv_scale[0],
+            slot.uv_scale[1],
+        });
+    }
+
+    if (slot.uv_rotation != defaults.uv_rotation) {
+        try appendPrint(&text, allocator, "uv_rotation = {d}\n", .{
+            slot.uv_rotation,
+        });
+    }
+
+    if (slot.sampler.min_filter != sampler_defaults.min_filter) {
+        try appendPrint(&text, allocator, "min_filter = \"{s}\"\n", .{
+            @tagName(slot.sampler.min_filter),
+        });
+    }
+
+    if (slot.sampler.mag_filter != sampler_defaults.mag_filter) {
+        try appendPrint(&text, allocator, "mag_filter = \"{s}\"\n", .{
+            @tagName(slot.sampler.mag_filter),
+        });
+    }
+
+    if (slot.sampler.mip_filter != sampler_defaults.mip_filter) {
+        try appendPrint(&text, allocator, "mip_filter = \"{s}\"\n", .{
+            @tagName(slot.sampler.mip_filter),
+        });
+    }
+
+    if (slot.sampler.wrap_s != sampler_defaults.wrap_s) {
+        try appendPrint(&text, allocator, "wrap_s = \"{s}\"\n", .{
+            @tagName(slot.sampler.wrap_s),
+        });
+    }
+
+    if (slot.sampler.wrap_t != sampler_defaults.wrap_t) {
+        try appendPrint(&text, allocator, "wrap_t = \"{s}\"\n", .{
+            @tagName(slot.sampler.wrap_t),
+        });
+    }
+
+    if (slot.sampler.max_anisotropy != sampler_defaults.max_anisotropy) {
+        try appendPrint(&text, allocator, "max_anisotropy = {d}\n", .{
+            slot.sampler.max_anisotropy,
+        });
+    }
+
+    if (slot.normal_scale != defaults.normal_scale) {
+        try appendPrint(&text, allocator, "normal_scale = {d}\n", .{
+            slot.normal_scale,
+        });
+    }
+
+    if (slot.occlusion_strength != defaults.occlusion_strength) {
+        try appendPrint(&text, allocator, "occlusion_strength = {d}\n", .{
+            slot.occlusion_strength,
+        });
+    }
+
+    return text.toOwnedSlice(allocator);
+}
+
+fn toTextureSlot(
+    slot_name: []const u8,
+    texture_path: []const u8,
+    sampler: *const GltfSampler,
+    transform: *const EffectiveTextureTransform,
+    options: *const TextureOptions,
+) raw_material.TextureSlot {
+    return .{
+        .sampler = .{
+            .min_filter = filterMode(sampler.minFilter),
+            .mag_filter = filterMode(sampler.magFilter),
+            .mip_filter = mipFilterMode(sampler.minFilter),
+            .wrap_s = wrapMode(sampler.wrapS),
+            .wrap_t = wrapMode(sampler.wrapT),
+        },
+        .slot_name = slot_name,
+        .texture_path = texture_path,
+        .uv_set = @intCast(transform.uv_set),
+        .uv_offset = transform.offset,
+        .uv_scale = transform.scale,
+        .uv_rotation = transform.rotation,
+        .normal_scale = options.normal_scale,
+        .occlusion_strength = options.occlusion_strength,
+    };
+}
+
 fn appendTexture(
     text: *std.ArrayList(u8),
     allocator: std.mem.Allocator,
@@ -437,39 +623,26 @@ fn appendTexture(
 
     const sampler = samplerForTexture(gltf, info.index);
     const effective = effectiveTransform(info);
+    const texture_slot = toTextureSlot(
+        role.slotName(),
+        generated.path,
+        &sampler,
+        &effective,
+        &options,
+    );
+    const properties = try textureSlotProperties(allocator, &texture_slot);
+    defer allocator.free(properties);
+
     try appendPrint(text, allocator,
         \\
         \\[texture.{s}]
         \\path = "{s}"
-        \\uv_set = {d}
-        \\uv_offset = [{d}, {d}]
-        \\uv_scale = [{d}, {d}]
-        \\uv_rotation = {d}
-        \\min_filter = "{s}"
-        \\mag_filter = "{s}"
-        \\mip_filter = "{s}"
-        \\wrap_s = "{s}"
-        \\wrap_t = "{s}"
-        \\max_anisotropy = 1
-        \\normal_scale = {d}
-        \\occlusion_strength = {d}
+        \\{s}
         \\
     , .{
         role.slotName(),
         generated.path,
-        effective.uv_set,
-        effective.offset[0],
-        effective.offset[1],
-        effective.scale[0],
-        effective.scale[1],
-        effective.rotation,
-        minFilterName(sampler.minFilter),
-        magFilterName(sampler.magFilter),
-        mipFilterName(sampler.minFilter),
-        wrapName(sampler.wrapS),
-        wrapName(sampler.wrapT),
-        options.normal_scale,
-        options.occlusion_strength,
+        properties,
     });
 }
 
@@ -596,24 +769,6 @@ fn writeGeneratedTexture(allocator: std.mem.Allocator, io: std.Io, source_dir: s
     return true;
 }
 
-fn mapAlphaMode(value: ?[]const u8) []const u8 {
-    const mode = value orelse return "solid";
-    if (std.ascii.eqlIgnoreCase(mode, "MASK")) return "alpha_test";
-    if (std.ascii.eqlIgnoreCase(mode, "BLEND")) return "alpha_blend";
-    return "solid";
-}
-
-fn mapBlendMode(value: ?[]const u8) []const u8 {
-    const mode = value orelse return "disabled";
-    if (std.ascii.eqlIgnoreCase(mode, "BLEND")) return "alpha";
-    return "disabled";
-}
-
-fn isAlphaBlend(value: ?[]const u8) bool {
-    const mode = value orelse return false;
-    return std.ascii.eqlIgnoreCase(mode, "BLEND");
-}
-
 fn appendParamFloat(text: *std.ArrayList(u8), allocator: std.mem.Allocator, name: []const u8, value: f32) !void {
     try appendPrint(text, allocator, "{s} = {d:.6}\n", .{ name, value });
 }
@@ -633,33 +788,26 @@ fn samplerForTexture(gltf: *const GltfJson, texture_index: u32) GltfSampler {
     return gltf.samplers[sampler_index];
 }
 
-fn minFilterName(value: ?u32) []const u8 {
+fn filterMode(value: ?u32) raw_material.FilterMode {
     return switch (value orelse 9987) {
-        9728, 9984, 9986 => "nearest",
-        else => "linear",
+        9728, 9984, 9986 => .nearest,
+        else => .linear,
     };
 }
 
-fn magFilterName(value: ?u32) []const u8 {
-    return switch (value orelse 9729) {
-        9728 => "nearest",
-        else => "linear",
-    };
-}
-
-fn mipFilterName(value: ?u32) []const u8 {
+fn mipFilterMode(value: ?u32) raw_material.MipFilterMode {
     return switch (value orelse 9987) {
-        9728, 9729 => "none",
-        9984, 9985 => "nearest",
-        else => "linear",
+        9728, 9729 => .none,
+        9984, 9985 => .nearest,
+        else => .linear,
     };
 }
 
-fn wrapName(value: u32) []const u8 {
+fn wrapMode(value: u32) raw_material.WrapMode {
     return switch (value) {
-        33071 => "clamp_to_edge",
-        33648 => "mirrored_repeat",
-        else => "repeat",
+        33071 => .clamp_to_edge,
+        33648 => .mirrored_repeat,
+        else => .repeat,
     };
 }
 
@@ -785,12 +933,13 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expect(std.mem.indexOf(u8, bytes, "wrap_s = \"clamp_to_edge\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "wrap_t = \"mirrored_repeat\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color =") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness =") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color = [1, 1, 1, 1]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness =") == null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_metallic = 0") != null);
 
     var parsed = try raw_material.parseMaterialSource(bytes, testing.allocator);
     defer parsed.deinit(testing.allocator);
-    try testing.expectEqual(@as(usize, 4), parsed.params.len);
+    try testing.expectEqual(@as(usize, 2), parsed.params.len);
 }
 
 test "generateFromGltf writes material with no textures" {
@@ -807,10 +956,11 @@ test "generateFromGltf writes material with no textures" {
 
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/solid_material_0.zamat");
     defer testing.allocator.free(bytes);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[render_state]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[render_state]") == null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.") == null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color = [1, 0, 0, 1]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness =") == null);
 }
 
 test "generateFromGltf creates a default slot material when gltf has no materials" {
@@ -824,7 +974,8 @@ test "generateFromGltf creates a default slot material when gltf has no material
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/plain_DefaultMaterial.zamat");
     defer testing.allocator.free(bytes);
     try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"zephyr/standard\"") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[render_state]") == null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[params]") == null);
 }
 
 test "resolveMaterialPaths preserves gltf order and selects handwritten overrides" {
@@ -937,4 +1088,7 @@ test "generateFromGltf extracts embedded image bytes" {
     defer testing.allocator.free(mat);
     try testing.expect(std.mem.indexOf(u8, mat, "[texture.u_albedo]") != null);
     try testing.expect(std.mem.indexOf(u8, mat, "path = \"generated/textures/cube_albedo_albedo.png\"") != null);
+    try testing.expect(std.mem.indexOf(u8, mat, "uv_set =") == null);
+    try testing.expect(std.mem.indexOf(u8, mat, "min_filter =") == null);
+    try testing.expect(std.mem.indexOf(u8, mat, "max_anisotropy =") == null);
 }
