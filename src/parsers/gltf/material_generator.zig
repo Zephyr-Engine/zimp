@@ -437,36 +437,15 @@ fn writeMaterialText(
     }
 
     const pbr = material.pbrMetallicRoughness orelse GltfPbr{};
-    const default_pbr = GltfPbr{};
     const emissive = material.emissiveFactor orelse .{ 0, 0, 0 };
-
-    const has_base_color =
-        pbr.baseColorTexture != null or
-        !std.mem.eql(f32, &pbr.baseColorFactor, &default_pbr.baseColorFactor);
-    const has_metallic = pbr.metallicFactor != default_pbr.metallicFactor;
-    const has_roughness = pbr.roughnessFactor != default_pbr.roughnessFactor;
     const has_emissive = !std.mem.eql(f32, &emissive, &[_]f32{ 0, 0, 0 });
 
-    const has_params =
-        has_base_color or
-        has_metallic or
-        has_roughness or
-        has_emissive;
-
-    if (has_params) {
-        try text.appendSlice(allocator, "\n[params]\n");
-        if (has_base_color) {
-            try appendParamVec4(text, allocator, "u_base_color", pbr.baseColorFactor);
-        }
-        if (has_metallic) {
-            try appendParamFloat(text, allocator, "u_metallic", pbr.metallicFactor);
-        }
-        if (has_roughness) {
-            try appendParamFloat(text, allocator, "u_roughness", pbr.roughnessFactor);
-        }
-        if (has_emissive) {
-            try appendParamVec3(text, allocator, "u_emissive", emissive);
-        }
+    try text.appendSlice(allocator, "\n[params]\n");
+    try appendParamVec4(text, allocator, "u_base_color", pbr.baseColorFactor);
+    try appendParamFloat(text, allocator, "u_metallic", pbr.metallicFactor);
+    try appendParamFloat(text, allocator, "u_roughness", pbr.roughnessFactor);
+    if (has_emissive) {
+        try appendParamVec3(text, allocator, "u_emissive", emissive);
     }
 
     return textures_changed;
@@ -963,12 +942,12 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expect(std.mem.indexOf(u8, bytes, "wrap_t = \"mirrored_repeat\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color = [1, 1, 1, 1]") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness =") == null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness = 1") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "u_metallic = 0") != null);
 
     var parsed = try raw_material.parseMaterialSource(bytes, testing.allocator);
     defer parsed.deinit(testing.allocator);
-    try testing.expectEqual(@as(usize, 2), parsed.params.len);
+    try testing.expectEqual(@as(usize, 3), parsed.params.len);
 
     try writeTestFile(tmp.dir, "meshes/cube_albedo.png", &.{ 4, 5, 6 });
     const refreshed = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube_textured.glb", &gltf.value, &.{});
@@ -999,7 +978,8 @@ test "generateFromGltf writes material with no textures" {
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.") == null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color = [1, 0, 0, 1]") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness =") == null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_metallic = 0") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness = 1") != null);
 }
 
 test "generateFromGltf creates a default slot material when gltf has no materials" {
@@ -1014,7 +994,10 @@ test "generateFromGltf creates a default slot material when gltf has no material
     defer testing.allocator.free(bytes);
     try testing.expect(std.mem.indexOf(u8, bytes, "shader = \"zephyr/standard\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[render_state]") == null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "[params]") == null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "[params]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_base_color = [1, 1, 1, 1]") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_metallic = 1") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "u_roughness = 1") != null);
 }
 
 test "resolveMaterialPaths preserves gltf order and selects handwritten overrides" {
