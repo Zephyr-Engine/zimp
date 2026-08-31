@@ -466,9 +466,13 @@ test "build refreshes generated textures from unchanged gltf sources" {
     var refreshed_plan = try build(testing.allocator, &ctx, &cache, &refreshed_metrics);
     defer refreshed_plan.deinit(testing.allocator);
 
+    const generated_texture_path = try std.fmt.allocPrint(testing.allocator, "generated/textures/scene_{x}_image_0_albedo.png", .{
+        SourceFile.fromPath("scene.gltf").hashPath(),
+    });
+    defer testing.allocator.free(generated_texture_path);
     var found_generated_texture = false;
     for (refreshed_plan.records.items) |record| {
-        if (std.mem.eql(u8, record.source.path, "generated/textures/scene_image_0_albedo.png")) {
+        if (std.mem.eql(u8, record.source.path, generated_texture_path)) {
             found_generated_texture = true;
             break;
         }
@@ -476,7 +480,7 @@ test "build refreshes generated textures from unchanged gltf sources" {
     try testing.expect(found_generated_texture);
 
     const external_image = SourceFile.fromPath("albedo.png");
-    const generated_texture = SourceFile.fromPath("generated/textures/scene_image_0_albedo.png");
+    const generated_texture = SourceFile.fromPath(generated_texture_path);
     try testing.expectEqual(
         try external_image.hash(source_dir, testing.io),
         try generated_texture.hash(source_dir, testing.io),

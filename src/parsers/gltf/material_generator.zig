@@ -860,14 +860,16 @@ fn generatedTexturePath(
     fallback_extension: ?[]const u8,
 ) ![]u8 {
     const source_stem = std.fs.path.stem(source_path);
+    const source_hash = SourceFile.fromPath(source_path).hashPath();
     const raw_name = image_name orelse try std.fmt.allocPrint(allocator, "image_{d}", .{image_index});
     const allocated_name = image_name == null;
     defer if (allocated_name) allocator.free(raw_name);
 
     const safe_name = try sanitizeName(allocator, raw_name);
     defer allocator.free(safe_name);
-    return std.fmt.allocPrint(allocator, GENERATED_TEXTURE_DIR ++ "/{s}_{s}_{s}.{s}", .{
+    return std.fmt.allocPrint(allocator, GENERATED_TEXTURE_DIR ++ "/{s}_{x}_{s}_{s}.{s}", .{
         source_stem,
+        source_hash,
         safe_name,
         role.suffix(),
         imageExtension(mime_type, fallback_extension),
@@ -945,8 +947,12 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expect(std.mem.indexOf(u8, bytes, "double_sided = true") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "cull_mode = \"none\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.u_albedo]") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "path = \"generated/textures/cube_textured_image_0_albedo.png\"") != null);
-    const tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_textured_image_0_albedo.png");
+    const texture_path = try generatedTexturePath(testing.allocator, .albedo, "meshes/cube_textured.glb", null, 0, null, "png");
+    defer testing.allocator.free(texture_path);
+    const texture_reference = try std.fmt.allocPrint(testing.allocator, "path = \"{s}\"", .{texture_path});
+    defer testing.allocator.free(texture_reference);
+    try testing.expect(std.mem.indexOf(u8, bytes, texture_reference) != null);
+    const tex = try readTestFile(testing.allocator, tmp.dir, texture_path);
     defer testing.allocator.free(tex);
     try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, tex);
     try testing.expect(std.mem.indexOf(u8, bytes, "uv_set = 1") != null);
@@ -970,7 +976,7 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expectEqual(@as(usize, 1), refreshed.textures);
     try testing.expect(refreshed.changed());
 
-    const refreshed_tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_textured_image_0_albedo.png");
+    const refreshed_tex = try readTestFile(testing.allocator, tmp.dir, texture_path);
     defer testing.allocator.free(refreshed_tex);
     try testing.expectEqualSlices(u8, &.{ 4, 5, 6 }, refreshed_tex);
 }
@@ -1113,15 +1119,59 @@ test "generateFromGltf extracts embedded image bytes" {
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube.glb", &gltf.value, &.{&bin});
     try testing.expectEqual(@as(usize, 1), count.materials);
 
-    const tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_albedo_albedo.png");
+    const texture_path = try generatedTexturePath(testing.allocator, .albedo, "meshes/cube.glb", "albedo", 0, "image/png", null);
+    defer testing.allocator.free(texture_path);
+    const tex = try readTestFile(testing.allocator, tmp.dir, texture_path);
     defer testing.allocator.free(tex);
     try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, tex);
 
     const mat = try readTestFile(testing.allocator, tmp.dir, "generated/materials/cube_Mat.zamat");
     defer testing.allocator.free(mat);
     try testing.expect(std.mem.indexOf(u8, mat, "[texture.u_albedo]") != null);
-    try testing.expect(std.mem.indexOf(u8, mat, "path = \"generated/textures/cube_albedo_albedo.png\"") != null);
+    const texture_reference = try std.fmt.allocPrint(testing.allocator, "path = \"{s}\"", .{texture_path});
+    defer testing.allocator.free(texture_reference);
+    try testing.expect(std.mem.indexOf(u8, mat, texture_reference) != null);
     try testing.expect(std.mem.indexOf(u8, mat, "uv_set =") == null);
     try testing.expect(std.mem.indexOf(u8, mat, "min_filter =") == null);
     try testing.expect(std.mem.indexOf(u8, mat, "max_anisotropy =") == null);
+}
+
+test "generateFromGltf namespaces textures by source path" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    var first = try Gltf.parse(
+        \\{
+        \\  "materials":[{"name":"First","pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+        \\  "textures":[{"source":0}],
+        \\  "images":[{"uri":"image.png"}]
+        \\}
+    , testing.allocator);
+    defer first.deinit();
+    var second = try Gltf.parse(
+        \\{
+        \\  "materials":[{"name":"Second","pbrMetallicRoughness":{"baseColorTexture":{"index":0}}}],
+        \\  "textures":[{"source":0}],
+        \\  "images":[{"uri":"image.png"}]
+        \\}
+    , testing.allocator);
+    defer second.deinit();
+    try writeTestFile(tmp.dir, "a/image.png", &.{ 1, 2, 3 });
+    try writeTestFile(tmp.dir, "b/image.png", &.{ 4, 5, 6 });
+
+    _ = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "a/model.gltf", &first.value, &.{});
+    _ = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "b/model.gltf", &second.value, &.{});
+
+    const first_path = try generatedTexturePath(testing.allocator, .albedo, "a/model.gltf", null, 0, null, "png");
+    defer testing.allocator.free(first_path);
+    const second_path = try generatedTexturePath(testing.allocator, .albedo, "b/model.gltf", null, 0, null, "png");
+    defer testing.allocator.free(second_path);
+    try testing.expect(!std.mem.eql(u8, first_path, second_path));
+
+    const first_texture = try readTestFile(testing.allocator, tmp.dir, first_path);
+    defer testing.allocator.free(first_texture);
+    const second_texture = try readTestFile(testing.allocator, tmp.dir, second_path);
+    defer testing.allocator.free(second_texture);
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, first_texture);
+    try testing.expectEqualSlices(u8, &.{ 4, 5, 6 }, second_texture);
 }
