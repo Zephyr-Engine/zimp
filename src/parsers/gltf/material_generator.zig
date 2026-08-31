@@ -21,6 +21,34 @@ const DEFAULT_SHADER = builtin.PREFIX ++ "standard";
 const GENERATED_MATERIAL_DIR = "generated/materials";
 const GENERATED_TEXTURE_DIR = "generated/textures";
 
+const TextureRole = enum {
+    albedo,
+    normal,
+    roughness_metallic,
+    ao,
+    emissive,
+
+    fn suffix(self: TextureRole) []const u8 {
+        return switch (self) {
+            .albedo => "albedo",
+            .normal => "normal",
+            .roughness_metallic => "rm",
+            .ao => "ao",
+            .emissive => "emissive",
+        };
+    }
+
+    fn slotName(self: TextureRole) []const u8 {
+        return switch (self) {
+            .albedo => "u_albedo",
+            .normal => "u_normal_map",
+            .roughness_metallic => "u_roughness_metallic_map",
+            .ao => "u_ao_map",
+            .emissive => "u_emissive_map",
+        };
+    }
+};
+
 pub fn generateForSources(
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -271,12 +299,77 @@ fn writeMaterialText(
     });
 
     if (material.pbrMetallicRoughness) |pbr| {
-        if (pbr.baseColorTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_albedo", info, .{});
-        if (pbr.metallicRoughnessTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_roughness_metallic_map", info, .{});
+        if (pbr.baseColorTexture) |info| {
+            try appendTexture(
+                text,
+                allocator,
+                io,
+                source_dir,
+                source_path,
+                gltf,
+                buffers,
+                .albedo,
+                info,
+                .{},
+            );
+        }
+        if (pbr.metallicRoughnessTexture) |info| {
+            try appendTexture(
+                text,
+                allocator,
+                io,
+                source_dir,
+                source_path,
+                gltf,
+                buffers,
+                .roughness_metallic,
+                info,
+                .{},
+            );
+        }
     }
-    if (material.normalTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_normal_map", info, .{ .normal_scale = info.scale orelse 1.0 });
-    if (material.occlusionTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_ao_map", info, .{ .occlusion_strength = info.strength orelse 1.0 });
-    if (material.emissiveTexture) |info| try appendTexture(text, allocator, io, source_dir, source_path, gltf, buffers, "u_emissive_map", info, .{});
+    if (material.normalTexture) |info| {
+        try appendTexture(
+            text,
+            allocator,
+            io,
+            source_dir,
+            source_path,
+            gltf,
+            buffers,
+            .normal,
+            info,
+            .{ .normal_scale = info.scale orelse 1.0 },
+        );
+    }
+    if (material.occlusionTexture) |info| {
+        try appendTexture(
+            text,
+            allocator,
+            io,
+            source_dir,
+            source_path,
+            gltf,
+            buffers,
+            .ao,
+            info,
+            .{ .occlusion_strength = info.strength orelse 1.0 },
+        );
+    }
+    if (material.emissiveTexture) |info| {
+        try appendTexture(
+            text,
+            allocator,
+            io,
+            source_dir,
+            source_path,
+            gltf,
+            buffers,
+            .emissive,
+            info,
+            .{},
+        );
+    }
 
     const pbr = material.pbrMetallicRoughness orelse GltfPbr{};
     try text.appendSlice(allocator, "\n[params]\n");
@@ -326,12 +419,22 @@ fn appendTexture(
     source_path: []const u8,
     gltf: *const GltfJson,
     buffers: []const []const u8,
-    slot_name: []const u8,
+    role: TextureRole,
     info: GltfTextureInfo,
     options: TextureOptions,
 ) !void {
-    const path = try texturePath(allocator, io, source_dir, source_path, gltf, buffers, info.index);
-    defer allocator.free(path);
+    const generated = try texturePath(
+        allocator,
+        io,
+        role,
+        source_dir,
+        source_path,
+        gltf,
+        buffers,
+        info.index,
+    );
+    defer allocator.free(generated.path);
+
     const sampler = samplerForTexture(gltf, info.index);
     const effective = effectiveTransform(info);
     try appendPrint(text, allocator,
@@ -352,8 +455,8 @@ fn appendTexture(
         \\occlusion_strength = {d}
         \\
     , .{
-        slot_name,
-        path,
+        role.slotName(),
+        generated.path,
         effective.uv_set,
         effective.offset[0],
         effective.offset[1],
@@ -370,44 +473,127 @@ fn appendTexture(
     });
 }
 
+const GeneratedTexture = struct {
+    path: []const u8,
+    changed: bool,
+};
+
 fn texturePath(
     allocator: std.mem.Allocator,
     io: std.Io,
+    role: TextureRole,
     source_dir: std.Io.Dir,
     source_path: []const u8,
     gltf: *const GltfJson,
     buffers: []const []const u8,
     texture_index: u32,
-) ![]u8 {
-    if (texture_index >= gltf.textures.len) return error.TextureIndexOutOfBounds;
-    const image_index = gltf.textures[texture_index].source orelse return error.TextureMissingSource;
-    if (image_index >= gltf.images.len) return error.ImageIndexOutOfBounds;
-    const image = gltf.images[image_index];
+) !GeneratedTexture {
+    if (texture_index >= gltf.textures.len) {
+        return error.TextureIndexOutOfBounds;
+    }
 
+    const image_index = gltf.textures[texture_index].source orelse return error.TextureMissingSource;
+    if (image_index >= gltf.images.len) {
+        return error.ImageIndexOutOfBounds;
+    }
+
+    const image = gltf.images[image_index];
     if (image.uri) |uri| {
-        return resolveRelativeUri(allocator, source_path, uri);
+        const source_image_path =
+            try resolveRelativeUri(allocator, source_path, uri);
+        defer allocator.free(source_image_path);
+
+        const image_result = try file_read.readFileAllocChunked(
+            allocator,
+            io,
+            source_dir,
+            source_image_path,
+            .{},
+        );
+        defer allocator.free(image_result.bytes);
+
+        const extension = std.fs.path.extension(source_image_path);
+        if (extension.len < 2) {
+            return error.ImageExtensionMissing;
+        }
+
+        const generated_path = try generatedTexturePath(
+            allocator,
+            role,
+            source_path,
+            image.name,
+            image_index,
+            image.mimeType,
+            extension[1..],
+        );
+
+        return .{
+            .path = generated_path,
+            .changed = try writeGeneratedTexture(
+                allocator,
+                io,
+                source_dir,
+                generated_path,
+                image_result.bytes,
+            ),
+        };
     }
 
     const buffer_view_index = image.bufferView orelse return error.ImageMissingData;
-    if (buffer_view_index >= gltf.bufferViews.len) return error.BufferViewIndexOutOfBounds;
+    if (buffer_view_index >= gltf.bufferViews.len) {
+        return error.BufferViewIndexOutOfBounds;
+    }
+
     const view = gltf.bufferViews[buffer_view_index];
-    if (view.buffer >= buffers.len) return error.BufferIndexOutOfBounds;
+    if (view.buffer >= buffers.len) {
+        return error.BufferIndexOutOfBounds;
+    }
+
     const buffer = buffers[view.buffer];
     const start: usize = view.byteOffset;
     const end = start + view.byteLength;
-    if (end > buffer.len) return error.ImageOutOfBounds;
-
-    const path = try generatedTexturePath(allocator, source_path, image.name, image_index, image.mimeType);
-    errdefer allocator.free(path);
-    if (!file_read.fileExists(source_dir, io, path)) {
-        const file = try source_dir.createFile(io, path, .{});
-        var buf: [4096]u8 = undefined;
-        var writer = file.writer(io, &buf);
-        try writer.interface.writeAll(buffer[start..end]);
-        try writer.interface.flush();
-        file.close(io);
+    if (end > buffer.len) {
+        return error.ImageOutOfBounds;
     }
-    return path;
+
+    const path = try generatedTexturePath(
+        allocator,
+        role,
+        source_path,
+        image.name,
+        image_index,
+        image.mimeType,
+        null,
+    );
+    errdefer allocator.free(path);
+
+    return .{
+        .path = path,
+        .changed = try writeGeneratedTexture(
+            allocator,
+            io,
+            source_dir,
+            path,
+            buffer[start..end],
+        ),
+    };
+}
+
+fn writeGeneratedTexture(allocator: std.mem.Allocator, io: std.Io, source_dir: std.Io.Dir, path: []const u8, bytes: []const u8) !bool {
+    if (try fileMatches(source_dir, io, allocator, path, bytes)) {
+        return false;
+    }
+
+    var pending = try AtomicFile.create(allocator, io, source_dir, path);
+    defer pending.deinit();
+
+    var buf: [4096]u8 = undefined;
+    var writer = pending.file.writer(io, &buf);
+    try writer.interface.writeAll(bytes);
+    try writer.interface.flush();
+    try pending.commit();
+
+    return true;
 }
 
 fn mapAlphaMode(value: ?[]const u8) []const u8 {
@@ -496,10 +682,12 @@ fn handwrittenMaterialPath(allocator: std.mem.Allocator, filename: []const u8) !
 
 fn generatedTexturePath(
     allocator: std.mem.Allocator,
+    role: TextureRole,
     source_path: []const u8,
     image_name: ?[]const u8,
     image_index: usize,
     mime_type: ?[]const u8,
+    fallback_extension: ?[]const u8,
 ) ![]u8 {
     const source_stem = std.fs.path.stem(source_path);
     const raw_name = image_name orelse try std.fmt.allocPrint(allocator, "image_{d}", .{image_index});
@@ -508,11 +696,16 @@ fn generatedTexturePath(
 
     const safe_name = try sanitizeName(allocator, raw_name);
     defer allocator.free(safe_name);
-    return std.fmt.allocPrint(allocator, GENERATED_TEXTURE_DIR ++ "/{s}_{s}.{s}", .{ source_stem, safe_name, imageExtension(mime_type) });
+    return std.fmt.allocPrint(allocator, GENERATED_TEXTURE_DIR ++ "/{s}_{s}_{s}.{s}", .{
+        source_stem,
+        safe_name,
+        role.suffix(),
+        imageExtension(mime_type, fallback_extension),
+    });
 }
 
-fn imageExtension(mime_type: ?[]const u8) []const u8 {
-    const mime = mime_type orelse return "bin";
+fn imageExtension(mime_type: ?[]const u8, fallback: ?[]const u8) []const u8 {
+    const mime = mime_type orelse return fallback orelse "bin";
     if (std.mem.eql(u8, mime, "image/png")) return "png";
     if (std.mem.eql(u8, mime, "image/jpeg")) return "jpg";
     if (std.mem.eql(u8, mime, "image/jpg")) return "jpg";
@@ -569,6 +762,7 @@ test "generateFromGltf writes material with external texture and params" {
         \\}
     , testing.allocator);
     defer gltf.deinit();
+    try writeTestFile(tmp.dir, "meshes/cube_albedo.png", &.{ 1, 2, 3 });
 
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube_textured.glb", &gltf.value, &.{});
     try testing.expectEqual(@as(usize, 1), count);
@@ -580,7 +774,10 @@ test "generateFromGltf writes material with external texture and params" {
     try testing.expect(std.mem.indexOf(u8, bytes, "double_sided = true") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "cull_mode = \"none\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "[texture.u_albedo]") != null);
-    try testing.expect(std.mem.indexOf(u8, bytes, "path = \"meshes/cube_albedo.png\"") != null);
+    try testing.expect(std.mem.indexOf(u8, bytes, "path = \"generated/textures/cube_textured_image_0_albedo.png\"") != null);
+    const tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_textured_image_0_albedo.png");
+    defer testing.allocator.free(tex);
+    try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, tex);
     try testing.expect(std.mem.indexOf(u8, bytes, "uv_set = 1") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "min_filter = \"nearest\"") != null);
     try testing.expect(std.mem.indexOf(u8, bytes, "mag_filter = \"nearest\"") != null);
@@ -687,6 +884,7 @@ test "generateFromGltf preserves occlusion texture strength" {
         \\}
     , testing.allocator);
     defer gltf.deinit();
+    try writeTestFile(tmp.dir, "meshes/ao.png", &.{ 1, 2, 3 });
 
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube.glb", &gltf.value, &.{});
     try testing.expectEqual(@as(usize, 1), count);
@@ -731,12 +929,12 @@ test "generateFromGltf extracts embedded image bytes" {
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube.glb", &gltf.value, &.{&bin});
     try testing.expectEqual(@as(usize, 1), count);
 
-    const tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_albedo.png");
+    const tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_albedo_albedo.png");
     defer testing.allocator.free(tex);
     try testing.expectEqualSlices(u8, &.{ 1, 2, 3 }, tex);
 
     const mat = try readTestFile(testing.allocator, tmp.dir, "generated/materials/cube_Mat.zamat");
     defer testing.allocator.free(mat);
     try testing.expect(std.mem.indexOf(u8, mat, "[texture.u_albedo]") != null);
-    try testing.expect(std.mem.indexOf(u8, mat, "path = \"generated/textures/cube_albedo.png\"") != null);
+    try testing.expect(std.mem.indexOf(u8, mat, "path = \"generated/textures/cube_albedo_albedo.png\"") != null);
 }

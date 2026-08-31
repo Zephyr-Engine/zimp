@@ -131,7 +131,10 @@ pub fn appendExternalDependencies(
 }
 
 pub fn resolveRelativeUri(allocator: std.mem.Allocator, source_path: []const u8, uri: []const u8) GltfUriError![]u8 {
-    if (uri.len == 0) return GltfUriError.EmptyUri;
+    if (uri.len == 0) {
+        return GltfUriError.EmptyUri;
+    }
+
     if (hasUriScheme(uri) or std.mem.startsWith(u8, uri, "//")) {
         return GltfUriError.UnsupportedUri;
     }
