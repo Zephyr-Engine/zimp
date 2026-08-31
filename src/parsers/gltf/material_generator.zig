@@ -21,6 +21,23 @@ const DEFAULT_SHADER = builtin.PREFIX ++ "standard";
 const GENERATED_MATERIAL_DIR = "generated/materials";
 const GENERATED_TEXTURE_DIR = "generated/textures";
 
+/// Files written while generating materials for a source.  Texture copies are
+/// intentionally tracked separately: their containing material may be
+/// byte-for-byte unchanged while the texture it references has been updated.
+pub const GenerationResult = struct {
+    materials: usize = 0,
+    textures: usize = 0,
+
+    pub fn changed(self: GenerationResult) bool {
+        return self.materials != 0 or self.textures != 0;
+    }
+
+    fn merge(self: *GenerationResult, other: GenerationResult) void {
+        self.materials += other.materials;
+        self.textures += other.textures;
+    }
+};
+
 const TextureRole = enum {
     albedo,
     normal,
@@ -54,19 +71,19 @@ pub fn generateForSources(
     io: std.Io,
     source_dir: std.Io.Dir,
     sources: []const SourceFile,
-) !usize {
-    var generated: usize = 0;
+) !GenerationResult {
+    var result: GenerationResult = .{};
     for (sources) |source| {
         if (source.extension != .glb and source.extension != .gltf and source.extension != .obj) {
             continue;
         }
 
-        generated += generateForSource(allocator, io, source_dir, source.path, source.extension) catch |err| {
+        result.merge(generateForSource(allocator, io, source_dir, source.path, source.extension) catch |err| {
             log.warn("Failed to auto-generate materials for '{s}': {s}", .{ source.path, @errorName(err) });
             continue;
-        };
+        });
     }
-    return generated;
+    return result;
 }
 
 pub fn generateForSource(
@@ -75,7 +92,7 @@ pub fn generateForSource(
     source_dir: std.Io.Dir,
     file_path: []const u8,
     extension: Extension,
-) !usize {
+) !GenerationResult {
     switch (extension) {
         .glb => {
             const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{
@@ -98,7 +115,7 @@ pub fn generateForSource(
             return generateFromGltf(allocator, io, source_dir, file_path, &document.gltf.value, document.buffers);
         },
         .obj => return generateDefaultMaterial(allocator, io, source_dir, file_path),
-        else => return 0,
+        else => return .{},
     }
 }
 
@@ -109,7 +126,7 @@ pub fn generateFromGltf(
     source_path: []const u8,
     gltf: *const GltfJson,
     buffers: []const []const u8,
-) !usize {
+) !GenerationResult {
     if (gltf.materials.len == 0) {
         return generateDefaultMaterial(allocator, io, source_dir, source_path);
     }
@@ -117,7 +134,7 @@ pub fn generateFromGltf(
     try source_dir.createDirPath(io, GENERATED_MATERIAL_DIR);
     try source_dir.createDirPath(io, GENERATED_TEXTURE_DIR);
 
-    var generated: usize = 0;
+    var result: GenerationResult = .{};
     for (gltf.materials, 0..) |material, i| {
         const material_name = material.name orelse try std.fmt.allocPrint(allocator, "material_{d}", .{i});
         const allocated_name = material.name == null;
@@ -135,7 +152,7 @@ pub fn generateFromGltf(
 
         var text: std.ArrayList(u8) = .empty;
         defer text.deinit(allocator);
-        try writeMaterialText(
+        result.textures += try writeMaterialText(
             &text,
             allocator,
             io,
@@ -159,11 +176,11 @@ pub fn generateFromGltf(
         try writer.interface.flush();
         try pending.commit();
 
-        generated += 1;
+        result.materials += 1;
         log.debug("Generated material '{s}' from '{s}'", .{ output_path, source_path });
     }
 
-    return generated;
+    return result;
 }
 
 pub fn resolveMaterialPaths(
@@ -223,23 +240,23 @@ fn generateDefaultMaterial(
     io: std.Io,
     source_dir: std.Io.Dir,
     source_path: []const u8,
-) !usize {
+) !GenerationResult {
     try source_dir.createDirPath(io, GENERATED_MATERIAL_DIR);
 
     const output_path = try generatedMaterialPath(allocator, source_path, "DefaultMaterial");
     defer allocator.free(output_path);
     const hand_path = try handwrittenMaterialPath(allocator, std.fs.path.basename(output_path));
     defer allocator.free(hand_path);
-    if (file_read.fileExists(source_dir, io, hand_path)) return 0;
+    if (file_read.fileExists(source_dir, io, hand_path)) return .{};
 
     var text: std.ArrayList(u8) = .empty;
     defer text.deinit(allocator);
     const empty: GltfJson = .{};
-    try writeMaterialText(&text, allocator, io, source_dir, source_path, &empty, &.{}, .{
+    _ = try writeMaterialText(&text, allocator, io, source_dir, source_path, &empty, &.{}, .{
         .name = "DefaultMaterial",
         .pbrMetallicRoughness = .{},
     }, "DefaultMaterial");
-    if (try fileMatches(source_dir, io, allocator, output_path, text.items)) return 0;
+    if (try fileMatches(source_dir, io, allocator, output_path, text.items)) return .{};
 
     var pending = try AtomicFile.create(allocator, io, source_dir, output_path);
     defer pending.deinit();
@@ -249,7 +266,7 @@ fn generateDefaultMaterial(
     try writer.interface.flush();
     try pending.commit();
     log.debug("Generated default material '{s}' from '{s}'", .{ output_path, source_path });
-    return 1;
+    return .{ .materials = 1 };
 }
 
 fn fileMatches(dir: std.Io.Dir, io: std.Io, allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) !bool {
@@ -321,7 +338,8 @@ fn writeMaterialText(
     buffers: []const []const u8,
     material: GltfMaterial,
     material_name: []const u8,
-) !void {
+) !usize {
+    var textures_changed: usize = 0;
     try appendPrint(text, allocator,
         \\# Auto-generated from {s} - {s}
         \\[material]
@@ -347,7 +365,7 @@ fn writeMaterialText(
 
     if (material.pbrMetallicRoughness) |pbr| {
         if (pbr.baseColorTexture) |info| {
-            try appendTexture(
+            textures_changed += @intFromBool(try appendTexture(
                 text,
                 allocator,
                 io,
@@ -358,10 +376,10 @@ fn writeMaterialText(
                 .albedo,
                 info,
                 .{},
-            );
+            ));
         }
         if (pbr.metallicRoughnessTexture) |info| {
-            try appendTexture(
+            textures_changed += @intFromBool(try appendTexture(
                 text,
                 allocator,
                 io,
@@ -372,11 +390,11 @@ fn writeMaterialText(
                 .roughness_metallic,
                 info,
                 .{},
-            );
+            ));
         }
     }
     if (material.normalTexture) |info| {
-        try appendTexture(
+        textures_changed += @intFromBool(try appendTexture(
             text,
             allocator,
             io,
@@ -387,10 +405,10 @@ fn writeMaterialText(
             .normal,
             info,
             .{ .normal_scale = info.scale orelse 1.0 },
-        );
+        ));
     }
     if (material.occlusionTexture) |info| {
-        try appendTexture(
+        textures_changed += @intFromBool(try appendTexture(
             text,
             allocator,
             io,
@@ -401,10 +419,10 @@ fn writeMaterialText(
             .ao,
             info,
             .{ .occlusion_strength = info.strength orelse 1.0 },
-        );
+        ));
     }
     if (material.emissiveTexture) |info| {
-        try appendTexture(
+        textures_changed += @intFromBool(try appendTexture(
             text,
             allocator,
             io,
@@ -415,7 +433,7 @@ fn writeMaterialText(
             .emissive,
             info,
             .{},
-        );
+        ));
     }
 
     const pbr = material.pbrMetallicRoughness orelse GltfPbr{};
@@ -450,6 +468,8 @@ fn writeMaterialText(
             try appendParamVec3(text, allocator, "u_emissive", emissive);
         }
     }
+
+    return textures_changed;
 }
 
 const TextureOptions = struct {
@@ -608,7 +628,7 @@ fn appendTexture(
     role: TextureRole,
     info: GltfTextureInfo,
     options: TextureOptions,
-) !void {
+) !bool {
     const generated = try texturePath(
         allocator,
         io,
@@ -644,6 +664,8 @@ fn appendTexture(
         generated.path,
         properties,
     });
+
+    return generated.changed;
 }
 
 const GeneratedTexture = struct {
@@ -912,8 +934,9 @@ test "generateFromGltf writes material with external texture and params" {
     defer gltf.deinit();
     try writeTestFile(tmp.dir, "meshes/cube_albedo.png", &.{ 1, 2, 3 });
 
-    const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube_textured.glb", &gltf.value, &.{});
-    try testing.expectEqual(@as(usize, 1), count);
+    const result = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube_textured.glb", &gltf.value, &.{});
+    try testing.expectEqual(@as(usize, 1), result.materials);
+    try testing.expectEqual(@as(usize, 1), result.textures);
 
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/cube_textured_WoodMaterial.zamat");
     defer testing.allocator.free(bytes);
@@ -940,6 +963,16 @@ test "generateFromGltf writes material with external texture and params" {
     var parsed = try raw_material.parseMaterialSource(bytes, testing.allocator);
     defer parsed.deinit(testing.allocator);
     try testing.expectEqual(@as(usize, 2), parsed.params.len);
+
+    try writeTestFile(tmp.dir, "meshes/cube_albedo.png", &.{ 4, 5, 6 });
+    const refreshed = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube_textured.glb", &gltf.value, &.{});
+    try testing.expectEqual(@as(usize, 0), refreshed.materials);
+    try testing.expectEqual(@as(usize, 1), refreshed.textures);
+    try testing.expect(refreshed.changed());
+
+    const refreshed_tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_textured_image_0_albedo.png");
+    defer testing.allocator.free(refreshed_tex);
+    try testing.expectEqualSlices(u8, &.{ 4, 5, 6 }, refreshed_tex);
 }
 
 test "generateFromGltf writes material with no textures" {
@@ -952,7 +985,7 @@ test "generateFromGltf writes material with no textures" {
     defer gltf.deinit();
 
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/solid.gltf", &gltf.value, &.{});
-    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(@as(usize, 1), count.materials);
 
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/solid_material_0.zamat");
     defer testing.allocator.free(bytes);
@@ -969,7 +1002,7 @@ test "generateFromGltf creates a default slot material when gltf has no material
 
     const gltf: GltfJson = .{};
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/plain.gltf", &gltf, &.{});
-    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(@as(usize, 1), count.materials);
 
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/plain_DefaultMaterial.zamat");
     defer testing.allocator.free(bytes);
@@ -1000,7 +1033,7 @@ test "generateForSource creates a default material for obj" {
     defer tmp.cleanup();
 
     const count = try generateForSource(testing.allocator, testing.io, tmp.dir, "meshes/monkey.obj", .obj);
-    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(@as(usize, 1), count.materials);
     try testing.expect(file_read.fileExists(tmp.dir, testing.io, "generated/materials/monkey_DefaultMaterial.zamat"));
 }
 
@@ -1014,7 +1047,7 @@ test "generateFromGltf disables depth writes for blended materials" {
     defer gltf.deinit();
 
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/glass.gltf", &gltf.value, &.{});
-    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(@as(usize, 1), count.materials);
 
     const bytes = try readTestFile(testing.allocator, tmp.dir, "generated/materials/glass_Glass.zamat");
     defer testing.allocator.free(bytes);
@@ -1038,7 +1071,7 @@ test "generateFromGltf preserves occlusion texture strength" {
     try writeTestFile(tmp.dir, "meshes/ao.png", &.{ 1, 2, 3 });
 
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube.glb", &gltf.value, &.{});
-    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(@as(usize, 1), count.materials);
 
     const mat = try readTestFile(testing.allocator, tmp.dir, "generated/materials/cube_Mat.zamat");
     defer testing.allocator.free(mat);
@@ -1058,7 +1091,7 @@ test "generateFromGltf does not overwrite handwritten material" {
     defer gltf.deinit();
 
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube_textured.glb", &gltf.value, &.{});
-    try testing.expectEqual(@as(usize, 0), count);
+    try testing.expectEqual(@as(usize, 0), count.materials);
     try testing.expect(!file_read.fileExists(tmp.dir, testing.io, "generated/materials/cube_textured_WoodMaterial.zamat"));
 }
 
@@ -1078,7 +1111,7 @@ test "generateFromGltf extracts embedded image bytes" {
 
     const bin = [_]u8{ 0xaa, 1, 2, 3, 0xbb };
     const count = try generateFromGltf(testing.allocator, testing.io, tmp.dir, "meshes/cube.glb", &gltf.value, &.{&bin});
-    try testing.expectEqual(@as(usize, 1), count);
+    try testing.expectEqual(@as(usize, 1), count.materials);
 
     const tex = try readTestFile(testing.allocator, tmp.dir, "generated/textures/cube_albedo_albedo.png");
     defer testing.allocator.free(tex);

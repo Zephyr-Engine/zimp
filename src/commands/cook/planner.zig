@@ -68,8 +68,6 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
     var scanned = try scanner.scanDetailed();
     errdefer scanner.deinitDetailed(&scanned);
 
-    var generation_sources: std.ArrayList(SourceFile) = .empty;
-    defer generation_sources.deinit(allocator);
     for (scanned.files.items) |source| {
         if (builtin_registry.isBuiltin(source.path)) {
             log.err("Project asset: '{s}' is using reserved builtin namespace: '{s}'", .{
@@ -78,15 +76,19 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
             });
             return error.ReservedAssetPath;
         }
-
-        if (try needsMaterialGeneration(source, ctx, cache)) {
-            try generation_sources.append(allocator, source);
-        }
     }
 
-    const generated_materials = try material_generator.generateForSources(allocator, ctx.io, ctx.source, generation_sources.items);
-    if (generated_materials > 0) {
-        log.debug("Generated {d} material source file(s), rescanning assets", .{generated_materials});
+    const generation = try material_generator.generateForSources(
+        allocator,
+        ctx.io,
+        ctx.source,
+        scanned.files.items,
+    );
+    if (generation.changed()) {
+        log.debug("Generated {d} material and {d} texture source file(s), rescanning assets", .{
+            generation.materials,
+            generation.textures,
+        });
         scanner.deinitDetailed(&scanned);
         scanned = try scanner.scanDetailed();
     }
@@ -160,28 +162,6 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         .dependents = graphs.dependents,
         .orphan_sidecars = scanned.orphan_sidecars,
     };
-}
-
-fn needsMaterialGeneration(source: SourceFile, ctx: *const CookContext, cache: *const Cache) !bool {
-    if (source.extension != .glb and source.extension != .gltf and source.extension != .obj) {
-        return false;
-    }
-
-    const cache_index = cache.getIdx(source) orelse return true;
-    const entry = cache.entries.items[cache_index];
-    if (entry.isErrored()) {
-        return true;
-    }
-
-    const info = try source.getFileInfo(ctx.source, ctx.io);
-    if (entry.source_size != info.size) {
-        return true;
-    }
-    if (entry.source_mtime == info.modified_ns) {
-        return false;
-    }
-
-    return entry.content_hash != try source.hash(ctx.source, ctx.io);
 }
 
 fn materialTopologyChanged(allocator: std.mem.Allocator, sources: []const SourceFile, cache: *const Cache) !bool {
@@ -450,6 +430,57 @@ test "buildDependencyGraph refreshes stale cached dependency rows" {
 
     const deps = graph.getDependenciesByHash(source.hashPath()) orelse return error.MissingDependency;
     try testing.expectEqual(SourceFile.fromPath("new.glsl").hashPath(), deps.items[0]);
+}
+
+test "build refreshes generated textures from unchanged gltf sources" {
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+
+    try writeTestFile(tmp.dir, "scene.gltf",
+        \\{
+        \\  "materials": [{"pbrMetallicRoughness": {"baseColorTexture": {"index": 0}}}],
+        \\  "textures": [{"source": 0}],
+        \\  "images": [{"uri": "albedo.png"}]
+        \\}
+    );
+    try writeTestFile(tmp.dir, "albedo.png", &.{ 1, 2, 3 });
+
+    const source_dir = try std.Io.Dir.openDir(tmp.dir, testing.io, ".", .{ .iterate = true });
+    defer source_dir.close(testing.io);
+    var cache = try Cache.init(testing.allocator, source_dir, ".");
+    defer cache.deinit(testing.allocator);
+    const ctx = CookContext{
+        .io = testing.io,
+        .source = source_dir,
+        .output = source_dir,
+        .output_path = ".",
+        .force = false,
+    };
+
+    var initial_metrics: CookMetrics = .{};
+    var initial_plan = try build(testing.allocator, &ctx, &cache, &initial_metrics);
+    defer initial_plan.deinit(testing.allocator);
+
+    try writeTestFile(tmp.dir, "albedo.png", &.{ 4, 5, 6 });
+    var refreshed_metrics: CookMetrics = .{};
+    var refreshed_plan = try build(testing.allocator, &ctx, &cache, &refreshed_metrics);
+    defer refreshed_plan.deinit(testing.allocator);
+
+    var found_generated_texture = false;
+    for (refreshed_plan.records.items) |record| {
+        if (std.mem.eql(u8, record.source.path, "generated/textures/scene_image_0_albedo.png")) {
+            found_generated_texture = true;
+            break;
+        }
+    }
+    try testing.expect(found_generated_texture);
+
+    const external_image = SourceFile.fromPath("albedo.png");
+    const generated_texture = SourceFile.fromPath("generated/textures/scene_image_0_albedo.png");
+    try testing.expectEqual(
+        try external_image.hash(source_dir, testing.io),
+        try generated_texture.hash(source_dir, testing.io),
+    );
 }
 
 test "validateUniqueOutputs rejects sources with the same cooked path" {
