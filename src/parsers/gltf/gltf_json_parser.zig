@@ -1,5 +1,11 @@
 const std = @import("std");
+
 pub const AccessorView = @import("accessor_view.zig").AccessorView;
+const material = @import("../../assets/raw/material.zig");
+
+const RenderState = material.RenderState;
+const AlphaMode = material.AlphaMode;
+const BlendMode = material.BlendMode;
 
 pub const Gltf = struct {
     value: GltfJson,
@@ -192,6 +198,30 @@ pub const GltfBuffer = struct {
     uri: ?[]const u8 = null,
 };
 
+fn mapAlphaMode(value: ?[]const u8) AlphaMode {
+    const mode = value orelse return .solid;
+    if (std.ascii.eqlIgnoreCase(mode, "MASK")) {
+        return .alpha_test;
+    }
+    if (std.ascii.eqlIgnoreCase(mode, "BLEND")) {
+        return .alpha_blend;
+    }
+    return .solid;
+}
+
+fn mapBlendMode(value: ?[]const u8) BlendMode {
+    const mode = value orelse return .disabled;
+    if (std.ascii.eqlIgnoreCase(mode, "BLEND")) {
+        return .alpha;
+    }
+    return .disabled;
+}
+
+fn isAlphaBlend(value: ?[]const u8) bool {
+    const mode = value orelse return false;
+    return std.ascii.eqlIgnoreCase(mode, "BLEND");
+}
+
 pub const GltfMaterial = struct {
     name: ?[]const u8 = null,
     pbrMetallicRoughness: ?GltfPbr = null,
@@ -202,6 +232,18 @@ pub const GltfMaterial = struct {
     alphaMode: ?[]const u8 = null,
     alphaCutoff: f32 = 0.5,
     doubleSided: bool = false,
+
+    pub fn renderState(self: *const GltfMaterial) RenderState {
+        return .{
+            .alpha_mode = mapAlphaMode(self.alphaMode),
+            .alpha_cutoff = self.alphaCutoff,
+            .double_sided = self.doubleSided,
+            .cull_mode = if (self.doubleSided) .none else .back,
+            .depth_test = true,
+            .depth_write = if (isAlphaBlend(self.alphaMode)) false else true,
+            .blend_mode = mapBlendMode(self.alphaMode),
+        };
+    }
 };
 
 pub const GltfPbr = struct {
@@ -212,11 +254,23 @@ pub const GltfPbr = struct {
     metallicRoughnessTexture: ?GltfTextureInfo = null,
 };
 
+pub const GlftTextureTransform = struct {
+    offset: [2]f32 = .{ 0, 0 },
+    rotation: f32 = 0,
+    scale: [2]f32 = .{ 1, 1 },
+    texCoord: ?u32 = null,
+};
+
+pub const GlftTextureExtensions = struct {
+    KHR_texture_transform: ?GlftTextureTransform = null,
+};
+
 pub const GltfTextureInfo = struct {
     index: u32,
     texCoord: u32 = 0,
     scale: ?f32 = null,
     strength: ?f32 = null,
+    extensions: ?GlftTextureExtensions = null,
 };
 
 pub const GltfTexture = struct {
@@ -490,6 +544,22 @@ test "parse materials with pbr" {
     try testing.expectEqual(3, mat.occlusionTexture.?.index);
     try testing.expectEqual(@as(f32, 0.4), mat.occlusionTexture.?.strength.?);
     try testing.expectEqual(4, mat.emissiveTexture.?.index);
+
+    const state = mat.renderState();
+    try testing.expectEqual(AlphaMode.alpha_test, state.alpha_mode);
+    try testing.expectEqual(@as(f32, 0.33), state.alpha_cutoff);
+    try testing.expect(state.double_sided);
+    try testing.expectEqual(material.CullMode.none, state.cull_mode);
+    try testing.expect(state.depth_write);
+    try testing.expectEqual(BlendMode.disabled, state.blend_mode);
+}
+
+test "material render state maps blended glTF materials" {
+    const material_source: GltfMaterial = .{ .alphaMode = "BLEND" };
+    const state = material_source.renderState();
+    try testing.expectEqual(AlphaMode.alpha_blend, state.alpha_mode);
+    try testing.expect(!state.depth_write);
+    try testing.expectEqual(BlendMode.alpha, state.blend_mode);
 }
 
 test "parse material with pbr defaults" {

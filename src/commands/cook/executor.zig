@@ -64,6 +64,7 @@ const CookJob = struct {
 
         var runner = CookJobRunner{
             .allocator = arena.allocator(),
+            .temporary_allocator = self.allocator,
             .ctx = self.ctx,
             .cache = self.cache,
             .record = self.record,
@@ -77,6 +78,7 @@ const CookJob = struct {
 
 const CookJobRunner = struct {
     allocator: std.mem.Allocator,
+    temporary_allocator: std.mem.Allocator,
     ctx: *const CookContext,
     cache: *const Cache,
     record: *const SourceRecord,
@@ -261,6 +263,7 @@ const CookJobRunner = struct {
         result.output_path = cooked_path;
         const input = CookInput{
             .allocator = self.allocator,
+            .temporary_allocator = self.temporary_allocator,
             .io = self.ctx.io,
             .source_dir = self.ctx.source,
             .source = self.record.source,

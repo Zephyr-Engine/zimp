@@ -39,6 +39,27 @@ pub fn encode(src: []const u8, width: u32, height: u32, dst: []u8) void {
 /// BC7 mode 6 palette weights for 4-bit indices, scaled by 64.
 const weights4 = [16]u32{ 0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64 };
 
+/// Nearest BC7 weight for every integer projection in the [0, 64] weight
+/// domain. Ties deliberately select the lower selector, matching the
+/// exhaustive search's first-match behavior.
+const nearest_weight_index: [65]u4 = blk: {
+    @setEvalBranchQuota(2_000);
+    var table: [65]u4 = undefined;
+    for (0..65) |projected| {
+        var best: u4 = 0;
+        var best_distance: u32 = std.math.maxInt(u32);
+        for (weights4, 0..) |weight, index| {
+            const distance = @abs(@as(i32, @intCast(projected)) - @as(i32, @intCast(weight)));
+            if (distance < best_distance) {
+                best = @intCast(index);
+                best_distance = @intCast(distance);
+            }
+        }
+        table[projected] = best;
+    }
+    break :blk table;
+};
+
 const Endpoint = [4]u8;
 
 /// Encode a single 4×4 RGBA block (64 bytes, row-major) as mode 6 (16 bytes).
@@ -170,6 +191,48 @@ fn expandEndpoint(q: QuantizedEndpoint) Endpoint {
 }
 
 fn closestPaletteIndex(palette: [16]Endpoint, texel: Endpoint) u4 {
+    const first = palette[0];
+    const last = palette[15];
+    var numerator: i32 = 0;
+    var denominator: u32 = 0;
+    for (0..4) |channel| {
+        const direction = @as(i32, last[channel]) - @as(i32, first[channel]);
+        numerator += (@as(i32, texel[channel]) - @as(i32, first[channel])) * direction;
+        denominator += @intCast(direction * direction);
+    }
+
+    // A constant palette always selects zero. This is common for flat-color
+    // blocks and avoids both division and selector-distance calculations.
+    if (denominator == 0) return 0;
+
+    const projected: u32 = @intCast(std.math.clamp(
+        @divTrunc(@as(i64, numerator) * 64 + @as(i64, denominator / 2), denominator),
+        0,
+        64,
+    ));
+    const center = nearest_weight_index[projected];
+    const begin: u4 = center -| 2;
+    const end: u5 = @min(@as(u5, center) + 2, 15);
+
+    var best: u4 = 0;
+    var best_err: u32 = std.math.maxInt(u32);
+    var i: u5 = begin;
+    while (i <= end) : (i += 1) {
+        const p = palette[i];
+        var err: u32 = 0;
+        for (0..4) |c| {
+            const diff: i32 = @as(i32, texel[c]) - @as(i32, p[c]);
+            err += @intCast(diff * diff);
+        }
+        if (err < best_err) {
+            best_err = err;
+            best = @intCast(i);
+        }
+    }
+    return best;
+}
+
+fn closestPaletteIndexReference(palette: [16]Endpoint, texel: Endpoint) u4 {
     var best: u4 = 0;
     var best_err: u32 = std.math.maxInt(u32);
     for (palette, 0..) |p, i| {
@@ -268,4 +331,38 @@ test "encodeBlockMode6: solid block produces constant palette" {
     // No assertion on byte-exact output (we don't ship a reference decoder),
     // but the block should encode without panicking and begin with the mode 6 bit.
     try testing.expectEqual(@as(u8, 0x40), out[0] & 0x7F);
+}
+
+test "projected selector search matches exhaustive search" {
+    var prng = std.Random.DefaultPrng.init(0x5a17_bcc7_2026);
+    const random = prng.random();
+
+    for (0..100_000) |_| {
+        var low: Endpoint = undefined;
+        var high: Endpoint = undefined;
+        for (0..4) |channel| {
+            const a = random.int(u8);
+            const b = random.int(u8);
+            low[channel] = @min(a, b);
+            high[channel] = @max(a, b);
+        }
+
+        const q0 = quantizeEndpoint(low);
+        const q1 = quantizeEndpoint(high);
+        const final0 = expandEndpoint(q0);
+        const final1 = expandEndpoint(q1);
+        var palette: [16]Endpoint = undefined;
+        for (weights4, 0..) |weight, index| {
+            for (0..4) |channel| {
+                palette[index][channel] = @intCast(((64 - weight) * @as(u32, final0[channel]) + weight * @as(u32, final1[channel]) + 32) >> 6);
+            }
+        }
+
+        var texel: Endpoint = undefined;
+        for (0..4) |channel| {
+            const span = @as(u16, high[channel]) - low[channel] + 1;
+            texel[channel] = low[channel] + @as(u8, @intCast(random.int(u16) % span));
+        }
+        try testing.expectEqual(closestPaletteIndexReference(palette, texel), closestPaletteIndex(palette, texel));
+    }
 }

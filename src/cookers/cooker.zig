@@ -4,7 +4,12 @@ const path_helpers = @import("../path.zig");
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
 
 pub const CookInput = struct {
+    /// Short-lived parser allocations. Cook jobs normally provide an arena.
     allocator: std.mem.Allocator,
+    /// Optional allocator whose `free` operation immediately reclaims large
+    /// working buffers. Texture cooking uses this instead of retaining every
+    /// mip allocation in the job arena.
+    temporary_allocator: ?std.mem.Allocator = null,
     io: std.Io,
     source_dir: std.Io.Dir,
     source: SourceFile,

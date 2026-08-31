@@ -1,6 +1,5 @@
 const std = @import("std");
 
-const slotNameToIndex = @import("../assets/cooked/material.zig").slotNameToIndex;
 const CookedMaterial = @import("../assets/cooked/material.zig").CookedMaterial;
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const raw_material = @import("../assets/raw/material.zig");
@@ -58,9 +57,6 @@ fn validateReferences(
         if (!file_read.fileExists(source_dir, io, slot.texture_path)) {
             log.warn("{s}: texture '{s}' not found", .{ file_path, slot.texture_path });
         }
-        if (slotNameToIndex(slot.slot_name) == null) {
-            log.warn("{s}: unknown texture slot '{s}'", .{ file_path, slot.slot_name });
-        }
         try validateTextureSlot(file_path, slot, &reflected);
     }
 
@@ -113,6 +109,7 @@ const UniformKind = enum {
     vec4,
     int,
     bool,
+    mat3,
     mat4,
     other,
 };
@@ -232,6 +229,7 @@ fn uniformKind(type_name: []const u8) UniformKind {
     if (std.mem.eql(u8, type_name, "vec4")) return .vec4;
     if (std.mem.eql(u8, type_name, "int")) return .int;
     if (std.mem.eql(u8, type_name, "bool")) return .bool;
+    if (std.mem.eql(u8, type_name, "mat3")) return .mat3;
     if (std.mem.eql(u8, type_name, "mat4")) return .mat4;
     return .other;
 }
@@ -273,9 +271,9 @@ fn selectRequiredVariants(
     const candidates = [_]struct { name: []const u8, enabled: bool }{
         .{ .name = "HAS_ALBEDO_MAP", .enabled = hasTexture(source, "u_albedo") },
         .{ .name = "HAS_NORMAL_MAP", .enabled = hasTexture(source, "u_normal_map") },
-        .{ .name = "HAS_AO", .enabled = hasTexture(source, "u_ao_map") or hasTexture(source, "u_orm_map") },
+        .{ .name = "HAS_AO", .enabled = hasTexture(source, "u_ao_map") },
         .{ .name = "HAS_EMISSIVE", .enabled = hasTexture(source, "u_emissive_map") },
-        .{ .name = "HAS_METALLIC_ROUGHNESS_MAP", .enabled = hasTexture(source, "u_roughness_metallic_map") or hasTexture(source, "u_orm_map") },
+        .{ .name = "HAS_METALLIC_ROUGHNESS_MAP", .enabled = hasTexture(source, "u_roughness_metallic_map") },
         .{ .name = "ALPHA_TEST", .enabled = source.render_state.alpha_mode == .alpha_test },
         .{ .name = "ALPHA_BLEND", .enabled = source.render_state.alpha_mode == .alpha_blend },
         .{ .name = "DOUBLE_SIDED", .enabled = source.render_state.double_sided },
