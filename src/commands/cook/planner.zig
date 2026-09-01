@@ -42,7 +42,6 @@ pub const CookPlan = struct {
     records: std.ArrayList(SourceRecord),
     dependencies: CsrGraph,
     dependents: CsrGraph,
-    orphan_sidecars: std.ArrayList([]u8),
 
     pub fn deinit(self: *CookPlan, allocator: std.mem.Allocator) void {
         for (self.records.items) |record| {
@@ -55,20 +54,16 @@ pub const CookPlan = struct {
 
         self.dependencies.deinit(allocator);
         self.dependents.deinit(allocator);
-        for (self.orphan_sidecars.items) |path| {
-            allocator.free(path);
-        }
-        self.orphan_sidecars.deinit(allocator);
     }
 };
 
 pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cache, metrics: *CookMetrics) !CookPlan {
     const scan_start = std.Io.Clock.Timestamp.now(ctx.io, .awake);
     const scanner = AssetScanner.init(allocator, ctx.io, ctx.source);
-    var scanned = try scanner.scanDetailed();
-    errdefer scanner.deinitDetailed(&scanned);
+    var sources = try scanner.scan();
+    errdefer scanner.deinit(&sources);
 
-    for (scanned.files.items) |source| {
+    for (sources.items) |source| {
         if (builtin_registry.isBuiltin(source.path)) {
             log.err("Project asset: '{s}' is using reserved builtin namespace: '{s}'", .{
                 source.path,
@@ -82,21 +77,22 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         allocator,
         ctx.io,
         ctx.source,
-        scanned.files.items,
+        sources.items,
     );
     if (generation.changed()) {
         log.debug("Generated {d} material and {d} texture source file(s), rescanning assets", .{
             generation.materials,
             generation.textures,
         });
-        scanner.deinitDetailed(&scanned);
-        scanned = try scanner.scanDetailed();
+        scanner.deinit(&sources);
+        sources = try scanner.scan();
     }
-    const material_topology_changed = try materialTopologyChanged(allocator, scanned.files.items, cache);
+
+    const material_topology_changed = try materialTopologyChanged(allocator, sources.items, cache);
     const scan_end = std.Io.Clock.Timestamp.now(ctx.io, .awake);
 
     metrics.scan_ns = @intCast(scan_start.durationTo(scan_end).raw.nanoseconds);
-    std.mem.sort(SourceFile, scanned.files.items, {}, struct {
+    std.mem.sort(SourceFile, sources.items, {}, struct {
         fn lessThan(_: void, a: SourceFile, b: SourceFile) bool {
             return std.mem.order(u8, a.path, b.path) == .lt;
         }
@@ -110,8 +106,8 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         }
         records.deinit(allocator);
     }
-    try records.ensureTotalCapacity(allocator, scanned.files.items.len);
-    for (scanned.files.items) |source| {
+    try records.ensureTotalCapacity(allocator, sources.items.len);
+    for (sources.items) |source| {
         const descriptor = asset_registry.descriptorForSource(source);
         const info = try source.getFileInfo(ctx.source, ctx.io);
         const output_path = if (descriptor.cooker) |cooker|
@@ -129,9 +125,8 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
                 cache.getIdx(source),
         });
     }
-    // Ownership of paths moved into records.
-    scanned.files.deinit(allocator);
-    scanned.files = .empty;
+    sources.deinit(allocator);
+    sources = .empty;
 
     metrics.assets_total = @intCast(records.items.len);
 
@@ -160,7 +155,6 @@ pub fn build(allocator: std.mem.Allocator, ctx: *const CookContext, cache: *Cach
         .records = records,
         .dependencies = graphs.dependencies,
         .dependents = graphs.dependents,
-        .orphan_sidecars = scanned.orphan_sidecars,
     };
 }
 
