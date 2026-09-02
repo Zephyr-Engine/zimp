@@ -1,23 +1,27 @@
 # Asset identity
 
-Project cooks assign an `AssetId` to every successfully cooked asset. Identity
-is independent from incremental cache state and follows these rules in order:
+Project cooks assign an `AssetId` to every successfully cooked asset.
 
-1. Sources under `generated/` receive a deterministic ID derived from their
-   normalized source path. Generated sources do not have sidecars.
-2. An authored source with a valid adjacent `.zmeta` sidecar uses the ID stored
-   in that sidecar.
-3. A new authored source receives a random UUIDv4 and a new sidecar.
+An asset ID is deterministically derived from:
 
-Sidecars are authored data and should be committed. Move a sidecar with its
-source when renaming an asset. Deleting it assigns a new ID on the next
-successful cook and breaks references to the old ID.
+1. The `project_id` stored in `.zephyr/zephyr.proj`.
+2. The asset's normalized source path relative to the project's `assets_dir`.
 
-Duplicate IDs and corrupt sidecars fail the project cook. New sidecars are
-written only after the asset manifest has been built and atomically published.
-The generated `assets.zmanifest` is sorted by source path and should not be
-committed.
+Authored and generated assets use the same rule. Asset content, timestamps,
+incremental-cache state, and cooked output are not identity inputs.
 
-The incremental cache is not identity data. Project caches live at
-`.zephyr/.zcache`; directory-mode caches live at `<output>/.zcache`. Either can
-be deleted without changing IDs preserved by authored sidecars.
+As a result:
+
+- Editing or replacing an asset's contents preserves its ID.
+- Deleting `.zcache`, cooked output, or `assets.zmanifest` preserves IDs.
+- Copying an asset to a different path produces a different ID.
+- Moving or renaming an asset changes its ID.
+- Changing the project ID changes every project asset ID.
+
+`assets.zmanifest` is generated output, sorted by source path, and should not
+be committed. Project-mode cooking recreates it deterministically. Directory
+mode does not produce asset identity or a manifest.
+
+Until an asset-move command is available, renames must also update every
+persisted `AssetId` reference and every authored path reference that targets
+the moved asset.

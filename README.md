@@ -7,7 +7,6 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
 ## Features
 
 - **Build-time cooking** — converts source assets (glTF/GLB, OBJ, PNG/JPG/HDR, GLSL, TOML materials) into flat binary formats optimized for direct GPU upload.
-- **Durable asset identity** — every authored asset gets a committed `.zmeta` sidecar carrying its `AssetId` (UUID). IDs survive recooks, cache deletion, and machine changes; renames preserve identity when the sidecar moves with the file.
 - **Asset manifest** — project cooks emit `assets.zmanifest`, a deterministic database mapping `AssetId` → source path, cooked path, kind, and content hash. The runtime resolves assets through it instead of hard-coded paths.
 - **Project mode** — `zimp cook --project <root>` reads `.zephyr/zephyr.proj` and derives all directories from the project manifest; no hand-wired source/output paths.
 - **SoA mesh layout** — vertex streams stored separately (positions, normals, UVs) so the engine binds only what each render pass needs.
@@ -26,7 +25,7 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
   ┌─────────────────────────────────────────────────────────────────────┐
   │                          Source Assets                              │
   │      .glb  .gltf  .obj  .png  .jpg  .hdr  .vert  .frag  .zamat      │
-  │      (+ committed .zmeta identity sidecars next to each source)     │
+  │                                                                     │
   └──────────────────────────────┬──────────────────────────────────────┘
                                  │
                                  ▼
@@ -43,10 +42,10 @@ Designed for the [Zephyr Game Engine](https://github.com/Zephyr-Engine) but full
                  ▼           ▼         ▼           ▼
               .zmesh      .ztex     .zshdr      .zamat
                                  │
-                                 ▼  (project mode)
+                                 ▼ 
                           ┌────────────┐
-                          │  Identity  │  resolve AssetIds (sidecar / derived / new),
-                          └──────┬─────┘  write assets.zmanifest, flush new sidecars
+                          │  Identity  │ write assets.zmanifest
+                          └──────┬─────┘
                                  │
                                  ▼
                         assets.zmanifest
@@ -131,7 +130,6 @@ zig build test --summary all
 
 zimp is the source of truth for asset identity (see [`docs/identity.md`](docs/identity.md) for the full rules):
 
-- **`.zmeta` sidecars** (`meshes/monkey.glb.zmeta`) carry each authored asset's `AssetId`. They are authored identity, committed to version control; deleting one assigns a NEW id on the next cook and breaks every reference to the asset.
 - **`assets.zmanifest`** is generated output (never committed): a deterministic, validated JSON database of every cooked asset. Identical inputs produce byte-identical manifests.
 - Ids are resolved by three frozen rules, in order: `generated/**` paths get deterministic derived ids (pure function of the path, no sidecar); an existing sidecar wins; otherwise a fresh UUIDv4 is minted and a sidecar written.
 - Duplicate ids (e.g. a file copied together with its sidecar) are a hard cook error naming both paths. Corrupt sidecars are hard errors — zimp never silently re-identifies an asset. Sidecars are flushed only after the manifest write succeeds.
@@ -286,4 +284,3 @@ Cooked paths preserve the source directory structure and replace the source exte
 - Audio (`.wav`, `.ogg`) and font (`.ttf`) cooking.
 - Skeleton/animation extraction from glTF.
 - SPIR-V shader compilation with reflection extraction for a future Vulkan backend.
-- Per-asset importer settings in `.zmeta` sidecars.

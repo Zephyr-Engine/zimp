@@ -1,10 +1,10 @@
 const std = @import("std");
-const model = @import("model.zig");
-const errors = @import("errors.zig");
-const kind_mod = @import("kind.zig");
-const AssetId = @import("../id/id_types.zig").AssetId;
+
 const ProjectId = @import("../id/id_types.zig").ProjectId;
 const atomic_file = @import("../shared/atomic_file.zig");
+const AssetId = @import("../id/id_types.zig").AssetId;
+const kind_mod = @import("kind.zig");
+const model = @import("model.zig");
 
 pub const manifest_format = "zephyr.asset_manifest";
 pub const manifest_version: u32 = 1;

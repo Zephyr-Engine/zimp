@@ -371,9 +371,10 @@ test "CookCommand.parseFromArgs rejects --project without a manifest" {
     try testing.expectError(CookError.ProjectOpenFailed, result);
 }
 
-const manifest_codec = @import("../manifest/codec.zig");
 const project_manifest_mod = @import("../project/manifest.zig");
 const builtin_registry = @import("../builtin/registry.zig");
+const manifest_derive = @import("../manifest/derive.zig");
+const manifest_codec = @import("../manifest/codec.zig");
 
 fn runProjectCook(root_path: [:0]const u8) !void {
     const args: []const [:0]const u8 = &.{ "zimp", "cook", "--project", root_path };
@@ -382,7 +383,7 @@ fn runProjectCook(root_path: [:0]const u8) !void {
     try cmd.run(.none);
 }
 
-test "project cook lifecycle: ids are minted once and survive everything but sidecar loss" {
+test "project cook derives stable ids" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -402,20 +403,32 @@ test "project cook lifecycle: ids are minted once and survive everything but sid
     const root_path = try testing.allocator.dupeZ(u8, real_path_buf[0..len]);
     defer testing.allocator.free(root_path);
 
-    // First cook: mints an id, writes sidecar + manifest.
     try runProjectCook(root_path);
 
     const manifest_bytes_1 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets.zmanifest", testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(manifest_bytes_1);
-    const sidecar_bytes_1 = try tmp.dir.readFileAlloc(testing.io, "assets/shaders/tri.vert.zmeta", testing.allocator, .limited(4096));
-    defer testing.allocator.free(sidecar_bytes_1);
 
     var m1 = try manifest_codec.decode(testing.allocator, manifest_bytes_1);
     defer m1.deinit();
     try testing.expectEqual(builtin_registry.assets.len + 1, m1.entries.len);
-    const authored_entry = m1.findBySourcePath("shaders/tri.vert").?;
-    const original_id = authored_entry.id;
-    try testing.expect(!original_id.isZero());
+    const authored_entry = m1.findBySourcePath(
+        "shaders/tri.vert",
+    ).?;
+    const expected_id = manifest_derive.assetIdForPath(
+        project.project_id,
+        "shaders/tri.vert",
+    );
+
+    try testing.expect(authored_entry.id.eql(expected_id));
+    try testing.expectError(
+        error.FileNotFound,
+        tmp.dir.access(
+            testing.io,
+            "assets/shaders/tri.vert.zmeta",
+            .{},
+        ),
+    );
+
     for (builtin_registry.assets) |builtin_source| {
         const entry = m1.findBySourcePath(builtin_source.path).?;
         try testing.expect(entry.id.eql(builtin_registry.idFor(builtin_source.path)));
@@ -427,17 +440,11 @@ test "project cook lifecycle: ids are minted once and survive everything but sid
         try tmp.dir.access(testing.io, cooked_path, .{});
     }
 
-    // Recook: nothing changed, so the manifest is byte-identical and the
-    // sidecar untouched.
     try runProjectCook(root_path);
     const manifest_bytes_2 = try tmp.dir.readFileAlloc(testing.io, ".zephyr/assets.zmanifest", testing.allocator, .limited(1 << 20));
     defer testing.allocator.free(manifest_bytes_2);
-    const sidecar_bytes_2 = try tmp.dir.readFileAlloc(testing.io, "assets/shaders/tri.vert.zmeta", testing.allocator, .limited(4096));
-    defer testing.allocator.free(sidecar_bytes_2);
     try testing.expectEqualStrings(manifest_bytes_1, manifest_bytes_2);
-    try testing.expectEqualStrings(sidecar_bytes_1, sidecar_bytes_2);
 
-    // Delete manifest + cooked output: identity survives via the sidecar.
     try tmp.dir.deleteFile(testing.io, ".zephyr/assets.zmanifest");
     try tmp.dir.deleteTree(testing.io, ".zephyr/cooked");
     try runProjectCook(root_path);
@@ -445,12 +452,42 @@ test "project cook lifecycle: ids are minted once and survive everything but sid
     defer testing.allocator.free(manifest_bytes_3);
     var m3 = try manifest_codec.decode(testing.allocator, manifest_bytes_3);
     defer m3.deinit();
-    try testing.expect(m3.findBySourcePath("shaders/tri.vert").?.id.eql(original_id));
+    try testing.expect(m3.findBySourcePath("shaders/tri.vert").?.id.eql(authored_entry.id));
 
-    // A file copied together with its sidecar is a hard duplicate-id error.
-    const src = try tmp.dir.readFileAlloc(testing.io, "assets/shaders/tri.vert", testing.allocator, .limited(4096));
-    defer testing.allocator.free(src);
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "assets/shaders/tri2.vert", .data = src });
-    try tmp.dir.writeFile(testing.io, .{ .sub_path = "assets/shaders/tri2.vert.zmeta", .data = sidecar_bytes_1 });
-    try testing.expectError(error.DuplicateAssetId, runProjectCook(root_path));
+    const source = try tmp.dir.readFileAlloc(
+        testing.io,
+        "assets/shaders/tri.vert",
+        testing.allocator,
+        .limited(4096),
+    );
+    defer testing.allocator.free(source);
+
+    try tmp.dir.writeFile(testing.io, .{
+        .sub_path = "assets/shaders/tri2.vert",
+        .data = source,
+    });
+    try runProjectCook(root_path);
+
+    const manifest_bytes_4 = try tmp.dir.readFileAlloc(
+        testing.io,
+        ".zephyr/assets.zmanifest",
+        testing.allocator,
+        .limited(1 << 20),
+    );
+    defer testing.allocator.free(manifest_bytes_4);
+
+    var m4 = try manifest_codec.decode(
+        testing.allocator,
+        manifest_bytes_4,
+    );
+    defer m4.deinit();
+
+    const copied = m4.findBySourcePath("shaders/tri2.vert").?;
+    try testing.expect(!copied.id.eql(expected_id));
+    try testing.expect(copied.id.eql(
+        manifest_derive.assetIdForPath(
+            project.project_id,
+            "shaders/tri2.vert",
+        ),
+    ));
 }

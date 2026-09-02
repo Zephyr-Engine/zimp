@@ -2,7 +2,7 @@ const std = @import("std");
 const ProjectId = @import("../../id/id_types.zig").ProjectId;
 
 /// Present when cooking a project (`zimp cook --project <root>`): after the
-/// cook, the pipeline builds `assets.zmanifest` and flushes `.zmeta`
+/// cook, the pipeline builds `assets.zmanifest`
 /// sidecars. Directory-mode cooks (`--source/--output`) leave this null and
 /// produce no manifest.
 pub const ProjectCookInfo = struct {

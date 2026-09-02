@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const CountingAllocator = @import("../../shared/counting_allocator.zig").CountingAllocator;
-const meta_store_mod = @import("../../manifest/meta_store.zig");
 const ProjectCookInfo = @import("context.zig").ProjectCookInfo;
 const CookMetrics = @import("../cook_metrics.zig").CookMetrics;
 const manifest_builder = @import("../../manifest/builder.zig");
@@ -68,7 +67,6 @@ pub fn run(
                     ctx,
                     proj,
                     &cache_session.cache,
-                    plan.orphan_sidecars.items,
                     builtin_entries,
                 );
             }
@@ -86,52 +84,25 @@ pub fn run(
     return metrics;
 }
 
-/// Project-mode epilogue: resolve durable asset identity from the post-cook
-/// cache, write `assets.zmanifest`, and only then flush `.zmeta` sidecars —
-/// so a failed manifest build/write never persists partial identity.
 fn buildAndWriteManifest(
     allocator: std.mem.Allocator,
     ctx: *const CookContext,
     proj: ProjectCookInfo,
     cache: *const Cache,
-    orphan_sidecars: []const []const u8,
     builtin_entries: []const model.AssetManifestEntry,
 ) !void {
-    var metas = meta_store_mod.MetaStore.init(allocator, ctx.io, ctx.source);
-    defer metas.deinit();
-
-    const random_source: std.Random.IoSource = .{ .io = ctx.io };
     var stats = manifest_builder.BuildStats{};
     var manifest = try manifest_builder.build(allocator, .{
         .project_id = proj.project_id,
         .cache = cache,
-        .metas = &metas,
-        .io = ctx.io,
-        .random = random_source.interface(),
         .builtin_entries = builtin_entries,
     }, &stats);
     defer manifest.deinit();
 
     try manifest_codec.writeToDir(allocator, ctx.io, proj.root_dir, proj.manifest_path, &manifest);
-    const sidecars_written = try metas.flush(allocator);
 
-    warnOrphanedSidecars(orphan_sidecars);
-
-    log.info("Asset manifest: {d} entries ({d} builtin, {d} sidecar, {d} derived, {d} new); {d} sidecar(s) written", .{
+    log.info("Asset manifest: {d} entries ({d} builtin);", .{
         stats.entries,
         stats.builtin_entries,
-        stats.ids_from_sidecar,
-        stats.ids_derived,
-        stats.ids_new,
-        sidecars_written,
     });
-}
-
-/// A sidecar whose source file is gone is authored identity with nothing to
-/// identify — warn, never delete (the user may be mid-rename or mid-revert).
-fn warnOrphanedSidecars(sidecars: []const []const u8) void {
-    for (sidecars) |sidecar| {
-        const source = sidecar[0 .. sidecar.len - ".zmeta".len];
-        log.warn("orphaned sidecar '{s}': source file '{s}' no longer exists. If the asset was renamed, move the sidecar with it to preserve its id; if it was deleted, delete the sidecar too.", .{ sidecar, source });
-    }
 }

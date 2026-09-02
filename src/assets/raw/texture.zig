@@ -75,32 +75,6 @@ pub const TextureClass = enum {
         break :blk lut;
     };
 
-    /// Linear-space boundaries at which gamma encoding advances to the next
-    /// u8 value. They generate the direct u16-domain encoding table below at
-    /// compile time, replacing each runtime `pow` with one indexed load.
-    const linear_to_srgb_thresholds: [255]f32 = blk: {
-        var thresholds: [255]f32 = undefined;
-        for (0..255) |i| {
-            const encoded = (@as(f32, @floatFromInt(i)) + 0.5) / 255.0;
-            thresholds[i] = @exp(@log(encoded) * 2.2);
-        }
-        break :blk thresholds;
-    };
-
-    const linear_to_srgb_lut: [std.math.maxInt(u16) + 1]u8 = blk: {
-        @setEvalBranchQuota(1_000_000);
-        var lut: [std.math.maxInt(u16) + 1]u8 = undefined;
-        var encoded: usize = 0;
-        for (0..lut.len) |i| {
-            const linear = @as(f32, @floatFromInt(i)) / std.math.maxInt(u16);
-            while (encoded < linear_to_srgb_thresholds.len and linear >= linear_to_srgb_thresholds[encoded]) {
-                encoded += 1;
-            }
-            lut[i] = @intCast(encoded);
-        }
-        break :blk lut;
-    };
-
     pub fn decode(self: TextureClass, v: u8) f32 {
         return switch (self) {
             .color_srgb => srgb_to_linear_lut[v],
@@ -119,8 +93,7 @@ pub const TextureClass = enum {
 
     fn encodeSrgb(v: f32) u8 {
         const linear = std.math.clamp(v, 0.0, 1.0);
-        const index: u16 = @intFromFloat(linear * std.math.maxInt(u16) + 0.5);
-        return linear_to_srgb_lut[index];
+        return @intFromFloat(std.math.pow(f32, linear, 1.0 / 2.2) * 255.0 + 0.5);
     }
 
     pub fn postAverage(self: TextureClass, r: f32, g: f32, b: f32) [3]f32 {
@@ -755,21 +728,17 @@ test "srgb LUT: midpoint is less than 0.5 due to gamma" {
     try testing.expect(TextureClass.srgb_to_linear_lut[128] < 0.25);
 }
 
-test "sRGB LUT encoder matches pow reference over u16 domain" {
-    for (0..std.math.maxInt(u16) + 1) |i| {
-        const linear = @as(f32, @floatFromInt(i)) / std.math.maxInt(u16);
-        const expected: u8 = @intFromFloat(std.math.pow(f32, linear, 1.0 / 2.2) * 255.0 + 0.5);
-        try testing.expectEqual(expected, TextureClass.color_srgb.encode(linear));
-    }
+test "sRGB encoder clamps to the u8 range" {
+    try testing.expectEqual(@as(u8, 0), TextureClass.color_srgb.encode(-1.0));
+    try testing.expectEqual(@as(u8, 0), TextureClass.color_srgb.encode(0.0));
+    try testing.expectEqual(@as(u8, 255), TextureClass.color_srgb.encode(1.0));
+    try testing.expectEqual(@as(u8, 255), TextureClass.color_srgb.encode(2.0));
 }
 
-test "sRGB LUT encoder stays within one code over dense linear samples" {
-    for (0..100_001) |i| {
-        const linear = @as(f32, @floatFromInt(i)) / 100_000.0;
-        const expected: u8 = @intFromFloat(std.math.pow(f32, linear, 1.0 / 2.2) * 255.0 + 0.5);
-        const actual = TextureClass.color_srgb.encode(linear);
-        const difference = @abs(@as(i16, expected) - @as(i16, actual));
-        try testing.expect(difference <= 1);
+test "sRGB encoder round-trips decoded u8 values" {
+    for (0..256) |i| {
+        const encoded: u8 = @intCast(i);
+        try testing.expectEqual(encoded, TextureClass.color_srgb.encode(TextureClass.color_srgb.decode(encoded)));
     }
 }
 
