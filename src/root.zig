@@ -1,9 +1,7 @@
 const std = @import("std");
 
 /// Cook a project by its root directory (the one containing
-/// `.zephyr/zephyr.proj`). Source/output dirs come from the project
-/// manifest, and the cook maintains durable asset identity
-/// (`.zmeta` sidecars + `assets.zmanifest`).
+/// `.zephyr/zephyr.proj`).
 pub fn addProjectCookStep(b: *std.Build, dep: *std.Build.Dependency, project_root: std.Build.LazyPath) *std.Build.Step.Run {
     const exe = dep.artifact("zimp");
     const run = b.addRunArtifact(exe);
@@ -74,12 +72,9 @@ pub const project = struct {
 pub const ProjectManifest = project.manifest.ProjectManifest;
 pub const ProjectRoot = project.root.ProjectRoot;
 
-/// Asset identity: `.zmeta` sidecars, the generated asset manifest, and its
-/// codec. See docs/identity.md in the main repo for the identity rules.
 pub const manifest = struct {
     pub const kind = @import("manifest/kind.zig");
     pub const derive = @import("manifest/derive.zig");
-    pub const meta = @import("manifest/meta.zig");
     pub const model = @import("manifest/model.zig");
     pub const codec = @import("manifest/codec.zig");
 };
@@ -285,9 +280,6 @@ test {
     _ = @import("shared/wire.zig");
     _ = @import("manifest/kind.zig");
     _ = @import("manifest/derive.zig");
-    _ = @import("manifest/errors.zig");
-    _ = @import("manifest/meta.zig");
-    _ = @import("manifest/meta_store.zig");
     _ = @import("manifest/model.zig");
     _ = @import("manifest/codec.zig");
     _ = @import("manifest/builder.zig");

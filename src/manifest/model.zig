@@ -2,7 +2,6 @@ const std = @import("std");
 const AssetId = @import("../id/id_types.zig").AssetId;
 const ProjectId = @import("../id/id_types.zig").ProjectId;
 const AssetKind = @import("kind.zig").AssetKind;
-const errors = @import("errors.zig");
 const path = @import("../path.zig");
 
 pub const AssetManifestEntry = struct {
@@ -39,7 +38,20 @@ pub const AssetManifest = struct {
         self.arena.deinit();
     }
 
-    pub fn validate(self: *const AssetManifest) errors.ManifestError!void {
+    const ManifestError = error{
+        // codec
+        InvalidManifestFormat,
+        UnsupportedManifestVersion,
+        CorruptManifest,
+        // semantic validation
+        DuplicateAssetId,
+        DuplicateSourcePath,
+        ZeroAssetId,
+        InvalidAssetPath,
+        UnknownAssetKind,
+    };
+
+    pub fn validate(self: *const AssetManifest) ManifestError!void {
         var prev_source: ?[]const u8 = null;
         var seen_ids = std.AutoHashMap(AssetId, void).init(self.arena.child_allocator);
         defer seen_ids.deinit();

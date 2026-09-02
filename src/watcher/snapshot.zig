@@ -1,7 +1,6 @@
 const std = @import("std");
 
 const asset = @import("../assets/asset.zig");
-const meta = @import("../manifest/meta.zig");
 const log = @import("../logger.zig");
 
 pub const FileState = struct {
@@ -81,11 +80,6 @@ fn captureDir(self: *Snapshot, io: std.Io, dir: std.Io.Dir, prefix: []const u8) 
     while (try iter.next(io)) |entry| {
         switch (entry.kind) {
             .file => {
-                // never process sidecar files, they get automatically handled by the cooker
-                if (meta.isMetaPath(entry.name)) {
-                    continue;
-                }
-
                 // only handle files that can be cooked
                 if (asset.Extension.processEntry(entry) == .other) {
                     continue;
@@ -139,7 +133,7 @@ fn writeFile(tmp: std.testing.TmpDir, path: []const u8, contents: []const u8) !v
     try tmp.dir.writeFile(testing.io, .{ .sub_path = path, .data = contents });
 }
 
-test "capture recursively records cookable files and ignores sidecars and unknown files" {
+test "capture recursively records cookable files and ignores unknown files" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
@@ -147,8 +141,6 @@ test "capture recursively records cookable files and ignores sidecars and unknow
     try writeFile(tmp, "model.gltf", "gltf");
     try writeFile(tmp, "assets/albedo.png", "png");
     try writeFile(tmp, "assets/shaders/lighting.frag", "fragment shader");
-    try writeFile(tmp, "model.gltf.zmeta", "sidecar");
-    try writeFile(tmp, "assets/albedo.png.zmeta", "sidecar");
     try writeFile(tmp, "assets/shaders/notes.txt", "not cookable");
     try writeFile(tmp, "README", "not cookable");
 
@@ -162,8 +154,6 @@ test "capture recursively records cookable files and ignores sidecars and unknow
     try testing.expectEqual(FileState{ .size = 4, .mtime_ns = snapshot.files.get("model.gltf").?.mtime_ns }, snapshot.files.get("model.gltf").?);
     try testing.expectEqual(@as(u64, 3), snapshot.files.get("assets/albedo.png").?.size);
     try testing.expectEqual(@as(u64, 15), snapshot.files.get("assets/shaders/lighting.frag").?.size);
-    try testing.expect(snapshot.files.get("model.gltf.zmeta") == null);
-    try testing.expect(snapshot.files.get("assets/albedo.png.zmeta") == null);
     try testing.expect(snapshot.files.get("assets/shaders/notes.txt") == null);
     try testing.expect(snapshot.files.get("README") == null);
 }
@@ -174,7 +164,6 @@ test "capture returns an empty snapshot when no cookable files exist" {
 
     try tmp.dir.createDirPath(testing.io, "empty/nested");
     try writeFile(tmp, "empty/nested/notes.txt", "ignored");
-    try writeFile(tmp, "source.obj.zmeta", "ignored sidecar");
 
     const dir = try tmp.dir.openDir(testing.io, ".", .{ .iterate = true });
     defer dir.close(testing.io);

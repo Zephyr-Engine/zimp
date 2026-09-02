@@ -1,13 +1,13 @@
 const std = @import("std");
-const model = @import("model.zig");
-const meta_store_mod = @import("meta_store.zig");
+
+const CacheEntry = @import("../cache/entry.zig").CacheEntry;
+const ProjectId = @import("../id/id_types.zig").ProjectId;
+const AssetId = @import("../id/id_types.zig").AssetId;
+const Cache = @import("../cache/cache.zig").Cache;
+const log = @import("../logger.zig");
 const derive = @import("derive.zig");
 const kind_mod = @import("kind.zig");
-const Cache = @import("../cache/cache.zig").Cache;
-const CacheEntry = @import("../cache/entry.zig").CacheEntry;
-const AssetId = @import("../id/id_types.zig").AssetId;
-const ProjectId = @import("../id/id_types.zig").ProjectId;
-const log = @import("../logger.zig");
+const model = @import("model.zig");
 
 pub const generated_prefix = "generated/";
 
@@ -239,14 +239,6 @@ test "project assets get derived ids and non-assets are skipped" {
 
     try testing.expect(entry.id.eql(expected));
     try testing.expect(!entry.generated);
-    try testing.expectError(
-        error.FileNotFound,
-        fx.tmp.dir.access(
-            testing.io,
-            "meshes/monkey.glb.zmeta",
-            .{},
-        ),
-    );
 }
 
 test "generated assets use the same project path identity rule" {
