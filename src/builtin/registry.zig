@@ -38,6 +38,7 @@ pub fn find(file_path: []const u8) ?Source {
 }
 
 pub fn idFor(file_path: []const u8) AssetId {
+    @setEvalBranchQuota(1750);
     var hasher = std.crypto.hash.Blake3.init(.{});
     hasher.update("zephyr.builtin.v1:");
     hasher.update(file_path);
