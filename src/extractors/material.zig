@@ -15,12 +15,10 @@ fn extractMaterialDeps(
     io: std.Io,
     allocator: std.mem.Allocator,
 ) ![]const SourceFile {
-    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path, .{
-        .chunk_size = 256 * 1024,
-    });
-    defer allocator.free(file_result.bytes);
+    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path);
+    defer allocator.free(file_result);
 
-    var material = try raw_material.parseMaterialSource(file_result.bytes, allocator);
+    var material = try raw_material.parseMaterialSource(file_result, allocator);
     defer material.deinit(allocator);
 
     var deps: std.ArrayList(SourceFile) = .empty;

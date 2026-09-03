@@ -1,13 +1,8 @@
 const std = @import("std");
 
-pub const ChunkedReadOptions = struct {
-    chunk_size: usize = 256 * 1024,
-};
-
-pub const ChunkedReadResult = struct {
-    bytes: []u8,
-    bytes_read: usize,
-};
+/// Read granularity. Every caller used the same value, so it is fixed here
+/// rather than threaded through as an option.
+const chunk_size: usize = 256 * 1024;
 
 pub fn fileExists(dir: std.Io.Dir, io: std.Io, path: []const u8) bool {
     const file = dir.openFile(io, path, .{}) catch return false;
@@ -15,13 +10,13 @@ pub fn fileExists(dir: std.Io.Dir, io: std.Io, path: []const u8) bool {
     return true;
 }
 
+/// Read an entire file into a freshly allocated buffer. The caller owns it.
 pub fn readFileAllocChunked(
     allocator: std.mem.Allocator,
     io: std.Io,
     dir: std.Io.Dir,
     path: []const u8,
-    options: ChunkedReadOptions,
-) !ChunkedReadResult {
+) ![]u8 {
     const file = try dir.openFile(io, path, .{});
     defer file.close(io);
 
@@ -38,7 +33,7 @@ pub fn readFileAllocChunked(
 
     while (read_total < size) {
         const remaining = size - read_total;
-        const to_read = @min(remaining, options.chunk_size);
+        const to_read = @min(remaining, chunk_size);
         const did_read = try reader.readSliceShort(bytes[read_total .. read_total + to_read]);
         if (did_read == 0) {
             return error.UnexpectedEndOfStream;
@@ -46,10 +41,7 @@ pub fn readFileAllocChunked(
         read_total += did_read;
     }
 
-    return .{
-        .bytes = bytes,
-        .bytes_read = read_total,
-    };
+    return bytes;
 }
 
 const testing = std.testing;
@@ -65,13 +57,10 @@ test "readFileAllocChunked reads file content" {
     try writer.interface.flush();
     file.close(testing.io);
 
-    const result = try readFileAllocChunked(testing.allocator, testing.io, tmp.dir, "a.bin", .{
-        .chunk_size = 4,
-    });
-    defer testing.allocator.free(result.bytes);
+    const bytes = try readFileAllocChunked(testing.allocator, testing.io, tmp.dir, "a.bin");
+    defer testing.allocator.free(bytes);
 
-    try testing.expectEqual(@as(usize, 19), result.bytes_read);
-    try testing.expectEqualStrings("hello chunked world", result.bytes);
+    try testing.expectEqualStrings("hello chunked world", bytes);
 }
 
 test "fileExists reports present and absent files" {

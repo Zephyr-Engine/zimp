@@ -177,17 +177,12 @@ pub const Zatex = struct {
     }
 };
 
-/// Preferred names for the `.ztex` format. `Zatex` is retained because it is
-/// part of the existing API and matches the legacy on-disk magic.
-pub const Texture = Zatex;
-pub const Header = ZatexHeader;
-
-pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Texture {
-    return Texture.read(allocator, reader);
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Zatex {
+    return Zatex.read(allocator, reader);
 }
 
 pub fn write(writer: *std.Io.Writer, cooked: CookedTexture) !void {
-    return Texture.write(writer, cooked);
+    return Zatex.write(writer, cooked);
 }
 
 const testing = std.testing;

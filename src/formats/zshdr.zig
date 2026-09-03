@@ -1,4 +1,5 @@
 const std = @import("std");
+const string_list = @import("../shared/string_list.zig");
 
 const constants = @import("../shared/constants.zig");
 const cooked_shader = @import("../assets/cooked/shader.zig");
@@ -80,10 +81,10 @@ pub const ZShader = struct {
         if (permutation_count > 65536) return error.TooManyPermutations;
 
         const variant_names = try readStringList(allocator, reader, variant_count);
-        errdefer freeStringList(allocator, variant_names);
+        errdefer string_list.freeStringList(allocator, variant_names);
 
         const includes = try readStringList(allocator, reader, include_count);
-        errdefer freeStringList(allocator, includes);
+        errdefer string_list.freeStringList(allocator, includes);
 
         const permutations = try allocator.alloc(Permutation, permutation_count);
         errdefer allocator.free(permutations);
@@ -112,17 +113,15 @@ pub const ZShader = struct {
     }
 
     pub fn deinit(self: *ZShader, allocator: std.mem.Allocator) void {
-        freeStringList(allocator, self.variant_names);
-        freeStringList(allocator, self.includes);
+        string_list.freeStringList(allocator, self.variant_names);
+        string_list.freeStringList(allocator, self.includes);
         for (self.permutations) |perm| allocator.free(perm.source);
         allocator.free(self.permutations);
     }
 };
 
-pub const Shader = ZShader;
-
-pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Shader {
-    return Shader.read(allocator, reader);
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ZShader {
+    return ZShader.read(allocator, reader);
 }
 
 pub fn write(writer: *std.Io.Writer, cooked: CookedShader) !void {
@@ -134,10 +133,10 @@ pub fn write(writer: *std.Io.Writer, cooked: CookedShader) !void {
     try writer.writeInt(u32, @intCast(cooked.permutations.len), .little);
 
     for (cooked.variant_names) |name| {
-        try writeString(writer, name);
+        try wire.writeString(writer, name);
     }
     for (cooked.includes) |include| {
-        try writeString(writer, include);
+        try wire.writeString(writer, include);
     }
 
     for (cooked.permutations) |perm| {
@@ -145,11 +144,6 @@ pub fn write(writer: *std.Io.Writer, cooked: CookedShader) !void {
         try writer.writeInt(u32, @intCast(perm.source.len), .little);
         try writer.writeAll(perm.source);
     }
-}
-
-fn writeString(writer: *std.Io.Writer, value: []const u8) !void {
-    try writer.writeInt(u16, @intCast(value.len), .little);
-    try writer.writeAll(value);
 }
 
 fn readStringList(allocator: std.mem.Allocator, reader: *std.Io.Reader, count: usize) ![]const []const u8 {
@@ -160,42 +154,18 @@ fn readStringList(allocator: std.mem.Allocator, reader: *std.Io.Reader, count: u
     errdefer for (items[0..loaded]) |item| allocator.free(item);
 
     for (items) |*item| {
-        const len = try reader.takeInt(u16, .little);
-        const bytes = try allocator.alloc(u8, len);
-        errdefer allocator.free(bytes);
-        try reader.readSliceAll(bytes);
-        item.* = bytes;
+        item.* = try wire.readString(allocator, reader);
         loaded += 1;
     }
 
     return items;
 }
 
-fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]const []const u8 {
-    const out = try allocator.alloc([]const u8, strings.len);
-    errdefer allocator.free(out);
-
-    var loaded: usize = 0;
-    errdefer for (out[0..loaded]) |item| allocator.free(item);
-
-    for (strings, 0..) |value, i| {
-        out[i] = try allocator.dupe(u8, value);
-        loaded += 1;
-    }
-
-    return out;
-}
-
-fn freeStringList(allocator: std.mem.Allocator, strings: []const []const u8) void {
-    for (strings) |value| allocator.free(value);
-    allocator.free(strings);
-}
-
 const testing = std.testing;
 
 test "ZShader write and read round trips" {
-    const variant_names = try dupeStringList(testing.allocator, &.{"SKINNED"});
-    const includes = try dupeStringList(testing.allocator, &.{"common.glsl"});
+    const variant_names = try string_list.dupeStringList(testing.allocator, &.{"SKINNED"});
+    const includes = try string_list.dupeStringList(testing.allocator, &.{"common.glsl"});
     const permutations = try testing.allocator.alloc(CookedShader.Permutation, 1);
     permutations[0] = .{
         .key = .fromBits(1),

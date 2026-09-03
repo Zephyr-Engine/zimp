@@ -94,10 +94,10 @@ fn lookupPath(
         return error.MissingShader;
     }
 
-    const result = try file_read.readFileAllocChunked(allocator, io, source_dir, shader_path, .{});
+    const result = try file_read.readFileAllocChunked(allocator, io, source_dir, shader_path);
     return .{
-        .source = .{ .path = shader_path, .bytes = result.bytes },
-        .owned_bytes = result.bytes,
+        .source = .{ .path = shader_path, .bytes = result },
+        .owned_bytes = result,
     };
 }
 
@@ -323,10 +323,10 @@ fn findUniformInList(uniforms: []const Uniform, name: []const u8) ?Uniform {
 const testing = std.testing;
 
 fn cookMaterialFixture(allocator: std.mem.Allocator, io: std.Io, source_dir: std.Io.Dir, file_path: []const u8, writer: *std.Io.Writer) !void {
-    const result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{});
-    defer allocator.free(result.bytes);
+    const result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path);
+    defer allocator.free(result);
     const source = SourceFile.fromPath(file_path);
-    const input = CookInput{ .allocator = allocator, .io = io, .source_dir = source_dir, .source = source, .bytes = result.bytes, .writer = writer };
+    const input = CookInput{ .allocator = allocator, .io = io, .source_dir = source_dir, .source = source, .bytes = result, .writer = writer };
     try cooker().cook(&input);
 }
 

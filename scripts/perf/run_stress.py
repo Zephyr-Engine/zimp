@@ -256,38 +256,24 @@ def material_source(index: int) -> str:
 [material]
 shader = "shaders/stress"
 
-[texture.albedo]
+[texture.u_albedo]
 path = "textures/world_albedo.png"
-resource = "u_albedo"
-binding = 0
 
-[texture.normal]
+[texture.u_normal]
 path = "textures/world_normal.png"
-resource = "u_normal"
-binding = 1
 
-[texture.orm]
+[texture.u_orm]
 path = "textures/world_orm.png"
-resource = "u_orm"
-binding = 2
 
-[texture.roughness]
+[texture.u_roughness]
 path = "textures/world_roughness.png"
-resource = "u_roughness"
-binding = 3
 
-[texture.emissive]
+[texture.u_emissive]
 path = "textures/world_emissive.png"
-resource = "u_emissive"
-binding = 4
 
-[param.u_roughness_scale]
-value = {0.2 + (index % 10) / 20:.2f}
-binding = 0
-
-[param.u_tint]
-value = [1.0, {0.5 + (index % 8) / 16:.3f}, 0.75]
-binding = 1
+[params]
+u_roughness_scale = {0.2 + (index % 10) / 20:.2f}
+u_tint = [1.0, {0.5 + (index % 8) / 16:.3f}, 0.75]
 '''
 
 

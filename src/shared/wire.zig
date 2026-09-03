@@ -15,6 +15,32 @@ pub fn checkedAddWithinLimit(total: *usize, amount: usize, limit: usize) !void {
     if (total.* > limit) return error.AssetTooLarge;
 }
 
+/// Write a u16 length prefix followed by the bytes.
+pub fn writeString(writer: *std.Io.Writer, value: []const u8) !void {
+    try writer.writeInt(u16, @intCast(value.len), .little);
+    try writer.writeAll(value);
+}
+
+/// Read a string written by `writeString`. The caller owns the result.
+pub fn readString(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
+    const len = try reader.takeInt(u16, .little);
+    const value = try allocator.alloc(u8, len);
+    errdefer allocator.free(value);
+    try reader.readSliceAll(value);
+    return value;
+}
+
+test "writeString and readString round-trip" {
+    var buf: [64]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buf);
+    try writeString(&writer, "cooked/mesh.zmesh");
+
+    var reader = std.Io.Reader.fixed(writer.buffered());
+    const value = try readString(std.testing.allocator, &reader);
+    defer std.testing.allocator.free(value);
+    try std.testing.expectEqualStrings("cooked/mesh.zmesh", value);
+}
+
 test "enumFromInt rejects invalid exhaustive enum values" {
     const E = enum(u8) { a = 0, b = 1 };
     try std.testing.expectEqual(E.b, try enumFromInt(E, 1));

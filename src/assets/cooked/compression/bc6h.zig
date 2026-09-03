@@ -70,7 +70,7 @@ pub fn encodeF32(src: []const f32, width: u32, height: u32, pixel_stride: u32, d
 }
 
 /// 4-bit index weights, scaled by 64.
-const weights4 = [16]u32{ 0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64 };
+const weights4 = compression.weights4;
 
 /// Clamp a half-float bit pattern into the encodable unsigned range, then map
 /// into BC6H's interpolation space. The decoded output goes through a
@@ -155,21 +155,21 @@ pub fn encodeBlockMode3(block: [16 * 6]u8) [16]u8 {
     var out: [16]u8 = @splat(0);
     var bit: u32 = 0;
 
-    writeBits(&out, &bit, 0x03, 5); // mode 3: bits 00011 (LSB-first)
+    compression.writeBits(&out, &bit, 0x03, 5); // mode 3: bits 00011 (LSB-first)
 
     const p0 = if (swap) e1 else e0;
     const p1 = if (swap) e0 else e1;
 
-    writeBits(&out, &bit, p0[0], 10); // R0
-    writeBits(&out, &bit, p0[1], 10); // G0
-    writeBits(&out, &bit, p0[2], 10); // B0
-    writeBits(&out, &bit, p1[0], 10); // R1
-    writeBits(&out, &bit, p1[1], 10); // G1
-    writeBits(&out, &bit, p1[2], 10); // B1
+    compression.writeBits(&out, &bit, p0[0], 10); // R0
+    compression.writeBits(&out, &bit, p0[1], 10); // G0
+    compression.writeBits(&out, &bit, p0[2], 10); // B0
+    compression.writeBits(&out, &bit, p1[0], 10); // R1
+    compression.writeBits(&out, &bit, p1[1], 10); // G1
+    compression.writeBits(&out, &bit, p1[2], 10); // B1
 
     // Indices: texel 0 = 3 bits (anchor), remaining 15 = 4 bits each.
-    writeBits(&out, &bit, indices[0], 3);
-    for (1..16) |i| writeBits(&out, &bit, indices[i], 4);
+    compression.writeBits(&out, &bit, indices[0], 3);
+    for (1..16) |i| compression.writeBits(&out, &bit, indices[i], 4);
 
     std.debug.assert(bit == 128);
     return out;
@@ -190,24 +190,6 @@ fn closestPaletteIndex(palette: [16][3]u32, texel: [3]u32) u4 {
         }
     }
     return best;
-}
-
-fn writeBits(buf: []u8, bit: *u32, value: u32, num_bits: u32) void {
-    std.debug.assert(num_bits <= 32);
-    var v = value;
-    var remaining = num_bits;
-    while (remaining > 0) {
-        const byte_idx: u32 = bit.* / 8;
-        const bit_in_byte: u3 = @intCast(bit.* % 8);
-        const space_in_byte: u32 = 8 - @as(u32, bit_in_byte);
-        const take: u32 = @min(remaining, space_in_byte);
-        const mask: u32 = (@as(u32, 1) << @intCast(take)) - 1;
-        const chunk: u8 = @intCast(v & mask);
-        buf[byte_idx] |= chunk << bit_in_byte;
-        v >>= @intCast(take);
-        bit.* += take;
-        remaining -= take;
-    }
 }
 
 const testing = std.testing;

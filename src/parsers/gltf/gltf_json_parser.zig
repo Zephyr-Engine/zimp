@@ -163,6 +163,7 @@ pub const GltfAccessor = struct {
             .count = count,
             .component_type = @intFromEnum(self.componentType),
             .component_count = num_components,
+            .component_size = component_size,
             .normalized = self.normalized,
         };
     }

@@ -86,6 +86,20 @@ pub fn extractBlock4x4(
 ) void {
     std.debug.assert(dst.len == 16 * bytes_per_pixel);
     const row_stride = @as(usize, width) * bytes_per_pixel;
+
+    // Interior blocks need no edge replication: each row is contiguous, so a
+    // whole 4-texel row copies at once. Only the right/bottom edge of a mip
+    // takes the clamped path.
+    if (block_x + 4 <= width and block_y + 4 <= height) {
+        const row_bytes = 4 * @as(usize, bytes_per_pixel);
+        for (0..4) |ly| {
+            const src_off = @as(usize, block_y + @as(u32, @intCast(ly))) * row_stride +
+                @as(usize, block_x) * bytes_per_pixel;
+            @memcpy(dst[ly * row_bytes ..][0..row_bytes], src[src_off..][0..row_bytes]);
+        }
+        return;
+    }
+
     for (0..4) |ly| {
         const src_y = @min(block_y + @as(u32, @intCast(ly)), height - 1);
         for (0..4) |lx| {
@@ -94,6 +108,57 @@ pub fn extractBlock4x4(
             const dst_off = (ly * 4 + lx) * bytes_per_pixel;
             @memcpy(dst[dst_off..][0..bytes_per_pixel], src[src_off..][0..bytes_per_pixel]);
         }
+    }
+}
+
+/// BC 4-bit index interpolation weights, scaled by 64. Fixed by the DXGI block
+/// formats; shared by the BC7 and BC6H mode-6/mode-3 encoders.
+pub const weights4 = [16]u32{ 0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64 };
+
+/// Read one channel of a 4x4 block out of an interleaved `ChannelView`,
+/// replicating edge pixels when the block straddles the image boundary.
+pub fn extractChannelBlock(source: ChannelView, origin_x: u32, origin_y: u32, channel: u32, dst: *[16]u8) void {
+    std.debug.assert(channel < source.pixel_stride);
+
+    // Interior blocks need no edge replication; skip the per-texel clamps.
+    if (origin_x + 4 <= source.width and origin_y + 4 <= source.height) {
+        for (0..4) |ly| {
+            const row = @as(usize, origin_y + @as(u32, @intCast(ly))) * source.row_stride +
+                @as(usize, origin_x) * source.pixel_stride + channel;
+            for (0..4) |lx| {
+                dst[ly * 4 + lx] = source.bytes[row + lx * source.pixel_stride];
+            }
+        }
+        return;
+    }
+
+    for (0..4) |ly| {
+        const y = @min(origin_y + @as(u32, @intCast(ly)), source.height - 1);
+        for (0..4) |lx| {
+            const x = @min(origin_x + @as(u32, @intCast(lx)), source.width - 1);
+            const offset = @as(usize, y) * source.row_stride + @as(usize, x) * source.pixel_stride + channel;
+            dst[ly * 4 + lx] = source.bytes[offset];
+        }
+    }
+}
+
+/// Write `num_bits` of `value` into `buf` starting at bit `*bit`, LSB-first.
+/// Advances `*bit` by `num_bits`.
+pub fn writeBits(buf: []u8, bit: *u32, value: u32, num_bits: u32) void {
+    std.debug.assert(num_bits <= 32);
+    var v = value;
+    var remaining = num_bits;
+    while (remaining > 0) {
+        const byte_idx: u32 = bit.* / 8;
+        const bit_in_byte: u3 = @intCast(bit.* % 8);
+        const space_in_byte: u32 = 8 - @as(u32, bit_in_byte);
+        const take: u32 = @min(remaining, space_in_byte);
+        const mask: u32 = (@as(u32, 1) << @intCast(take)) - 1;
+        const chunk: u8 = @intCast(v & mask);
+        buf[byte_idx] |= chunk << bit_in_byte;
+        v >>= @intCast(take);
+        bit.* += take;
+        remaining -= take;
     }
 }
 

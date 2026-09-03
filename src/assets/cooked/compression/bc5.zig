@@ -53,25 +53,13 @@ pub fn encodeChannels(source: compression.ChannelView, dst: []u8) void {
         for (0..blocks_x) |bx| {
             const origin_x = @as(u32, @intCast(bx)) * 4;
             const origin_y = @as(u32, @intCast(by)) * 4;
-            extractChannelBlock(source, origin_x, origin_y, source.channels[0], &r_block);
-            extractChannelBlock(source, origin_x, origin_y, source.channels[1], &g_block);
+            compression.extractChannelBlock(source, origin_x, origin_y, source.channels[0], &r_block);
+            compression.extractChannelBlock(source, origin_x, origin_y, source.channels[1], &g_block);
             const r_encoded = bc4.encodeBlock(r_block);
             const g_encoded = bc4.encodeBlock(g_block);
             const dst_off = (by * blocks_x + bx) * 16;
             @memcpy(dst[dst_off..][0..8], &r_encoded);
             @memcpy(dst[dst_off + 8 ..][0..8], &g_encoded);
-        }
-    }
-}
-
-fn extractChannelBlock(source: compression.ChannelView, origin_x: u32, origin_y: u32, channel: u32, dst: *[16]u8) void {
-    std.debug.assert(channel < source.pixel_stride);
-    for (0..4) |ly| {
-        const y = @min(origin_y + @as(u32, @intCast(ly)), source.height - 1);
-        for (0..4) |lx| {
-            const x = @min(origin_x + @as(u32, @intCast(lx)), source.width - 1);
-            const offset = @as(usize, y) * source.row_stride + @as(usize, x) * source.pixel_stride + channel;
-            dst[ly * 4 + lx] = source.bytes[offset];
         }
     }
 }

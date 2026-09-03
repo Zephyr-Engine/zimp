@@ -574,15 +574,12 @@ pub const ZMesh = struct {
     }
 };
 
-pub const Mesh = ZMesh;
-pub const Header = ZMeshHeader;
-
-pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Mesh {
-    return Mesh.read(allocator, reader);
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !ZMesh {
+    return ZMesh.read(allocator, reader);
 }
 
 pub fn write(writer: *std.Io.Writer, material_slots: []const []const u8, parts: []const ZMesh.CookPart) !void {
-    return Mesh.write(writer, material_slots, parts);
+    return ZMesh.write(writer, material_slots, parts);
 }
 
 const testing = std.testing;

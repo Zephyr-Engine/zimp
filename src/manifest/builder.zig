@@ -6,7 +6,7 @@ const AssetId = @import("../id/id_types.zig").AssetId;
 const Cache = @import("../cache/cache.zig").Cache;
 const log = @import("../logger.zig");
 const derive = @import("derive.zig");
-const kind_mod = @import("kind.zig");
+const kind_mod = @import("../assets/asset.zig");
 const model = @import("model.zig");
 
 pub const generated_prefix = "generated/";
@@ -34,7 +34,8 @@ pub fn build(gpa: std.mem.Allocator, inputs: BuildInputs, stats: *BuildStats) !m
     errdefer m.deinit();
     const a = m.arena.allocator();
 
-    var entries: std.ArrayList(model.AssetManifestEntry) = .empty;
+    var entries: std.ArrayList(model.AssetManifestEntry) =
+        try .initCapacity(a, inputs.cache.entries.items.len + inputs.builtin_entries.len);
 
     for (inputs.cache.entries.items) |*cache_entry| {
         if (cache_entry.isErrored()) {

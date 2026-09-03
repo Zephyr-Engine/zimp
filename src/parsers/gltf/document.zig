@@ -26,12 +26,10 @@ pub const GltfDocument = struct {
         source_dir: std.Io.Dir,
         file_path: []const u8,
     ) !GltfDocument {
-        const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{
-            .chunk_size = 256 * 1024,
-        });
-        errdefer allocator.free(file_result.bytes);
+        const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path);
+        errdefer allocator.free(file_result);
 
-        var gltf = try Gltf.parse(file_result.bytes, allocator);
+        var gltf = try Gltf.parse(file_result, allocator);
         errdefer gltf.deinit();
 
         const buffers = try allocator.alloc([]const u8, gltf.value.buffers.len);
@@ -47,20 +45,18 @@ pub const GltfDocument = struct {
             const path = try resolveRelativeUri(allocator, file_path, uri);
             defer allocator.free(path);
 
-            const buffer_result = try file_read.readFileAllocChunked(allocator, io, source_dir, path, .{
-                .chunk_size = 256 * 1024,
-            });
-            errdefer allocator.free(buffer_result.bytes);
+            const buffer_result = try file_read.readFileAllocChunked(allocator, io, source_dir, path);
+            errdefer allocator.free(buffer_result);
 
-            if (buffer_result.bytes.len < buffer.byteLength) {
+            if (buffer_result.len < buffer.byteLength) {
                 return error.UnexpectedEndOfStream;
             }
 
-            buffers[i] = buffer_result.bytes;
+            buffers[i] = buffer_result;
             loaded_count += 1;
         }
 
-        return .{ .allocator = allocator, .json_bytes = file_result.bytes, .gltf = gltf, .buffers = buffers };
+        return .{ .allocator = allocator, .json_bytes = file_result, .gltf = gltf, .buffers = buffers };
     }
 
     /// Build a document from a caller-owned source snapshot.  External buffers
@@ -86,13 +82,13 @@ pub const GltfDocument = struct {
             const path = try resolveRelativeUri(allocator, file_path, uri);
             defer allocator.free(path);
 
-            const result = try file_read.readFileAllocChunked(allocator, io, source_dir, path, .{ .chunk_size = 256 * 1024 });
-            errdefer allocator.free(result.bytes);
+            const result = try file_read.readFileAllocChunked(allocator, io, source_dir, path);
+            errdefer allocator.free(result);
 
-            if (result.bytes.len < buffer.byteLength) {
+            if (result.len < buffer.byteLength) {
                 return error.UnexpectedEndOfStream;
             }
-            buffers[i] = result.bytes;
+            buffers[i] = result;
             loaded_count += 1;
         }
         return .{ .allocator = allocator, .json_bytes = null, .gltf = gltf, .buffers = buffers };

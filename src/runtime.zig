@@ -4,13 +4,14 @@ const texture_format = @import("formats/ztex.zig");
 const shader_format = @import("formats/zshdr.zig");
 const material_format = @import("formats/zamat.zig");
 const path_helpers = @import("path.zig");
+const wire = @import("shared/wire.zig");
 pub const AssetKind = @import("assets/asset.zig").AssetKind;
 
 pub const Asset = union(enum) {
     mesh: mesh_format.ZMesh,
-    texture: texture_format.Texture,
-    shader: shader_format.Shader,
-    material: material_format.MaterialFile,
+    texture: texture_format.Zatex,
+    shader: shader_format.ZShader,
+    material: material_format.Zamat,
 
     pub fn deinit(self: *Asset, allocator: std.mem.Allocator) void {
         switch (self.*) {
@@ -25,8 +26,6 @@ pub const Asset = union(enum) {
 pub const CookedStore = struct {
     root: []u8,
     dir: std.Io.Dir,
-
-    const max_asset_bytes: usize = 512 * 1024 * 1024;
 
     pub fn init(allocator: std.mem.Allocator, io: std.Io, root: []const u8) !CookedStore {
         const cwd = std.Io.Dir.cwd();
@@ -54,7 +53,7 @@ pub const CookedStore = struct {
         normalized_path: []const u8,
     ) ![]u8 {
         try path_helpers.validateVirtual(normalized_path);
-        return self.dir.readFileAlloc(io, normalized_path, allocator, .limited(max_asset_bytes));
+        return self.dir.readFileAlloc(io, normalized_path, allocator, .limited(wire.max_asset_bytes));
     }
 };
 

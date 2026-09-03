@@ -5,7 +5,7 @@ const SourceFile = @import("../assets/source_file.zig").SourceFile;
 const AtomicFile = @import("../shared/atomic_file.zig").AtomicFile;
 const asset_registry = @import("../assets/asset_registry.zig");
 const CookInput = @import("../cookers/cooker.zig").CookInput;
-const AssetKind = @import("../manifest/kind.zig").AssetKind;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
 const builtin_registry = @import("registry.zig");
 const model = @import("../manifest/model.zig");
 

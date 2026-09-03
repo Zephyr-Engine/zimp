@@ -1,4 +1,5 @@
 const std = @import("std");
+const string_list = @import("../shared/string_list.zig");
 
 const log = @import("../logger.zig");
 const inspectors = @import("../inspectors/inspect.zig").inspector_registry;
@@ -127,8 +128,8 @@ test "InspectCommand.run succeeds for valid zshdr file" {
     var tmp = testing.tmpDir(.{});
     defer tmp.cleanup();
 
-    const variant_names = try dupeStringList(testing.allocator, &.{"SKINNED"});
-    const includes = try dupeStringList(testing.allocator, &.{});
+    const variant_names = try string_list.dupeStringList(testing.allocator, &.{"SKINNED"});
+    const includes = try string_list.dupeStringList(testing.allocator, &.{});
     const permutations = try testing.allocator.alloc(CookedShader.Permutation, 2);
     permutations[0] = .{
         .key = .base,
@@ -179,19 +180,4 @@ test "InspectCommand.deinit cleans up without error" {
     const args: []const [:0]const u8 = &.{ "zimp", "inspect", "build.zig" };
     const cmd = try InspectCommand.parseFromArgs(testing.allocator, testing.io, args);
     cmd.deinit();
-}
-
-fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]const []const u8 {
-    const out = try allocator.alloc([]const u8, strings.len);
-    errdefer allocator.free(out);
-
-    var loaded: usize = 0;
-    errdefer for (out[0..loaded]) |item| allocator.free(item);
-
-    for (strings, 0..) |value, i| {
-        out[i] = try allocator.dupe(u8, value);
-        loaded += 1;
-    }
-
-    return out;
 }

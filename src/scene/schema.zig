@@ -2,7 +2,7 @@ const std = @import("std");
 
 const id_types = @import("../id/id_types.zig");
 
-const AssetKind = @import("../manifest/kind.zig").AssetKind;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
 const ComponentTypeId = id_types.ComponentTypeId;
 const Value = @import("value.zig").Value;
 

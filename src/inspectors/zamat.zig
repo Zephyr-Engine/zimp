@@ -5,10 +5,6 @@ const fmt = @import("utils.zig");
 const FormatInspector = @import("inspect.zig").FormatInspector;
 const zamat = @import("../formats/zamat.zig");
 
-fn paramTypeName(param_type: zamat.ParamType) []const u8 {
-    return @tagName(param_type);
-}
-
 fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     var material = try zamat.read(allocator, reader);
     defer material.deinit(allocator);
@@ -59,7 +55,7 @@ fn inspectZamat(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
         log.info("  {d: >5}  {s: <24}  {s: <8}  {d: >8}  {d: >8}  {s}", .{
             i,
             entry.name,
-            paramTypeName(entry.param_type),
+            @tagName(entry.param_type),
             entry.data_offset,
             entry.data_size,
             formatParamValue(&value_buf, material.param_data, entry),

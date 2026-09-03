@@ -41,15 +41,6 @@ pub const AssetKind = enum(u8) {
             else => null,
         };
     }
-
-    pub fn displayName(self: AssetKind) []const u8 {
-        return switch (self) {
-            .mesh => "mesh",
-            .texture => "texture",
-            .shader_stage => "shader stage",
-            .material => "material",
-        };
-    }
 };
 
 pub const Extension = enum {
@@ -98,6 +89,12 @@ pub const Extension = enum {
 };
 
 const testing = std.testing;
+
+test "fromInt rejects unknown tags" {
+    try testing.expectEqual(AssetKind.material, AssetKind.fromInt(3).?);
+    try testing.expect(AssetKind.fromInt(4) == null);
+    try testing.expect(AssetKind.fromInt(255) == null);
+}
 
 test "Extension.string returns correct string for gltf" {
     try testing.expectEqualStrings("gltf", Extension.gltf.string());

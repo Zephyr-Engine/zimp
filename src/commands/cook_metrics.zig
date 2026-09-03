@@ -9,7 +9,6 @@ pub const CookMetrics = struct {
     assets_errored: u32 = 0,
 
     source_bytes_read: u64 = 0,
-    source_bytes_hashed: u64 = 0,
     cooked_bytes_written: u64 = 0,
     cache_bytes_written: u64 = 0,
 
@@ -48,9 +47,8 @@ pub fn logSummary(metrics: *const CookMetrics) void {
         fmtDuration(metrics.total_ns, &buf_total),
     });
 
-    log.info("Cook I/O: source_read={d}B, source_hashed={d}B, cooked_written={d}B, cache_written={d}B", .{
+    log.info("Cook I/O: source_read={d}B, cooked_written={d}B, cache_written={d}B", .{
         metrics.source_bytes_read,
-        metrics.source_bytes_hashed,
         metrics.cooked_bytes_written,
         metrics.cache_bytes_written,
     });

@@ -64,7 +64,9 @@ pub const DependencyRow = struct {
 
 pub const CacheDepGraph = struct {
     rows: std.ArrayList(DependencyRow) = .empty,
-    row_map: std.AutoHashMap(Hash, u32),
+    /// source_path -> row index; see the note on `Cache.EntryMap`. Exact
+    /// lookups, so a missing row costs one probe rather than a full scan.
+    row_map: std.StringHashMap(u32),
 
     pub fn init(allocator: std.mem.Allocator) CacheDepGraph {
         return .{ .row_map = .init(allocator) };
@@ -79,24 +81,18 @@ pub const CacheDepGraph = struct {
     }
 
     pub fn get(self: *const CacheDepGraph, source: SourceFile) ?*const DependencyRow {
-        const hash = source.hashPath();
-        if (self.row_map.get(hash)) |idx| {
-            const row = &self.rows.items[idx];
-            if (std.mem.eql(u8, row.source_path, source.path)) {
-                return row;
-            }
-        }
-
-        for (self.rows.items) |*row| {
-            if (row.source_path_hash == hash and std.mem.eql(u8, row.source_path, source.path)) {
-                return row;
-            }
-        }
-        return null;
+        const idx = self.row_map.get(source.path) orelse return null;
+        return &self.rows.items[idx];
     }
 
     pub fn upsert(self: *CacheDepGraph, allocator: std.mem.Allocator, row: DependencyRow) !void {
-        if (self.findIndex(row.source_path_hash, row.source_path)) |idx| {
+        if (self.row_map.get(row.source_path)) |idx| {
+            // Re-key before deinit: the map borrows the key from the row whose
+            // `source_path` is about to be freed.
+            const gop = try self.row_map.getOrPut(row.source_path);
+            gop.key_ptr.* = row.source_path;
+            gop.value_ptr.* = idx;
+
             self.rows.items[idx].deinit(allocator);
             self.rows.items[idx] = row;
             return;
@@ -106,7 +102,7 @@ pub const CacheDepGraph = struct {
         try self.rows.ensureUnusedCapacity(allocator, 1);
         try self.row_map.ensureUnusedCapacity(1);
         self.rows.appendAssumeCapacity(row);
-        self.row_map.putAssumeCapacity(row.source_path_hash, @intCast(idx));
+        self.row_map.putAssumeCapacity(row.source_path, @intCast(idx));
     }
 
     pub fn pruneDeleted(self: *CacheDepGraph, allocator: std.mem.Allocator, source_files: []const SourceFile) u32 {
@@ -154,27 +150,12 @@ pub const CacheDepGraph = struct {
     fn rebuildMap(self: *CacheDepGraph) void {
         self.row_map.clearRetainingCapacity();
         for (self.rows.items, 0..) |row, idx| {
-            self.row_map.putAssumeCapacity(row.source_path_hash, @intCast(idx));
+            self.row_map.putAssumeCapacity(row.source_path, @intCast(idx));
         }
-    }
-
-    fn findIndex(self: *const CacheDepGraph, hash: Hash, path: []const u8) ?u32 {
-        if (self.row_map.get(hash)) |idx| {
-            if (std.mem.eql(u8, self.rows.items[idx].source_path, path)) {
-                return idx;
-            }
-        }
-
-        for (self.rows.items, 0..) |row, i| {
-            if (row.source_path_hash == hash and std.mem.eql(u8, row.source_path, path)) {
-                return @intCast(i);
-            }
-        }
-        return null;
     }
 };
 
-fn sourceExists(source_files: []const SourceFile, path: []const u8) bool {
+pub fn sourceExists(source_files: []const SourceFile, path: []const u8) bool {
     for (source_files) |source| {
         if (std.mem.eql(u8, source.path, path)) return true;
     }
