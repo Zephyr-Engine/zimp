@@ -1,7 +1,5 @@
 const std = @import("std");
 
-/// Cook a project by its root directory (the one containing
-/// `.zephyr/zephyr.proj`).
 pub fn addProjectCookStep(b: *std.Build, dep: *std.Build.Dependency, project_root: std.Build.LazyPath) *std.Build.Step.Run {
     const exe = dep.artifact("zimp");
     const run = b.addRunArtifact(exe);
@@ -11,10 +9,6 @@ pub fn addProjectCookStep(b: *std.Build, dep: *std.Build.Dependency, project_roo
     return run;
 }
 
-/// Binary cooked-asset formats and their reader/writer APIs.
-///
-/// For example, use `zimp.formats.zmesh.ZMesh.read` to load a mesh, or
-/// `zimp.formats.ztex.TexelFormat` when creating texture resources.
 pub const formats = struct {
     pub const zmesh = @import("formats/zmesh.zig");
     pub const ztex = @import("formats/ztex.zig");
@@ -22,16 +16,8 @@ pub const formats = struct {
     pub const zamat = @import("formats/zamat.zig");
 };
 
-/// File-watching cooker for a project. Call `watcher.start` to begin watching
-/// in the background and later call `WatchHandle.stop` to release it.
-/// Snapshotting and platform wake mechanisms are implementation details.
 pub const WatchHandle = @import("watcher/handle.zig");
 
-/// Asset data types used by the cooked formats.
-///
-/// `raw` and `cooked` are useful to applications that produce assets
-/// themselves; runtime consumers will normally only need `formats` and
-/// `runtime`.
 pub const assets = struct {
     pub const raw = struct {
         pub const mesh = @import("assets/raw/mesh.zig");
@@ -48,22 +34,19 @@ pub const assets = struct {
     };
 };
 
-/// Load cooked assets from a directory or a reader, with virtual-path
-/// validation suitable for application asset roots.
-pub const runtime = @import("runtime.zig");
+pub const builtin = struct {
+    const registry = @import("builtin/registry.zig");
+    pub const error_meterial_id = registry.error_material_id;
+};
 
-/// Path normalization, cooked output path naming, and virtual asset path checks.
+pub const runtime = @import("runtime.zig");
 pub const path = @import("path.zig");
 
-/// Stable persisted identity: UUIDs and the typed ids built on them.
-/// These are file-format data shared by the cooker, runtime, and editor.
 pub const id = struct {
     pub const uuid = @import("id/uuid.zig");
     pub const types = @import("id/id_types.zig");
 };
 
-/// Project manifest and opened-project root. The manifest is persisted data
-/// shared by the cooker, runtime, and editor.
 pub const project = struct {
     pub const manifest = @import("project/manifest.zig");
     pub const root = @import("project/project_root.zig");
@@ -114,7 +97,6 @@ pub const SceneEntityId = id.types.SceneEntityId;
 pub const ComponentTypeId = id.types.ComponentTypeId;
 pub const SchemaId = id.types.SchemaId;
 
-// Convenient top-level aliases retained for existing users.
 pub const ZMesh = formats.zmesh.ZMesh;
 pub const ZMeshHeader = formats.zmesh.ZMeshHeader;
 pub const FormatFlags = assets.cooked.mesh.FormatFlags;
