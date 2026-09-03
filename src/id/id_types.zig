@@ -65,6 +65,10 @@ fn TypedId(comptime tag: @TypeOf(.enum_literal)) type {
         pub fn jsonStringify(self: Self, writer: anytype) !void {
             try self.uuid.jsonStringify(writer);
         }
+
+        pub fn format(self: Self, writer: *std.Io.Writer) !void {
+            _ = try writer.write(&self.toString());
+        }
     };
 }
 
