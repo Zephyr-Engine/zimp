@@ -54,7 +54,7 @@ pub const error_material_id = idFor(PREFIX ++ "error.zamat");
 const testing = std.testing;
 const asset_registry = @import("../assets/asset_registry.zig");
 const SourceFile = @import("../assets/source_file.zig").SourceFile;
-const AssetKind = @import("../manifest/kind.zig").AssetKind;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
 const path = @import("../path.zig");
 
 test "builtin.find" {

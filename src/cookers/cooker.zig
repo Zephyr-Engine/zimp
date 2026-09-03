@@ -19,23 +19,16 @@ pub const CookInput = struct {
 
 pub const Cooker = struct {
     cook_fn: *const fn (input: *const CookInput) anyerror!void,
-    output_path_fn: ?*const fn (
-        allocator: std.mem.Allocator,
-        source: SourceFile,
-    ) anyerror![]u8 = null,
 
     pub fn cook(self: Cooker, input: *const CookInput) !void {
         return self.cook_fn(input);
     }
 
     pub fn outputPath(
-        self: Cooker,
+        _: Cooker,
         allocator: std.mem.Allocator,
         source: SourceFile,
     ) ![]u8 {
-        if (self.output_path_fn) |path_fn| {
-            return path_fn(allocator, source);
-        }
         return path_helpers.cookedOutput(allocator, source.path, source.assetKind() orelse return error.UnsupportedAssetKind);
     }
 };

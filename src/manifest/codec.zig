@@ -3,7 +3,7 @@ const std = @import("std");
 const ProjectId = @import("../id/id_types.zig").ProjectId;
 const atomic_file = @import("../shared/atomic_file.zig");
 const AssetId = @import("../id/id_types.zig").AssetId;
-const kind_mod = @import("kind.zig");
+const kind_mod = @import("../assets/asset.zig");
 const model = @import("model.zig");
 
 pub const manifest_format = "zephyr.asset_manifest";

@@ -373,7 +373,7 @@ pub const RawMesh = struct {
 
         // Replace vertices with deduplicated array
         allocator.free(self.vertices);
-        self.vertices = try allocator.dupe(RawVertex, deduped.items);
+        self.vertices = try deduped.toOwnedSlice(allocator);
 
         log.debug("[Optimizing Mesh] Deduplicated {d} -> {d} vertices", .{ original_len, self.vertices.len });
         return true;

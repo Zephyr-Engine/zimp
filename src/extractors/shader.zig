@@ -18,10 +18,8 @@ fn extractShaderDeps(
     io: std.Io,
     allocator: std.mem.Allocator,
 ) ![]const SourceFile {
-    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path, .{
-        .chunk_size = 256 * 1024,
-    });
-    defer allocator.free(file_result.bytes);
+    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path);
+    defer allocator.free(file_result);
 
     var deps: std.ArrayList(SourceFile) = .empty;
     errdefer {
@@ -29,7 +27,7 @@ fn extractShaderDeps(
         deps.deinit(allocator);
     }
 
-    var lines = std.mem.splitScalar(u8, file_result.bytes, '\n');
+    var lines = std.mem.splitScalar(u8, file_result, '\n');
     while (lines.next()) |line| {
         if (parseIncludeFilename(line)) |filename| {
             const path = try path_helpers.resolveShaderInclude(allocator, source.path, filename);

@@ -26,11 +26,9 @@ pub const TexelFormat = enum(u16) {
         };
     }
 
-    pub fn blockWidth(self: TexelFormat) u32 {
-        return if (self.isBlockCompressed()) 4 else 1;
-    }
-
-    pub fn blockHeight(self: TexelFormat) u32 {
+    /// Edge length of one block. Block-compressed formats work in 4x4 tiles;
+    /// uncompressed formats treat a single texel as the block.
+    pub fn blockSize(self: TexelFormat) u32 {
         return if (self.isBlockCompressed()) 4 else 1;
     }
 
@@ -49,10 +47,9 @@ pub const TexelFormat = enum(u16) {
     /// Size in bytes of a mip of the given logical dimensions.
     /// For block-compressed formats, dimensions are rounded up to the block grid.
     pub fn imageSize(self: TexelFormat, width: u32, height: u32) usize {
-        const bw = self.blockWidth();
-        const bh = self.blockHeight();
-        const blocks_x = (width + bw - 1) / bw;
-        const blocks_y = (height + bh - 1) / bh;
+        const block = self.blockSize();
+        const blocks_x = (width + block - 1) / block;
+        const blocks_y = (height + block - 1) / block;
         return @as(usize, blocks_x) * @as(usize, blocks_y) * self.bytesPerBlock();
     }
 };

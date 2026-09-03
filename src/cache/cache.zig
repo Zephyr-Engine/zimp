@@ -8,15 +8,17 @@ const dep_graph_mod = @import("cache_dep_graph.zig");
 const CacheDepGraph = dep_graph_mod.CacheDepGraph;
 const DependencyRef = dep_graph_mod.DependencyRef;
 const DependencyRow = dep_graph_mod.DependencyRow;
+const sourceExists = dep_graph_mod.sourceExists;
 const fnv1a = source_file_mod.fnv1a;
 const Hash = source_file_mod.Hash;
 const SourceFile = source_file_mod.SourceFile;
 const log = @import("../logger.zig");
 const AtomicFile = @import("../shared/atomic_file.zig").AtomicFile;
 const wire = @import("../shared/wire.zig");
+const constants = @import("../shared/constants.zig");
 
 pub const VERSION = 6;
-pub const MAGIC = "ZACHE";
+pub const MAGIC = constants.FORMAT_MAGIC.ZACHE;
 
 pub const HEADER_SIZE: u32 = MAGIC.len + @sizeOf(u16) + @sizeOf(u32) + @sizeOf(u16) + @sizeOf(u16); // magic + version + entry_count + output_dir_len + host_os_len
 
@@ -25,7 +27,12 @@ pub const CacheHeader = struct {
     entry_count: u32,
 };
 
-const EntryMap = std.AutoHashMap(Hash, u32); // path_hash -> entry index
+/// source_path -> entry index. Keyed on the path itself rather than its hash so
+/// a lookup is exact: there is no collision case to fall back on, and a miss
+/// costs one probe instead of a scan of every entry. The map borrows each key
+/// from the entry that owns it, so any code that frees an entry's `source_path`
+/// must re-key or rebuild the map first.
+const EntryMap = std.StringHashMap(u32);
 
 pub fn currentHostOsName() []const u8 {
     return @tagName(builtin.os.tag);
@@ -70,10 +77,6 @@ pub const Cache = struct {
         allocator.free(self.host_os);
     }
 
-    pub fn hostOsChanged(self: *const Cache) bool {
-        return !std.mem.eql(u8, self.host_os, currentHostOsName());
-    }
-
     pub fn markDirty(self: *Cache) void {
         self.dirty = true;
     }
@@ -97,13 +100,22 @@ pub const Cache = struct {
             allocator.free(removed.source_path);
             allocator.free(removed.cooked_path);
         }
-        try self.entry_map.put(entry.source_path_hash, @intCast(idx));
+        try self.entry_map.put(entry.source_path, @intCast(idx));
         self.header.entry_count += 1;
         self.dirty = true;
     }
 
     pub fn overwriteCacheEntry(self: *Cache, allocator: std.mem.Allocator, entry: CacheEntry, idx: u32) !void {
         const old = self.entries.items[idx];
+
+        // The map borrows its key from the entry, and `old.source_path` is about
+        // to be freed. `put` alone would keep the equal-comparing old key, so
+        // overwrite the key pointer explicitly, and do it before any free so a
+        // failure here leaves the cache untouched.
+        const gop = try self.entry_map.getOrPut(entry.source_path);
+        gop.key_ptr.* = entry.source_path;
+        gop.value_ptr.* = idx;
+
         allocator.free(old.source_path);
         allocator.free(old.cooked_path);
         self.entries.items[idx] = entry;
@@ -183,23 +195,7 @@ pub const Cache = struct {
     }
 
     pub fn getIdx(self: *const Cache, source_file: SourceFile) ?u32 {
-        return self.getIdxByPath(source_file.hashPath(), source_file.path);
-    }
-
-    fn getIdxByPath(self: *const Cache, path_hash: Hash, path: []const u8) ?u32 {
-        if (self.entry_map.get(path_hash)) |idx| {
-            const entry = self.entries.items[idx];
-            if (std.mem.eql(u8, entry.source_path, path)) {
-                return idx;
-            }
-        }
-
-        for (self.entries.items, 0..) |entry, i| {
-            if (entry.source_path_hash == path_hash and std.mem.eql(u8, entry.source_path, path)) {
-                return @intCast(i);
-            }
-        }
-        return null;
+        return self.entry_map.get(source_file.path);
     }
 
     pub fn upsertEntry(self: *Cache, allocator: std.mem.Allocator, source_file: SourceFile, entry: CacheEntry) !void {
@@ -254,11 +250,11 @@ pub const Cache = struct {
             try io_writer.writeInt(u64, row.source_path_hash, .little);
             try io_writer.writeInt(u64, row.source_size, .little);
             try io_writer.writeInt(i96, row.source_mtime, .little);
-            try writeString(io_writer, row.source_path);
+            try wire.writeString(io_writer, row.source_path);
             try io_writer.writeInt(u32, @intCast(row.dependencies.items.len), .little);
             for (row.dependencies.items) |dep| {
                 try io_writer.writeInt(u64, dep.path_hash, .little);
-                try writeString(io_writer, dep.path);
+                try wire.writeString(io_writer, dep.path);
             }
         }
 
@@ -326,15 +322,11 @@ pub const Cache = struct {
             return error.TooManyCacheEntries;
         }
 
-        const output_dir_path_len = try reader.takeInt(u16, .little);
-        const output_dir_path = try allocator.alloc(u8, output_dir_path_len);
+        const output_dir_path = try wire.readString(allocator, reader);
         errdefer allocator.free(output_dir_path);
-        try reader.readSliceAll(output_dir_path);
 
-        const host_os_len = try reader.takeInt(u16, .little);
-        const host_os = try allocator.alloc(u8, host_os_len);
+        const host_os = try wire.readString(allocator, reader);
         errdefer allocator.free(host_os);
-        try reader.readSliceAll(host_os);
 
         var entries: std.ArrayList(CacheEntry) = .empty;
         errdefer {
@@ -364,15 +356,11 @@ pub const Cache = struct {
             else
                 AssetKind.fromInt(std.math.cast(u8, asset_kind_raw) orelse return error.InvalidAssetKind) orelse return error.InvalidAssetKind;
 
-            const source_path_len = try reader.takeInt(u16, .little);
-            const source_path = try allocator.alloc(u8, source_path_len);
+            const source_path = try wire.readString(allocator, reader);
             errdefer allocator.free(source_path);
-            try reader.readSliceAll(source_path);
 
-            const cooked_path_len = try reader.takeInt(u16, .little);
-            const cooked_path = try allocator.alloc(u8, cooked_path_len);
+            const cooked_path = try wire.readString(allocator, reader);
             errdefer allocator.free(cooked_path);
-            try reader.readSliceAll(cooked_path);
 
             entries.appendAssumeCapacity(.{
                 .source_path = source_path,
@@ -402,7 +390,7 @@ pub const Cache = struct {
             const source_path_hash = try reader.takeInt(u64, .little);
             const source_size = try reader.takeInt(u64, .little);
             const source_mtime = try reader.takeInt(i96, .little);
-            const source_path = try readString(allocator, reader);
+            const source_path = try wire.readString(allocator, reader);
             errdefer allocator.free(source_path);
 
             const dependency_count = try reader.takeInt(u32, .little);
@@ -416,7 +404,7 @@ pub const Cache = struct {
 
             for (0..dependency_count) |_| {
                 const path_hash = try reader.takeInt(u64, .little);
-                const path = try readString(allocator, reader);
+                const path = try wire.readString(allocator, reader);
                 errdefer allocator.free(path);
                 dependencies.appendAssumeCapacity(.{
                     .path = path,
@@ -432,13 +420,13 @@ pub const Cache = struct {
                 .source_mtime = source_mtime,
                 .dependencies = dependencies,
             });
-            dependency_graph.row_map.putAssumeCapacity(source_path_hash, @intCast(idx));
+            dependency_graph.row_map.putAssumeCapacity(source_path, @intCast(idx));
         }
 
         var entry_map: EntryMap = .init(allocator);
         try entry_map.ensureTotalCapacity(@intCast(entry_count));
         for (entries.items, 0..) |entry, i| {
-            entry_map.putAssumeCapacity(entry.source_path_hash, @intCast(i));
+            entry_map.putAssumeCapacity(entry.source_path, @intCast(i));
         }
 
         return .{
@@ -459,30 +447,10 @@ pub const Cache = struct {
     fn rebuildEntryMap(self: *Cache) void {
         self.entry_map.clearRetainingCapacity();
         for (self.entries.items, 0..) |entry, idx| {
-            self.entry_map.putAssumeCapacity(entry.source_path_hash, @intCast(idx));
+            self.entry_map.putAssumeCapacity(entry.source_path, @intCast(idx));
         }
     }
 };
-
-fn sourceExists(source_files: []const SourceFile, path: []const u8) bool {
-    for (source_files) |source| {
-        if (std.mem.eql(u8, source.path, path)) return true;
-    }
-    return false;
-}
-
-fn writeString(writer: *std.Io.Writer, value: []const u8) !void {
-    try writer.writeInt(u16, @intCast(value.len), .little);
-    try writer.writeAll(value);
-}
-
-fn readString(allocator: std.mem.Allocator, reader: *std.Io.Reader) ![]u8 {
-    const len = try reader.takeInt(u16, .little);
-    const value = try allocator.alloc(u8, len);
-    errdefer allocator.free(value);
-    try reader.readSliceAll(value);
-    return value;
-}
 
 test "upsertEntry replaces existing entry without growing cache" {
     var tmp = testing.tmpDir(.{});
@@ -529,6 +497,8 @@ test "path-hash collisions keep cache rows distinct" {
     var cache = try Cache.init(testing.allocator, .cwd(), ".");
     defer cache.deinit(testing.allocator);
 
+    // Both entries carry the same stored path hash. The index is keyed on the
+    // path itself, so a collision in that field cannot merge or hide a row.
     const hash: Hash = 1;
     var first = try makeTestEntry(testing.allocator, "first.glsl", "first.zshdr");
     first.source_path_hash = hash;
@@ -537,8 +507,27 @@ test "path-hash collisions keep cache rows distinct" {
     try cache.pushCacheEntry(testing.allocator, first);
     try cache.pushCacheEntry(testing.allocator, second);
 
-    try testing.expectEqual(@as(u32, 0), cache.getIdxByPath(hash, "first.glsl").?);
-    try testing.expectEqual(@as(u32, 1), cache.getIdxByPath(hash, "second.glsl").?);
+    try testing.expectEqual(@as(u32, 0), cache.getIdx(SourceFile.fromPath("first.glsl")).?);
+    try testing.expectEqual(@as(u32, 1), cache.getIdx(SourceFile.fromPath("second.glsl")).?);
+}
+
+test "overwriting an entry re-keys the index off the freed path" {
+    var cache = try Cache.init(testing.allocator, .cwd(), ".");
+    defer cache.deinit(testing.allocator);
+
+    const source = SourceFile.fromPath("shader.glsl");
+    try cache.upsertEntry(testing.allocator, source, try makeTestEntry(testing.allocator, "shader.glsl", "a.zshdr"));
+
+    // The replacement owns a different allocation for the same path text; the
+    // index must follow it rather than keep borrowing the freed original.
+    var replacement = try makeTestEntry(testing.allocator, "shader.glsl", "b.zshdr");
+    replacement.content_hash = 99;
+    try cache.upsertEntry(testing.allocator, source, replacement);
+
+    try testing.expectEqual(@as(usize, 1), cache.entries.items.len);
+    const idx = cache.getIdx(source).?;
+    try testing.expectEqual(@as(u64, 99), cache.entries.items[idx].content_hash);
+    try testing.expectEqualStrings("shader.glsl", cache.entries.items[idx].source_path);
 }
 
 const testing = std.testing;
@@ -666,7 +655,7 @@ test "lookupEntryMut returns mutable entry" {
 
     const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
     try c.pushCacheEntry(testing.allocator, entry);
-    try c.entry_map.put(entry.source_path_hash, 0);
+    try c.entry_map.put(entry.source_path, 0);
 
     const sf = SourceFile{ .path = "a.glb", .extension = .glb };
     const found = c.lookupEntryMut(sf);
@@ -689,7 +678,7 @@ test "getIdx returns index when entry exists" {
 
     const entry = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
     try c.pushCacheEntry(testing.allocator, entry);
-    try c.entry_map.put(entry.source_path_hash, 0);
+    try c.entry_map.put(entry.source_path, 0);
 
     const sf = SourceFile{ .path = "a.glb", .extension = .glb };
     try testing.expectEqual(@as(u32, 0), c.getIdx(sf).?);
@@ -709,11 +698,11 @@ test "pruneDeleted removes entries not in source list" {
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
     try c.pushCacheEntry(testing.allocator, e1);
-    try c.entry_map.put(e1.source_path_hash, 0);
+    try c.entry_map.put(e1.source_path, 0);
 
     const e2 = try makeTestEntry(testing.allocator, "b.glb", "b.zmesh");
     try c.pushCacheEntry(testing.allocator, e2);
-    try c.entry_map.put(e2.source_path_hash, 1);
+    try c.entry_map.put(e2.source_path, 1);
 
     const source_files = [_]SourceFile{
         .{ .path = "a.glb", .extension = .glb },
@@ -732,7 +721,7 @@ test "pruneDeleted returns zero when all entries present" {
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
     try c.pushCacheEntry(testing.allocator, e1);
-    try c.entry_map.put(e1.source_path_hash, 0);
+    try c.entry_map.put(e1.source_path, 0);
 
     const source_files = [_]SourceFile{
         .{ .path = "a.glb", .extension = .glb },
@@ -749,11 +738,11 @@ test "pruneDeleted removes all entries when source list is empty" {
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
     try c.pushCacheEntry(testing.allocator, e1);
-    try c.entry_map.put(e1.source_path_hash, 0);
+    try c.entry_map.put(e1.source_path, 0);
 
     const e2 = try makeTestEntry(testing.allocator, "b.glb", "b.zmesh");
     try c.pushCacheEntry(testing.allocator, e2);
-    try c.entry_map.put(e2.source_path_hash, 1);
+    try c.entry_map.put(e2.source_path, 1);
 
     const empty: []const SourceFile = &.{};
     const removed = c.pruneDeleted(testing.allocator, empty);
@@ -768,15 +757,15 @@ test "pruneDeleted rebuilds entry_map with correct indices" {
 
     const e1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
     try c.pushCacheEntry(testing.allocator, e1);
-    try c.entry_map.put(e1.source_path_hash, 0);
+    try c.entry_map.put(e1.source_path, 0);
 
     const e2 = try makeTestEntry(testing.allocator, "b.glb", "b.zmesh");
     try c.pushCacheEntry(testing.allocator, e2);
-    try c.entry_map.put(e2.source_path_hash, 1);
+    try c.entry_map.put(e2.source_path, 1);
 
     const e3 = try makeTestEntry(testing.allocator, "c.glb", "c.zmesh");
     try c.pushCacheEntry(testing.allocator, e3);
-    try c.entry_map.put(e3.source_path_hash, 2);
+    try c.entry_map.put(e3.source_path, 2);
 
     const source_files = [_]SourceFile{
         .{ .path = "a.glb", .extension = .glb },
@@ -1108,7 +1097,7 @@ test "upsertEntry overwrites existing entry with matching path" {
     const sf = SourceFile{ .path = "a.glb", .extension = .glb };
     const entry1 = try makeTestEntry(testing.allocator, "a.glb", "a.zmesh");
     try c.pushCacheEntry(testing.allocator, entry1);
-    try c.entry_map.put(entry1.source_path_hash, 0);
+    try c.entry_map.put(entry1.source_path, 0);
 
     var entry2 = try makeTestEntry(testing.allocator, "a.glb", "a_v2.zmesh");
     entry2.cooked_size = 999;

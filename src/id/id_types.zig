@@ -13,7 +13,8 @@ fn TypedId(comptime tag: @TypeOf(.enum_literal)) type {
 
         const Self = @This();
 
-        /// Domain name for diagnostics and error messages.
+        /// Also the only use of `tag`, which is what makes each instantiation a
+        /// distinct nominal type; do not remove it for being unread.
         pub const id_domain = @tagName(tag);
 
         pub const zero: Self = .{ .uuid = Uuid.zero };

@@ -1,4 +1,5 @@
 const std = @import("std");
+const string_list = @import("../../shared/string_list.zig");
 
 const raw_shader = @import("../raw/shader.zig");
 
@@ -18,11 +19,11 @@ pub const CookedShader = struct {
     };
 
     pub fn cook(allocator: std.mem.Allocator, raw: *const RawShader) !CookedShader {
-        const variant_names = try dupeStringList(allocator, raw.variants);
-        errdefer freeStringList(allocator, variant_names);
+        const variant_names = try string_list.dupeStringList(allocator, raw.variants);
+        errdefer string_list.freeStringList(allocator, variant_names);
 
-        const includes = try dupeStringList(allocator, raw.includes);
-        errdefer freeStringList(allocator, includes);
+        const includes = try string_list.dupeStringList(allocator, raw.includes);
+        errdefer string_list.freeStringList(allocator, includes);
 
         const keys = try raw_shader.generateVariantKeys(raw.variants.len, allocator);
         defer allocator.free(keys);
@@ -50,32 +51,12 @@ pub const CookedShader = struct {
     }
 
     pub fn deinit(self: *CookedShader, allocator: std.mem.Allocator) void {
-        freeStringList(allocator, self.variant_names);
-        freeStringList(allocator, self.includes);
+        string_list.freeStringList(allocator, self.variant_names);
+        string_list.freeStringList(allocator, self.includes);
         for (self.permutations) |perm| allocator.free(perm.source);
         allocator.free(self.permutations);
     }
 };
-
-fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]const []const u8 {
-    const out = try allocator.alloc([]const u8, strings.len);
-    errdefer allocator.free(out);
-
-    var loaded: usize = 0;
-    errdefer for (out[0..loaded]) |item| allocator.free(item);
-
-    for (strings, 0..) |value, i| {
-        out[i] = try allocator.dupe(u8, value);
-        loaded += 1;
-    }
-
-    return out;
-}
-
-fn freeStringList(allocator: std.mem.Allocator, strings: []const []const u8) void {
-    for (strings) |value| allocator.free(value);
-    allocator.free(strings);
-}
 
 const testing = std.testing;
 

@@ -10,27 +10,15 @@ const TexelFormat = cooked_texture.TexelFormat;
 const ColorSpace = raw_texture.ColorSpace;
 const MIP_ENTRY_HEADER_SIZE: u32 = @sizeOf(u32) * 2;
 
-fn formatName(format: TexelFormat) []const u8 {
-    return @tagName(format);
-}
-
-fn colorSpaceName(color_space: ColorSpace) []const u8 {
-    return @tagName(color_space);
-}
-
-fn textureTypeName(texture_type: ztex.TextureType) []const u8 {
-    return @tagName(texture_type);
-}
-
 fn inspectZtex(allocator: std.mem.Allocator, reader: *std.Io.Reader) !void {
     var texture = try ztex.read(allocator, reader);
     defer texture.deinit(allocator);
 
     log.info("zatex v{d}", .{ztex.ZATEX_VERSION});
     log.info("  Dimensions: {d} x {d}", .{ texture.width, texture.height });
-    log.info("  Type:       {s}", .{textureTypeName(texture.texture_type)});
-    log.info("  Format:     {s}", .{formatName(texture.format)});
-    log.info("  Color sp:   {s}", .{colorSpaceName(texture.color_space)});
+    log.info("  Type:       {s}", .{@tagName(texture.texture_type)});
+    log.info("  Format:     {s}", .{@tagName(texture.format)});
+    log.info("  Color sp:   {s}", .{@tagName(texture.color_space)});
     log.info("  Mips:       {d}", .{texture.mips.len});
 
     log.info("", .{});

@@ -8,6 +8,7 @@ pub const AccessorView = struct {
     count: usize,
     component_type: u32,
     component_count: usize,
+    component_size: usize,
     normalized: bool,
 
     pub fn element(self: AccessorView, index: usize) []const u8 {
@@ -89,9 +90,8 @@ pub const AccessorView = struct {
 
     fn componentBytes(self: AccessorView, index: usize, component: usize) []const u8 {
         std.debug.assert(component < self.component_count);
-        const component_size = self.element_size / self.component_count;
         const bytes = self.element(index);
-        return bytes[component * component_size ..][0..component_size];
+        return bytes[component * self.component_size ..][0..self.component_size];
     }
 };
 

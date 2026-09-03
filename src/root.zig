@@ -19,6 +19,8 @@ pub const formats = struct {
 pub const WatchHandle = @import("watcher/handle.zig");
 
 pub const assets = struct {
+    pub const asset = @import("assets/asset.zig");
+
     pub const raw = struct {
         pub const mesh = @import("assets/raw/mesh.zig");
         pub const texture = @import("assets/raw/texture.zig");
@@ -56,12 +58,11 @@ pub const ProjectManifest = project.manifest.ProjectManifest;
 pub const ProjectRoot = project.root.ProjectRoot;
 
 pub const manifest = struct {
-    pub const kind = @import("manifest/kind.zig");
     pub const derive = @import("manifest/derive.zig");
     pub const model = @import("manifest/model.zig");
     pub const codec = @import("manifest/codec.zig");
 };
-pub const AssetKind = manifest.kind.AssetKind;
+pub const AssetKind = assets.asset.AssetKind;
 pub const AssetManifest = manifest.model.AssetManifest;
 pub const AssetManifestEntry = manifest.model.AssetManifestEntry;
 
@@ -260,7 +261,7 @@ test {
     _ = @import("project/project_root.zig");
     _ = @import("shared/atomic_file.zig");
     _ = @import("shared/wire.zig");
-    _ = @import("manifest/kind.zig");
+    _ = @import("shared/string_list.zig");
     _ = @import("manifest/derive.zig");
     _ = @import("manifest/model.zig");
     _ = @import("manifest/codec.zig");
@@ -277,4 +278,24 @@ test {
     _ = @import("scene/json_codec.zig");
     _ = @import("scene/binary_codec.zig");
     _ = @import("builtin/registry.zig");
+}
+
+/// Public declarations are analyzed lazily, so a broken `pub const` in this
+/// file compiles fine until a downstream consumer touches it. Walk the exported
+/// surface at comptime so that breakage is a build failure here instead.
+fn touchDecls(comptime T: type, comptime depth: u8) void {
+    if (depth == 0) return;
+    switch (@typeInfo(T)) {
+        .@"struct", .@"enum", .@"union", .@"opaque" => {},
+        else => return,
+    }
+    for (std.meta.declarations(T)) |decl| {
+        const field = @field(T, decl.name);
+        if (@TypeOf(field) == type) touchDecls(field, depth - 1);
+    }
+}
+
+test "public API surface resolves" {
+    @setEvalBranchQuota(200000);
+    comptime touchDecls(@This(), 4);
 }

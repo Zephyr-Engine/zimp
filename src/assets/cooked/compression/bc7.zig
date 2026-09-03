@@ -37,7 +37,7 @@ pub fn encode(src: []const u8, width: u32, height: u32, dst: []u8) void {
 }
 
 /// BC7 mode 6 palette weights for 4-bit indices, scaled by 64.
-const weights4 = [16]u32{ 0, 4, 9, 13, 17, 21, 26, 30, 34, 38, 43, 47, 51, 55, 60, 64 };
+const weights4 = compression.weights4;
 
 /// Nearest BC7 weight for every integer projection in the [0, 64] weight
 /// domain. Ties deliberately select the lower selector, matching the
@@ -118,28 +118,28 @@ pub fn encodeBlockMode6(block: [64]u8) [16]u8 {
     var bit: u32 = 0;
 
     // Mode bits: 7 bits, value = 0x40 (bit 6 set).
-    writeBits(&out, &bit, 0x40, 7);
+    compression.writeBits(&out, &bit, 0x40, 7);
 
     const e0 = if (swap) q1 else q0;
     const e1 = if (swap) q0 else q1;
 
     // Endpoint channels: 7 bits each, order R0 R1 G0 G1 B0 B1 A0 A1.
-    writeBits(&out, &bit, e0.channels[0], 7);
-    writeBits(&out, &bit, e1.channels[0], 7);
-    writeBits(&out, &bit, e0.channels[1], 7);
-    writeBits(&out, &bit, e1.channels[1], 7);
-    writeBits(&out, &bit, e0.channels[2], 7);
-    writeBits(&out, &bit, e1.channels[2], 7);
-    writeBits(&out, &bit, e0.channels[3], 7);
-    writeBits(&out, &bit, e1.channels[3], 7);
+    compression.writeBits(&out, &bit, e0.channels[0], 7);
+    compression.writeBits(&out, &bit, e1.channels[0], 7);
+    compression.writeBits(&out, &bit, e0.channels[1], 7);
+    compression.writeBits(&out, &bit, e1.channels[1], 7);
+    compression.writeBits(&out, &bit, e0.channels[2], 7);
+    compression.writeBits(&out, &bit, e1.channels[2], 7);
+    compression.writeBits(&out, &bit, e0.channels[3], 7);
+    compression.writeBits(&out, &bit, e1.channels[3], 7);
 
     // P-bits: P0 then P1 (one bit each).
-    writeBits(&out, &bit, e0.p_bit, 1);
-    writeBits(&out, &bit, e1.p_bit, 1);
+    compression.writeBits(&out, &bit, e0.p_bit, 1);
+    compression.writeBits(&out, &bit, e1.p_bit, 1);
 
     // Indices: texel 0 = 3 bits (anchor), remaining 15 texels = 4 bits each.
-    writeBits(&out, &bit, indices[0], 3);
-    for (1..16) |i| writeBits(&out, &bit, indices[i], 4);
+    compression.writeBits(&out, &bit, indices[0], 3);
+    for (1..16) |i| compression.writeBits(&out, &bit, indices[i], 4);
 
     std.debug.assert(bit == 128);
     return out;
@@ -251,31 +251,13 @@ fn closestPaletteIndexReference(palette: [16]Endpoint, texel: Endpoint) u4 {
 
 /// Write `num_bits` of `value` into `buf` starting at bit `*bit`, LSB-first.
 /// Advances `*bit` by `num_bits`.
-fn writeBits(buf: []u8, bit: *u32, value: u32, num_bits: u32) void {
-    std.debug.assert(num_bits <= 32);
-    var v = value;
-    var remaining = num_bits;
-    while (remaining > 0) {
-        const byte_idx: u32 = bit.* / 8;
-        const bit_in_byte: u3 = @intCast(bit.* % 8);
-        const space_in_byte: u32 = 8 - @as(u32, bit_in_byte);
-        const take: u32 = @min(remaining, space_in_byte);
-        const mask: u32 = (@as(u32, 1) << @intCast(take)) - 1;
-        const chunk: u8 = @intCast(v & mask);
-        buf[byte_idx] |= chunk << bit_in_byte;
-        v >>= @intCast(take);
-        bit.* += take;
-        remaining -= take;
-    }
-}
-
 const testing = std.testing;
 
 test "writeBits: packs LSB-first" {
     var buf: [4]u8 = @splat(0);
     var bit: u32 = 0;
-    writeBits(&buf, &bit, 0b101, 3);
-    writeBits(&buf, &bit, 0b1111, 4);
+    compression.writeBits(&buf, &bit, 0b101, 3);
+    compression.writeBits(&buf, &bit, 0b1111, 4);
     // Bits written LSB-first: 1,0,1,1,1,1,1 → byte 0 = 0b01111101 = 0x7D
     try testing.expectEqual(@as(u8, 0x7D), buf[0]);
     try testing.expectEqual(@as(u32, 7), bit);
@@ -284,7 +266,7 @@ test "writeBits: packs LSB-first" {
 test "writeBits: spans byte boundaries" {
     var buf: [4]u8 = @splat(0);
     var bit: u32 = 4;
-    writeBits(&buf, &bit, 0xFF, 8);
+    compression.writeBits(&buf, &bit, 0xFF, 8);
     // 8 ones starting at bit 4: low 4 bits of byte 0 = 0xF0, low 4 bits of byte 1 = 0x0F
     try testing.expectEqual(@as(u8, 0xF0), buf[0]);
     try testing.expectEqual(@as(u8, 0x0F), buf[1]);

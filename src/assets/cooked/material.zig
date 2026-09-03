@@ -1,4 +1,5 @@
 const std = @import("std");
+const string_list = @import("../../shared/string_list.zig");
 
 const source_file = @import("../source_file.zig");
 const raw_material = @import("../raw/material.zig");
@@ -149,8 +150,8 @@ pub const CookedMaterial = struct {
         var params = try buildParamDataBlock(source.params, allocator);
         errdefer params.deinit(allocator);
 
-        const required_variants = try dupeStringList(allocator, source.required_variants);
-        errdefer freeStringList(allocator, required_variants);
+        const required_variants = try string_list.dupeStringList(allocator, source.required_variants);
+        errdefer string_list.freeStringList(allocator, required_variants);
 
         const owned_runtime_paths = try runtime_paths.toOwnedSlice(allocator);
         errdefer allocator.free(owned_runtime_paths);
@@ -184,33 +185,13 @@ pub const CookedMaterial = struct {
 
     pub fn deinit(self: *CookedMaterial, allocator: std.mem.Allocator) void {
         allocator.free(self.texture_slots);
-        freeStringList(allocator, self.required_variants);
+        string_list.freeStringList(allocator, self.required_variants);
         allocator.free(self.param_entries);
         allocator.free(self.param_data);
         allocator.free(self.param_names);
         allocator.free(self.runtime_paths);
     }
 };
-
-fn dupeStringList(allocator: std.mem.Allocator, strings: []const []const u8) ![]const []const u8 {
-    const out = try allocator.alloc([]const u8, strings.len);
-    errdefer allocator.free(out);
-
-    var loaded: usize = 0;
-    errdefer for (out[0..loaded]) |item| allocator.free(item);
-
-    for (strings, 0..) |value, i| {
-        out[i] = try allocator.dupe(u8, value);
-        loaded += 1;
-    }
-
-    return out;
-}
-
-fn freeStringList(allocator: std.mem.Allocator, strings: []const []const u8) void {
-    for (strings) |value| allocator.free(value);
-    allocator.free(strings);
-}
 
 fn appendRuntimePath(list: *std.ArrayList(u8), allocator: std.mem.Allocator, path: []const u8) !u16 {
     if (list.items.len > std.math.maxInt(u16)) return error.RuntimePathsTooLarge;

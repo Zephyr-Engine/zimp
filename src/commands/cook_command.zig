@@ -185,7 +185,7 @@ pub const CookCommand = struct {
         var total_duration_buf: [32]u8 = undefined;
         log.info("Cooked {d} assets in {s} ({d} cooked, {d} cached, {d} errored)", .{
             metrics.assets_total,
-            fmtDuration(metrics.total_ns, &total_duration_buf),
+            cook_metrics.fmtDuration(metrics.total_ns, &total_duration_buf),
             metrics.assets_cooked,
             metrics.assets_cached,
             metrics.assets_errored,
@@ -203,16 +203,6 @@ pub const CookCommand = struct {
         }
     }
 };
-
-fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
-    if (nanoseconds >= std.time.ns_per_ms) {
-        return std.fmt.bufPrint(buf, "{d}ms", .{nanoseconds / std.time.ns_per_ms}) catch unreachable;
-    } else if (nanoseconds >= std.time.ns_per_us) {
-        return std.fmt.bufPrint(buf, "{d}\xc2\xb5s", .{nanoseconds / std.time.ns_per_us}) catch unreachable;
-    } else {
-        return std.fmt.bufPrint(buf, "{d}ns", .{nanoseconds}) catch unreachable;
-    }
-}
 
 const testing = std.testing;
 

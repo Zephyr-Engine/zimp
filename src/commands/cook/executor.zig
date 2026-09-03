@@ -28,7 +28,6 @@ pub const ProcessResult = enum { cached, hash_match, cooked, dependency_changed,
 
 const MetricsDelta = struct {
     source_bytes_read: u64 = 0,
-    source_bytes_hashed: u64 = 0,
     cooked_bytes_written: u64 = 0,
 };
 
@@ -296,7 +295,7 @@ const CookJobRunner = struct {
         const end = std.Io.Clock.Timestamp.now(self.ctx.io, .awake);
         const elapsed_ns: u64 = @intCast(start.durationTo(end).raw.nanoseconds);
         var duration_buf: [32]u8 = undefined;
-        log.debug("Cooked '{s}' in {s}", .{ self.record.source.path, fmtDuration(elapsed_ns, &duration_buf) });
+        log.debug("Cooked '{s}' in {s}", .{ self.record.source.path, cook_metrics.fmtDuration(elapsed_ns, &duration_buf) });
 
         result.result = .cooked;
         result.metrics.cooked_bytes_written += cooked_stat.size;
@@ -322,7 +321,6 @@ const CookJobRunner = struct {
 
     fn recordAnalysisMetrics(_: *const CookJobRunner, metrics: *MetricsDelta, analyzed: *const HashedSource) void {
         metrics.source_bytes_read = analyzed.bytes_read;
-        metrics.source_bytes_hashed = analyzed.bytes_read;
     }
 };
 
@@ -363,7 +361,6 @@ const MetricsAccumulator = struct {
 
     fn recordJobResult(self: *MetricsAccumulator, result: CookJobResult) void {
         self.metrics.source_bytes_read += result.metrics.source_bytes_read;
-        self.metrics.source_bytes_hashed += result.metrics.source_bytes_hashed;
         self.metrics.cooked_bytes_written += result.metrics.cooked_bytes_written;
 
         switch (result.result) {
@@ -636,16 +633,6 @@ pub const Executor = struct {
         return self.records.len;
     }
 };
-
-fn fmtDuration(nanoseconds: u64, buf: *[32]u8) []const u8 {
-    if (nanoseconds >= std.time.ns_per_ms) {
-        return std.fmt.bufPrint(buf, "{d}ms", .{nanoseconds / std.time.ns_per_ms}) catch unreachable;
-    } else if (nanoseconds >= std.time.ns_per_us) {
-        return std.fmt.bufPrint(buf, "{d}\xc2\xb5s", .{nanoseconds / std.time.ns_per_us}) catch unreachable;
-    } else {
-        return std.fmt.bufPrint(buf, "{d}ns", .{nanoseconds}) catch unreachable;
-    }
-}
 
 test "cooked file version mismatch invalidates only that cached output" {
     var tmp = std.testing.tmpDir(.{});

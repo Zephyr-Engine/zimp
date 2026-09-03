@@ -248,7 +248,7 @@ const PreprocessContext = struct {
             log.err("{s}:{d}: #include \"{s}\" failed: {s}", .{ source_path, line_no, include_name, @errorName(err) });
             return err;
         };
-        defer self.allocator.free(file_result.bytes);
+        defer self.allocator.free(file_result);
 
         try self.included_once.put(include_path, {});
         errdefer _ = self.included_once.remove(include_path);
@@ -256,17 +256,15 @@ const PreprocessContext = struct {
         include_path_owned = false;
 
         try self.output.print(self.allocator, "#line 1 \"{s}\"\n", .{include_path});
-        try self.preprocessInto(file_result.bytes, include_path);
+        try self.preprocessInto(file_result, include_path);
         if (self.output.items.len > 0 and self.output.items[self.output.items.len - 1] != '\n') {
             try self.output.append(self.allocator, '\n');
         }
         try self.output.print(self.allocator, "#line {d} \"{s}\"\n", .{ line_no + 1, source_path });
     }
 
-    fn readInclude(self: *PreprocessContext, include_path: []const u8) !file_read.ChunkedReadResult {
-        return file_read.readFileAllocChunked(self.allocator, self.io, self.dir, include_path, .{
-            .chunk_size = 256 * 1024,
-        });
+    fn readInclude(self: *PreprocessContext, include_path: []const u8) ![]u8 {
+        return file_read.readFileAllocChunked(self.allocator, self.io, self.dir, include_path);
     }
 
     fn reportCircularInclude(self: *PreprocessContext, source_path: []const u8) !void {

@@ -2,7 +2,7 @@ const std = @import("std");
 
 const resolveRelativeUri = @import("document.zig").resolveRelativeUri;
 const GltfTextureInfo = @import("gltf_json_parser.zig").GltfTextureInfo;
-const AtomicFile = @import("../../shared/atomic_file.zig").AtomicFile;
+const atomic_file = @import("../../shared/atomic_file.zig");
 const SourceFile = @import("../../assets/source_file.zig").SourceFile;
 const GltfMaterial = @import("gltf_json_parser.zig").GltfMaterial;
 const GltfSampler = @import("gltf_json_parser.zig").GltfSampler;
@@ -95,12 +95,10 @@ pub fn generateForSource(
 ) !GenerationResult {
     switch (extension) {
         .glb => {
-            const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path, .{
-                .chunk_size = 256 * 1024,
-            });
-            defer allocator.free(file_result.bytes);
+            const file_result = try file_read.readFileAllocChunked(allocator, io, source_dir, file_path);
+            defer allocator.free(file_result);
 
-            const glb_file = try GLBFile.parse(allocator, file_result.bytes);
+            const glb_file = try GLBFile.parse(allocator, file_result);
             defer allocator.destroy(glb_file);
 
             var gltf = try Gltf.parse(glb_file.json, allocator);
@@ -168,13 +166,7 @@ pub fn generateFromGltf(
             continue;
         }
 
-        var pending = try AtomicFile.create(allocator, io, source_dir, output_path);
-        defer pending.deinit();
-        var buf: [4096]u8 = undefined;
-        var writer = pending.file.writer(io, &buf);
-        try writer.interface.writeAll(text.items);
-        try writer.interface.flush();
-        try pending.commit();
+        try atomic_file.writeFileAtomic(allocator, io, source_dir, output_path, text.items);
 
         result.materials += 1;
         log.debug("Generated material '{s}' from '{s}'", .{ output_path, source_path });
@@ -258,24 +250,18 @@ fn generateDefaultMaterial(
     }, "DefaultMaterial");
     if (try fileMatches(source_dir, io, allocator, output_path, text.items)) return .{};
 
-    var pending = try AtomicFile.create(allocator, io, source_dir, output_path);
-    defer pending.deinit();
-    var buf: [4096]u8 = undefined;
-    var writer = pending.file.writer(io, &buf);
-    try writer.interface.writeAll(text.items);
-    try writer.interface.flush();
-    try pending.commit();
+    try atomic_file.writeFileAtomic(allocator, io, source_dir, output_path, text.items);
     log.debug("Generated default material '{s}' from '{s}'", .{ output_path, source_path });
     return .{ .materials = 1 };
 }
 
 fn fileMatches(dir: std.Io.Dir, io: std.Io, allocator: std.mem.Allocator, path: []const u8, bytes: []const u8) !bool {
-    const result = file_read.readFileAllocChunked(allocator, io, dir, path, .{}) catch |err| {
+    const result = file_read.readFileAllocChunked(allocator, io, dir, path) catch |err| {
         if (err == error.FileNotFound) return false;
         return err;
     };
-    defer allocator.free(result.bytes);
-    return std.mem.eql(u8, result.bytes, bytes);
+    defer allocator.free(result);
+    return std.mem.eql(u8, result, bytes);
 }
 
 fn renderStateText(allocator: std.mem.Allocator, state: raw_material.RenderState) ![]const u8 {
@@ -682,9 +668,8 @@ fn texturePath(
             io,
             source_dir,
             source_image_path,
-            .{},
         );
-        defer allocator.free(image_result.bytes);
+        defer allocator.free(image_result);
 
         const extension = std.fs.path.extension(source_image_path);
         if (extension.len < 2) {
@@ -708,7 +693,7 @@ fn texturePath(
                 io,
                 source_dir,
                 generated_path,
-                image_result.bytes,
+                image_result,
             ),
         };
     }
@@ -758,14 +743,7 @@ fn writeGeneratedTexture(allocator: std.mem.Allocator, io: std.Io, source_dir: s
         return false;
     }
 
-    var pending = try AtomicFile.create(allocator, io, source_dir, path);
-    defer pending.deinit();
-
-    var buf: [4096]u8 = undefined;
-    var writer = pending.file.writer(io, &buf);
-    try writer.interface.writeAll(bytes);
-    try writer.interface.flush();
-    try pending.commit();
+    try atomic_file.writeFileAtomic(allocator, io, source_dir, path, bytes);
 
     return true;
 }
@@ -896,8 +874,8 @@ fn writeTestFile(dir: std.Io.Dir, path: []const u8, bytes: []const u8) !void {
 }
 
 fn readTestFile(allocator: std.mem.Allocator, dir: std.Io.Dir, path: []const u8) ![]u8 {
-    const result = try file_read.readFileAllocChunked(allocator, testing.io, dir, path, .{ .chunk_size = 4096 });
-    return result.bytes;
+    const result = try file_read.readFileAllocChunked(allocator, testing.io, dir, path);
+    return result;
 }
 
 test "generateFromGltf writes material with external texture and params" {

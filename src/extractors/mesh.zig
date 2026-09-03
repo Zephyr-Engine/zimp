@@ -20,12 +20,10 @@ fn extractMeshDeps(
         return &.{};
     }
 
-    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path, .{
-        .chunk_size = 256 * 1024,
-    });
-    defer allocator.free(file_result.bytes);
+    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, source.path);
+    defer allocator.free(file_result);
 
-    var gltf = try Gltf.parse(file_result.bytes, allocator);
+    var gltf = try Gltf.parse(file_result, allocator);
     defer gltf.deinit();
 
     var dep_paths: std.ArrayList([]u8) = .empty;

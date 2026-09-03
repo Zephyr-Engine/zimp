@@ -329,11 +329,8 @@ pub const Zamat = struct {
     }
 };
 
-pub const MaterialFile = Zamat;
-pub const Header = ZamatHeader;
-
-pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !MaterialFile {
-    return MaterialFile.read(allocator, reader);
+pub fn read(allocator: std.mem.Allocator, reader: *std.Io.Reader) !Zamat {
+    return Zamat.read(allocator, reader);
 }
 
 pub const Material = struct {
@@ -364,12 +361,10 @@ pub const Material = struct {
 };
 
 pub fn loadMaterial(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, path: []const u8) !Material {
-    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, path, .{
-        .chunk_size = 256 * 1024,
-    });
-    errdefer allocator.free(file_result.bytes);
+    const file_result = try file_read.readFileAllocChunked(allocator, io, dir, path);
+    errdefer allocator.free(file_result);
 
-    var reader = std.Io.Reader.fixed(file_result.bytes);
+    var reader = std.Io.Reader.fixed(file_result);
     var z = try Zamat.read(allocator, &reader);
     errdefer z.deinit(allocator);
 
@@ -385,7 +380,7 @@ pub fn loadMaterial(allocator: std.mem.Allocator, io: std.Io, dir: std.Io.Dir, p
         .param_names = z.param_names,
         .variant_names = z.variant_names,
         .runtime_paths = z.runtime_paths,
-        .file_bytes = file_result.bytes,
+        .file_bytes = file_result,
         .allocator = allocator,
     };
 }

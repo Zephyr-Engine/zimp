@@ -1,7 +1,7 @@
 const std = @import("std");
 const AssetId = @import("../id/id_types.zig").AssetId;
 const ProjectId = @import("../id/id_types.zig").ProjectId;
-const AssetKind = @import("kind.zig").AssetKind;
+const AssetKind = @import("../assets/asset.zig").AssetKind;
 const path = @import("../path.zig");
 
 pub const AssetManifestEntry = struct {

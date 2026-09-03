@@ -4,7 +4,7 @@ const path = @import("../path.zig");
 const ProjectId = @import("../id/id_types.zig").ProjectId;
 const atomic_file = @import("../shared/atomic_file.zig");
 
-const log = std.log.scoped(.zimp_project);
+const log = @import("../logger.zig");
 
 const MANIFEST_VERSION: u32 = 1;
 const DEFAULT_COOKED_ASSETS_DIR = ".zephyr/cooked";
